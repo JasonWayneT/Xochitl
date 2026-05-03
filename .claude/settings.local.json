@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c ' *)",
+      "Bash(pip show *)",
+      "Bash(python -c \"from notion_client import Client; c = Client\\(auth='test'\\); print\\(type\\(c.databases\\)\\); print\\([m for m in dir\\(c.databases\\) if not m.startswith\\('_'\\)]\\)\")",
+      "Bash(python *)",
+      "Bash(*)",
+      "Read",
+      "Edit",
+      "Write",
+      "Glob",
+      "Grep"
+    ]
+  }
+}

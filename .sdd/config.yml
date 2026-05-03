@@ -1,0 +1,15 @@
+llm:
+  provider: tiered
+
+workflow:
+  auto_analyze_issues: true
+  require_manual_approval: false
+  auto_update_specs: true
+
+confidence:
+  min_for_auto_action: 0.75
+
+directories:
+  projects: projects
+  sdd_config: .sdd
+  logs: .sdd/logs
