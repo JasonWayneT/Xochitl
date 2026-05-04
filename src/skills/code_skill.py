@@ -1,4 +1,5 @@
 """Code generation skill — scaffold, implement, fix, and test from SDD specs."""
+# Implements FR-BMAD-004 (Code Scaffolding Generation — scaffold_from_specs(), generate_code_for_requirement(), fix_issue())
 
 import json
 import re

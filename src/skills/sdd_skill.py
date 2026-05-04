@@ -597,6 +597,107 @@ class SDDSkill(Skill):
             return "Specs are ready. Want me to scaffold the application code?"
         return "Project is in progress. Say 'show requirements' to see what's left to implement."
 
+    # ── FR-BMAD-003: Code Traceability Review ────────────────────────────────
+
+    def review_code_traceability(self, project_id: str = "") -> str:
+        """Scan source files for # Implements FR-* and cross-reference specs.
+
+        Implements FR-BMAD-003 — flags untraced code, broken references,
+        and unimplemented specs.
+        """
+        # Implements FR-BMAD-003
+        # Determine source root: project src/ → Xochitl src/ as fallback
+        project_src = _PROJECTS_DIR / project_id / "src" if project_id else None
+        if project_src and project_src.exists():
+            source_root = project_src
+        else:
+            source_root = _PROJECT_ROOT / "src"
+
+        implements_pat = re.compile(r'#\s*Implements\s+(FR-[A-Z]+-\d+)', re.IGNORECASE)
+        code_refs: dict[str, list[str]] = {}
+
+        for py_file in sorted(source_root.rglob("*.py")):
+            if py_file.name.startswith("__"):
+                continue
+            try:
+                text = py_file.read_text(encoding="utf-8")
+                rel = str(py_file.relative_to(_PROJECT_ROOT))
+                for m in implements_pat.finditer(text):
+                    fr_id = m.group(1).upper()
+                    code_refs.setdefault(fr_id, [])
+                    if rel not in code_refs[fr_id]:
+                        code_refs[fr_id].append(rel)
+            except Exception:
+                continue
+
+        # Gather spec IDs from project specs, then global specs/, then global traceability.json
+        spec_ids: set[str] = {r["id"] for r in self.list_requirements(project_id)}
+
+        if not spec_ids:
+            global_trace = _PROJECT_ROOT / "specs" / "traceability.json"
+            if global_trace.exists():
+                try:
+                    data = json.loads(global_trace.read_text(encoding="utf-8"))
+                    spec_ids = {m["id"] for m in data.get("mappings", [])}
+                except Exception:
+                    pass
+
+        if not spec_ids:
+            fr_pat = re.compile(r'\bFR-[A-Z]+-\d+\b')
+            for md in sorted((_PROJECT_ROOT / "specs").rglob("*.md")):
+                try:
+                    for m in fr_pat.finditer(md.read_text(encoding="utf-8")):
+                        spec_ids.add(m.group(0))
+                except Exception:
+                    continue
+
+        broken = {fr: files for fr, files in code_refs.items() if fr not in spec_ids}
+        implemented = {fr for fr in code_refs if fr in spec_ids}
+        unimplemented = spec_ids - set(code_refs.keys()) if spec_ids else set()
+
+        untraced_files = []
+        for py_file in sorted(source_root.rglob("*.py")):
+            if py_file.name.startswith("__"):
+                continue
+            try:
+                if not implements_pat.search(py_file.read_text(encoding="utf-8")):
+                    untraced_files.append(str(py_file.relative_to(_PROJECT_ROOT)))
+            except Exception:
+                continue
+
+        label = project_id or "xochitl"
+        lines = [
+            f"## SDD Traceability Report — {label}",
+            f"Source: `{source_root.relative_to(_PROJECT_ROOT)}`",
+            f"Spec IDs known: {len(spec_ids)}\n",
+            f"**Implemented ({len(implemented)})** — FR-* comment matches a spec:",
+        ]
+        for fr in sorted(implemented):
+            lines.append(f"  [green]✓[/green] {fr}: {', '.join(code_refs[fr])}")
+
+        lines.append(f"\n**Broken references ({len(broken)})** — in code but not in specs:")
+        if broken:
+            for fr, files in sorted(broken.items()):
+                lines.append(f"  [red]✗[/red] {fr}: {', '.join(files)}")
+        else:
+            lines.append("  (none)")
+
+        lines.append(f"\n**Unimplemented specs ({len(unimplemented)})** — no code comment:")
+        if unimplemented:
+            for fr in sorted(unimplemented):
+                lines.append(f"  [yellow]○[/yellow] {fr}")
+        else:
+            lines.append("  (none)")
+
+        lines.append(f"\n**Untraced files ({len(untraced_files)})** — no # Implements comment:")
+        if untraced_files:
+            for f in sorted(untraced_files):
+                lines.append(f"  [dim]?[/dim] {f}")
+        else:
+            lines.append("  (none)")
+
+        return "\n".join(lines)
+
     # ── LLM helpers ───────────────────────────────────────────────────────────
 
     def _load_sdd_prompt(self, prompt_name: str) -> str:

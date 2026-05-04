@@ -5,6 +5,7 @@ Write new file: automatic.
 Overwrite existing: returns pending_permission, requires confirm_operation().
 Delete: returns pending_permission, requires confirm_operation().
 """
+# Implements FR-SEC-002 (Permission-Gated File Writes — overwrites/deletes require confirm_operation() before proceeding)
 
 import uuid
 from datetime import datetime

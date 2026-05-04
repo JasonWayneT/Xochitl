@@ -1,4 +1,6 @@
 """BMAD workflow skill — detects BMAD projects, guides new project creation, saves artifacts."""
+# Implements FR-BMAD-001 (Discovery Session Facilitation — init_project() scaffolds project dirs and metadata)
+# Implements FR-BMAD-002 (PRD & SDD Artifact Generation — save_bmad_artifact() writes BMAD docs to bmad/ folder)
 
 from datetime import datetime
 from pathlib import Path

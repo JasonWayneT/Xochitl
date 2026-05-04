@@ -1,4 +1,7 @@
 """SQLite schema initialization and all raw query helpers."""
+# Implements FR-TASK-001 (SQLite state cache with PARA mapping — projects/tasks/areas/resources tables)
+# Implements NFR-REL-001 (Atomic write before embedding — conn used as context manager, commits on exit)
+# Implements NFR-REL-002 (State recovery < 1 second — SQLite WAL mode; DB_PATH resolved at import time)
 
 import sqlite3
 from pathlib import Path

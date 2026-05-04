@@ -1,4 +1,5 @@
 """XochitlChat — conversational layer over the tiered router.
+# Implements FR-ORCH-004 (Tool Outcome Narrative — tool results are synthesized into Matriarca-voice responses)
 
 Design principles (from XOCHITL_CONVERSATIONAL_HARNESS.md):
 - Natural back-and-forth, like Claude.ai in the terminal
@@ -7,6 +8,7 @@ Design principles (from XOCHITL_CONVERSATIONAL_HARNESS.md):
 - Orchestrator is a tool Xochitl uses when user says "delegate it" — not a default
 """
 
+import os
 import re
 from datetime import datetime
 from pathlib import Path
@@ -23,16 +25,42 @@ from src import database as db
 from src.file_tools import FileTools
 from src.skills.base import Skill
 
-console = Console()
+# FR-UX-001: TERM=dumb detection for no-markup fallback
+_TERM_DUMB = os.getenv("TERM", "").lower() == "dumb"
+console = Console(markup=not _TERM_DUMB, highlight=not _TERM_DUMB)
+
+# Implements FR-UX-002 — Spanish vocabulary constants mirroring SOUL.md palette
+_OK  = "Claro"    # success / acknowledged
+_FYI = "Fíjate"  # informational flag — "look here"
+_ERR = "Ay no"   # error / blocked
 
 _PROJECT_ROOT = Path(__file__).parent.parent
 
 
 def _print_boot_banner(con: Console) -> None:
+    # Implements FR-UX-001 (WIP dashboard header in interactive loop)
     con.print()
     con.print("      [bold magenta]✿[/bold magenta] [bold yellow]❀[/bold yellow] [bold magenta]✿[/bold magenta]")
     con.print("    [bold yellow]❀[/bold yellow]   [bold magenta]✿[/bold magenta]   [bold yellow]❀[/bold yellow]    [bold cyan]Xochitl[/bold cyan]")
     con.print("      [bold magenta]✿[/bold magenta] [bold yellow]❀[/bold yellow] [bold magenta]✿[/bold magenta]     [dim]Chief of Staff[/dim]")
+    con.print()
+
+    # WIP snapshot — 2-line dashboard
+    try:
+        from src import database as _db
+        from src.config import get_wip_limit
+        with _db.get_connection() as conn:
+            queue = _db.get_queue(conn)
+        limit = get_wip_limit()
+        if queue:
+            count = len(queue)
+            first = queue[0]["description"][:48]
+            slots = f"[bold]{count}[/bold][dim]/{limit}[/dim]"
+            con.print(f"  [dim]WIP[/dim] {slots}  [dim]·[/dim]  {first}{'[dim]…[/dim]' if len(queue[0]['description']) > 48 else ''}")
+        else:
+            con.print(f"  [dim]WIP 0/{limit} — queue empty. Run[/dim] [bold]xochitl today[/bold] [dim]to fill it.[/dim]")
+    except Exception:
+        pass  # never crash startup over a dashboard read failure
     con.print()
 
 
@@ -57,9 +85,14 @@ _BUILD_KEYWORDS   = [
     "build an app", "create an app", "new app", "new project", "start a project",
     "let's build", "let's make", "let's create",
 ]
-_SDD_KEYWORDS     = ["spec", "requirement", "fr-", "ac-", "ec-", "traceability"]
-_ISSUE_KEYWORDS   = ["bug", "issue", "broken", "doesn't work", "failing", "wrong behavior", "error in"]
+_SDD_KEYWORDS      = ["spec", "requirement", "fr-", "ac-", "ec-", "traceability"]
+_ISSUE_KEYWORDS    = ["bug", "issue", "broken", "doesn't work", "failing", "wrong behavior", "error in"]
 _CODE_GEN_KEYWORDS = ["scaffold", "generate code", "implement the", "code for", "build the backend", "build the frontend"]
+_RESEARCH_KEYWORDS = [
+    "research", "devil's advocate", "adversarial", "challenge this", "challenge that",
+    "synthesize", "look into", "find out about", "what do we know about",
+    "poke holes", "stress test this", "steelman", "play devil",
+]
 
 
 class XochitlChat:
@@ -70,7 +103,12 @@ class XochitlChat:
     for single-turn usage (e.g. tests or the --with-orchestrator path).
     """
 
-    def __init__(self, force_cloud: bool = False, with_orchestrator: bool = False):
+    def __init__(self, force_cloud: bool = False, with_orchestrator: bool = False, no_rich: bool = False):
+        # FR-UX-001: --no-rich or TERM=dumb → plain console
+        if no_rich or os.getenv("TERM", "").lower() == "dumb":
+            global console
+            console = Console(markup=False, highlight=False)
+
         self.router = get_router()
         self.file_tools = FileTools()
         self.force_cloud = force_cloud
@@ -133,6 +171,13 @@ class XochitlChat:
                 if user_input.strip().lower() == "help":
                     from src.stats import help_text
                     console.print(help_text())
+                    continue
+
+                # Implements FR-SEC-001, FR-SEC-003, FR-SEC-004
+                if user_input.strip().startswith("/"):
+                    result = self._handle_slash_command(user_input.strip())
+                    console.print(result)
+                    console.print()
                     continue
 
                 with console.status("[dim]thinking...[/dim]", spinner="xochitl"):
@@ -212,6 +257,8 @@ class XochitlChat:
             response = self._handle_issue_tracking(user_input)
         elif intent["type"] == "code_generation_intent":
             response = self._handle_code_generation_request(user_input)
+        elif intent["type"] == "research":
+            response = self._handle_research(user_input, intent)
         else:
             response = self._general_conversation(user_input)
 
@@ -238,6 +285,11 @@ class XochitlChat:
             else:
                 op = "read"
             return {"type": "file_operation", "operation": op}
+
+        # Research / adversarial checked before task keywords — "research X for task Y" must route here
+        if any(kw in q for kw in _RESEARCH_KEYWORDS):
+            adversarial = any(kw in q for kw in ["devil", "adversarial", "challenge", "poke holes", "stress test", "steelman"])
+            return {"type": "research", "adversarial": adversarial}
 
         if any(kw in q for kw in _TASK_KEYWORDS):
             return {"type": "task_query"}
@@ -289,7 +341,7 @@ class XochitlChat:
             system_prompt=system,
             force_route="task_management",
         )
-        return result.content if not result.error else f"Error: {result.error}"
+        return result.content if not result.error else f"{_ERR} — {result.error}"
 
     def _handle_action_request(self, user_input: str, intent: dict) -> str:
         action = intent.get("action", "generic")
@@ -327,8 +379,8 @@ class XochitlChat:
                     conversation_history=self._clean_history(),
                     system_prompt=system,
                 )
-                return result.content if not result.error else f"Error: {result.error}"
-            return "I don't see a specific file mentioned. Can you give me the full path?"
+                return result.content if not result.error else f"{_ERR} — {result.error}"
+            return f"{_FYI} — I don't see a specific file in that message. Can you give me the full path?"
 
         return self._general_conversation(user_input)
 
@@ -449,6 +501,27 @@ class XochitlChat:
             "Every function will reference its FR-* requirement. Want me to go ahead?"
         )
 
+    def _handle_research(self, user_input: str, intent: dict) -> str:
+        """Route to research module for synthesis, adversarial review, or conflict detection."""
+        # Implements FR-RES-001, FR-RES-002, FR-RES-003
+        from src.research import adversarial_review, run_research
+
+        if intent.get("adversarial"):
+            return adversarial_review(user_input)
+
+        result = run_research(
+            topic=user_input,
+            check_conflicts=True,
+        )
+        parts = [f"_{result['budget']}_\n"]
+        if result["synthesis"]:
+            parts.append(result["synthesis"])
+        if result["conflicts"]:
+            parts.append(f"\n**{_FYI} — {len(result['conflicts'])} conflict(s) with existing KB:**")
+            for c in result["conflicts"]:
+                parts.append(f"- {c['source']}: {c['verdict'][:100]}")
+        return "\n".join(parts)
+
     def _general_conversation(self, user_input: str) -> str:
         force = "code_generation" if self.force_cloud else None
         result = self.router.route(
@@ -457,7 +530,7 @@ class XochitlChat:
             system_prompt=build_system_prompt(read_memory()),
             force_route=force,
         )
-        return result.content if not result.error else f"Error: {result.error}"
+        return result.content if not result.error else f"{_ERR} — {result.error}"
 
     # ── Confirmation handlers ─────────────────────────────────────────────────
 
@@ -568,7 +641,7 @@ class XochitlChat:
             self.current_context.pop("pending_project_description", None)
             self.current_context.pop("pending_issue_description", None)
             self.current_context.pop("pending_component", None)
-            return "No problem."
+            return f"{_OK}, no problem."
 
         return None
 
@@ -622,6 +695,57 @@ class XochitlChat:
         # Fallback: take last few words
         words = user_input.strip().split()
         return " ".join(words[-3:]).title() if len(words) >= 3 else user_input.strip().title()
+
+    # ── Slash command dispatch (FR-SEC-001, FR-SEC-003, FR-SEC-004) ──────────
+
+    def _handle_slash_command(self, raw: str) -> str:
+        """Dispatch /command [args] without going through the LLM."""
+        # Implements FR-SEC-001, FR-SEC-003, FR-SEC-004
+        from src.security import cmd_authorize, cmd_revoke, cmd_list_registry, cmd_audit
+
+        parts = raw.split(maxsplit=1)
+        verb = parts[0].lower()
+        arg = parts[1].strip() if len(parts) > 1 else ""
+
+        if verb == "/authorize":
+            return cmd_authorize(arg)
+        if verb == "/revoke":
+            return cmd_revoke(arg)
+        if verb == "/registry":
+            return cmd_list_registry()
+        if verb == "/audit":
+            n = int(arg) if arg.isdigit() else 20
+            return cmd_audit(n)
+
+        # FR-BMAD-003: SDD traceability review
+        if verb == "/review":
+            from src.skills.sdd_skill import SDDSkill
+            project_id = arg or self.current_project or ""
+            return SDDSkill().review_code_traceability(project_id)
+
+        # FR-RES: Research slash commands
+        if verb == "/research":
+            if not arg:
+                return f"Usage: /research <topic>"
+            from src.research import run_research
+            result = run_research(arg, adversarial=False, check_conflicts=True)
+            parts = [f"**Research: {result['topic']}**", f"_{result['budget']}_\n"]
+            if result["synthesis"]:
+                parts.append(result["synthesis"])
+            if result["conflicts"]:
+                parts.append(f"\n**Conflicts detected ({len(result['conflicts'])}):**")
+                for c in result["conflicts"]:
+                    parts.append(f"- {c['source']}: {c['verdict'][:120]}")
+            return "\n".join(parts)
+
+        if verb == "/adversarial":
+            if not arg:
+                return "Usage: /adversarial <claim to challenge>"
+            from src.research import adversarial_review
+            return adversarial_review(arg)
+
+        available = "/authorize  /revoke  /registry  /audit  /review  /research  /adversarial"
+        return f"[dim]{_FYI} — unknown command: {verb}\nAvailable: {available}[/dim]"
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 

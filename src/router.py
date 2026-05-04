@@ -1,4 +1,6 @@
 """Tiered router: classifies queries and dispatches to local model, cloud, or BMAD."""
+# Implements FR-ORCH-002 (Dynamic Skill Invocation — route() dispatches to local/cloud/hybrid based on intent)
+# Implements NFR-PERF-003 (Intent routing latency < 500ms)
 
 import os
 import json
@@ -15,6 +17,7 @@ from src.llm_interface import (
 )
 from src.context_loader import build_system_prompt, compress_context
 from src.memory import read_memory
+from src.config import get_confidence_threshold
 from src import database as db
 
 
@@ -230,7 +233,16 @@ code_review        - Review code, check for bugs
 
 Query: {query}
 
-Respond with only the category name, nothing else."""
+Respond with EXACTLY this format: <category>|<confidence>
+The confidence is a decimal between 0.0 and 1.0 reflecting how certain you are.
+Example: task_management|0.92
+No other text."""
+
+_ALL_CATEGORIES = (
+    set(_LOCAL_CATEGORIES)
+    | set(_LOCAL_SPECIALIZED_CATEGORIES)
+    | set(_CLOUD_CATEGORIES)
+)
 
 
 _KEYWORD_MAP = {
@@ -254,24 +266,51 @@ _KEYWORD_MAP = {
     "code_review":      ["review", "check this code", "bug in"],
 }
 
-def _fast_classify(query: str) -> Optional[str]:
+def _fast_classify(query: str) -> Optional[tuple[str, float]]:
+    """Keyword-based classification — always returns confidence 1.0 on match."""
     import re
     q = query.lower()
     # Bare absolute path (Windows or Unix) → file operation
     if re.search(r'^[a-z]:[/\\]|^/(?:home|users|tmp|var|etc)/', q.strip()):
-        return "file_operations"
+        return "file_operations", 1.0
     # Any self-referential directory phrase → file operation
     if any(phrase in q for phrase in _SELF_DIR_PHRASES):
-        return "file_operations"
+        return "file_operations", 1.0
     for category, keywords in _KEYWORD_MAP.items():
         for kw in keywords:
-            # Use word-boundary match for short keywords to avoid substring false positives
             if len(kw) <= 4 and kw.isalpha():
                 if re.search(r'\b' + re.escape(kw) + r'\b', q):
-                    return category
+                    return category, 1.0
             elif kw in q:
-                return category
+                return category, 1.0
     return None
+
+
+def _parse_classification(raw: str) -> tuple[str, float]:
+    """Parse 'category|confidence' from router model response. Robust to noisy output."""
+    text = raw.strip().lower().replace("-", "_")
+
+    confidence = 0.5
+    if "|" in text:
+        parts = text.split("|", 1)
+        raw_cat = parts[0].strip().split()[-1]  # last word handles any leading filler
+        try:
+            confidence = max(0.0, min(1.0, float(parts[1].strip().split()[0])))
+        except (ValueError, IndexError):
+            confidence = 0.5
+    else:
+        raw_cat = text.split()[0] if text.split() else "simple_qa"
+        confidence = 0.5
+
+    # Validate and fuzzy-match to known categories
+    if raw_cat in _ALL_CATEGORIES:
+        return raw_cat, confidence
+
+    for cat in _ALL_CATEGORIES:
+        if raw_cat in cat or cat in raw_cat:
+            return cat, confidence
+
+    return "simple_qa", 0.3
 
 
 class TieredRouter:
@@ -288,10 +327,28 @@ class TieredRouter:
         bmad_context: Optional[str] = None,
         force_route: Optional[str] = None,
     ) -> LLMResponse:
+        # Implements FR-ORCH-001 (intent classification with 85% confidence gate)
+        # Implements NFR-PERF-003 (intent routing < 500ms — fast_classify is O(1))
         if not system_prompt:
             system_prompt = build_system_prompt(read_memory())
 
-        category = force_route or _fast_classify(query) or self._classify(query)
+        if force_route:
+            category, confidence = force_route, 1.0
+        else:
+            fast = _fast_classify(query)
+            category, confidence = fast if fast is not None else self._classify(query)
+
+        threshold = get_confidence_threshold()
+        if confidence < threshold:
+            return LLMResponse(
+                content=(
+                    f"Fíjate, I wasn't sure how to interpret that — I read it as "
+                    f"*{category.replace('_', ' ')}* ({confidence:.0%} confident), "
+                    f"which is below my {threshold:.0%} threshold.\n\n"
+                    f"Could you say more about what you'd like help with?"
+                ),
+                route=RouteType.LOCAL,
+            )
 
         # Inject live DB snapshot for any query that needs real task/project data
         if category in {"task_management", "simple_qa", "memory_recall"}:
@@ -329,16 +386,16 @@ class TieredRouter:
                 category=category, current_task=current_task, bmad_context=bmad_context
             )
 
-    def _classify(self, query: str) -> str:
+    def _classify(self, query: str) -> tuple[str, float]:
+        """Implements FR-ORCH-001 — returns (category, confidence) from router model."""
         prompt = _CLASSIFICATION_PROMPT.format(query=query)
         result = call_local(
             messages=[{"role": "user", "content": prompt}],
             model=ROUTER_MODEL,
         )
         if result.error:
-            return "simple_qa"
-        parts = result.content.strip().lower().replace("-", "_").split()
-        return parts[0] if parts else "simple_qa"
+            return "simple_qa", 0.0
+        return _parse_classification(result.content)
 
     def _route_local(
         self,

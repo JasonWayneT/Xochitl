@@ -1,4 +1,5 @@
 """Entry point — routes all xochitl commands and the interactive chat loop."""
+# Implements FR-ORCH-003 (Persistent Conversational Loop — `xochitl chat` spawns XochitlChat.start(), non-blocking)
 
 import json
 import os
@@ -242,7 +243,7 @@ def pull(decompose):
         console.print(f"\n[yellow]Conflict for '{notion_project['name']}'[/yellow]")
         console.print(f"  Notion: {notion_project.get('description', '')[:80]}")
         console.print(f"  Local:  {local_row.get('description', '')[:80]}")
-        return Prompt.ask("  Decision?", choices=["pull", "keep", "merge"], default="pull")
+        return Prompt.ask("  Decision?", choices=["pull", "keep", "merge"], default="keep")
 
     try:
         result = notion_sync.pull_and_sync(on_conflict=on_conflict)
@@ -454,10 +455,13 @@ def models():
 @click.option("--cloud", is_flag=True, help="Force all queries to cloud model.")
 @click.option("--with-orchestrator", "with_orchestrator", is_flag=True,
               help="Start background orchestrator on launch.")
-def chat(cloud, with_orchestrator):
+@click.option("--no-rich", "no_rich", is_flag=True,
+              help="Disable Rich markup (plain text output — useful for TERM=dumb or screen readers).")
+def chat(cloud, with_orchestrator, no_rich):
     """Interactive conversational session with Xochitl."""
+    # Implements FR-UX-001 (--no-rich flag, TERM=dumb fallback)
     from src.chat import XochitlChat
-    XochitlChat(force_cloud=cloud, with_orchestrator=with_orchestrator).start()
+    XochitlChat(force_cloud=cloud, with_orchestrator=with_orchestrator, no_rich=no_rich).start()
 
 
 # ── tasks ─────────────────────────────────────────────────────────────────────

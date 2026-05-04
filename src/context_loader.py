@@ -1,7 +1,9 @@
-"""Builds 3-layer LLM context and compresses conversation history for cloud routing."""
+"""Builds LLM context, verifies memory entries on use, and compresses conversation history."""
+# Implements FR-MEM-007 (Verify-on-Call Protocol — hash check before LLM injection)
 
-import re
+import hashlib
 import json
+import re
 from pathlib import Path
 from typing import Optional
 
@@ -9,7 +11,44 @@ GLOBAL_CONTEXT_PATH = Path(__file__).parent.parent / "config" / "global.md"
 PROJECTS_CONTEXT_DIR = Path(__file__).parent.parent / "config" / "projects"
 
 
-# ── 3-layer context assembly ──────────────────────────────────────────────────
+# ── FR-MEM-007: Verify-on-Call Protocol ──────────────────────────────────────
+
+def verify_on_call(entry: dict) -> tuple[str, bool]:
+    """Re-read and hash-verify a KB entry before LLM injection.
+
+    Implements FR-MEM-007 — prevents stale or tampered entries from reaching the model.
+    Returns (content, is_valid). If hash mismatch, content is prefixed with [STALE].
+    """
+    # Implements FR-MEM-007
+    path_str = entry.get("path")
+    if not path_str:
+        return entry.get("content", ""), True
+
+    path = Path(path_str)
+    if not path.exists():
+        return "", False
+
+    try:
+        current_content = path.read_text(encoding="utf-8")
+    except Exception:
+        return "", False
+
+    current_hash = hashlib.sha256(current_content.encode("utf-8")).hexdigest()
+    hashes_file = path.parent / ".hashes.json"
+
+    if hashes_file.exists():
+        try:
+            hashes = json.loads(hashes_file.read_text(encoding="utf-8"))
+            stored_hash = hashes.get(path.name)
+            if stored_hash and stored_hash != current_hash:
+                return f"[STALE] {current_content[:500]}", False
+        except Exception:
+            pass
+
+    return current_content, True
+
+
+# ── Context assembly ──────────────────────────────────────────────────────────
 
 def load_global_context() -> str:
     if GLOBAL_CONTEXT_PATH.exists():
@@ -39,7 +78,7 @@ def build_system_prompt(memory_content: str, soul_content: str = "") -> str:
     memory = memory_content or read_memory()
 
     soul_path = Path(__file__).parent.parent / "SOUL.md"
-    soul = soul_content or (soul_path.read_text(encoding="utf-8") if soul_path.exists() else "")
+    soul = soul_content or (soul_path.read_text(encoding="utf-8") if soul_path.exists() else "")  # Implements FR-UX-002
 
     project_root = Path(__file__).parent.parent.resolve()
 

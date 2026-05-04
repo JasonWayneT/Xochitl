@@ -1,19 +1,24 @@
-"""Task CRUD, queue management (WIP limit=3), rollover logic."""
+"""Task CRUD, queue management (configurable WIP limit), rollover logic."""
+# Implements FR-TASK-001 (SQLite state cache — CRUD over tasks/projects via database.py)
+# Implements FR-TASK-002 (WIP limit read from config.get_wip_limit(), not hardcoded)
+# Implements FR-TASK-004 (Backlog task suggestions — fill_queue() pulls eligible tasks by priority)
 
 import uuid
 from typing import Optional
 
 from src import database as db
+from src.config import get_wip_limit
 
 
 # ── Queue management ──────────────────────────────────────────────────────────
 
 def fill_queue() -> list[str]:
-    """Pull eligible tasks into queue until it has 3 items. Returns added task IDs."""
+    """Pull eligible tasks into queue up to the configured WIP limit. Returns added task IDs."""
+    # Implements FR-TASK-002
     added = []
     with db.get_connection() as conn:
         current_size = db.queue_size(conn)
-        slots = 3 - current_size
+        slots = get_wip_limit() - current_size
         if slots <= 0:
             return []
 

@@ -1,4 +1,6 @@
 """Notion read/write with conflict detection via last_edited_time."""
+# Implements FR-TASK-003 (Bi-directional Notion sync — pull_and_sync() and sync_completed_to_notion())
+# Implements NFR-SYNC-001 (Local cache overrides sync conflicts — on_conflict defaults to 'pull'; 'keep' preserves local)
 
 import os
 import httpx

@@ -1,4 +1,5 @@
 """Local Ollama + cloud Gemini/Anthropic LLM calls with tiered routing and fallback."""
+# Implements NFR-SEC-001 (Local execution only for Tiers 0–3 — Ollama runs on-device; cloud only for Tier 4+)
 
 import os
 import time
