@@ -18,6 +18,18 @@ Xochitl (pronounced "so-CHEEL") is a terminal-native AI Chief of Staff. It manag
   - **Cloud**: Gemini 1.5 Pro / Flash or Claude (Complex code, architecture, BMAD)
 - **Vector DB**: ChromaDB for long-term memory
 
+## Agent Operating Rules
+
+This project uses BMAD-informed Spec Driven Development. **Read `AGENTS.md` before making any code changes.** The prime directive is: documentation chain first, code second.
+
+Required reading order before coding:
+1. `docs/spec/00-project-constitution.md`
+2. `docs/spec/01-bmad-intake.md`
+3. `docs/spec/02-requirements-registry.md`
+4. Relevant files under `docs/spec/03-feature-specs/` through `docs/spec/09-known-issues/`
+
+Every code change must cite at least one requirement ID (`FR-*`, `NFR-*`, `ARCH-*`, etc.) in the commit message or implementation notes.
+
 ## Project Structure
 
 ```
@@ -34,13 +46,28 @@ Xochitl (pronounced "so-CHEEL") is a terminal-native AI Chief of Staff. It manag
 │       ├── bmad_skill.py      # Project init & BMAD artifacts
 │       ├── sdd_skill.py       # Spec generation & requirement CRUD
 │       └── code_skill.py      # Code generation & scaffolding
+├── docs/spec/                 # Xochitl-as-a-product SDD specs
+│   ├── 00-project-constitution.md
+│   ├── 01-bmad-intake.md
+│   ├── 02-requirements-registry.md
+│   ├── 03-feature-specs/
+│   ├── 04-design-specs/
+│   ├── 05-change-requests/
+│   ├── 06-traceability/traceability-matrix.md
+│   ├── 07-decisions/
+│   ├── 08-test-specs/
+│   └── 09-known-issues/
 ├── projects/                  # Applications built WITH Xochitl
 │   └── <project-id>/
 │       ├── .project-meta.yml  # Project metadata
 │       ├── bmad/              # BMAD artifacts (business-model.md, etc.)
 │       ├── specs/             # SDD requirements (FR-*, traceability.json)
 │       └── src/               # Generated code
-├── .sdd/                      # SDD configuration and prompts
+├── .sdd/                      # SDD configuration, prompts, and templates
+│   ├── config.yml
+│   ├── prompts/               # LLM prompts for the SDD pipeline
+│   └── templates/             # Document templates for generated projects
+├── AGENTS.md                  # Agent operating rules (SDD prime directive)
 └── requirements.txt
 ```
 

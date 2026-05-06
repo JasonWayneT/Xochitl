@@ -15,7 +15,7 @@ _PROJECTS_DIR = _PROJECT_ROOT / "projects"
 
 _PLANNING_KEYWORDS = ["plan", "design", "architect", "prd", "feature", "workflow", "sprint"]
 _BUILD_KEYWORDS = [
-    "build", "create app", "new app", "new project", "start project",
+    "build", "rebuild", "rebuilding", "create app", "new app", "new project", "start project",
     "make an app", "i want to build", "i want to make", "i want to create",
 ]
 
@@ -58,6 +58,18 @@ class BMADSkill(Skill):
             "I can walk you through the planning workflow. "
             "Want to do it together (I'll ask questions) or should I draft something for you to review?"
         )
+
+    def tool_definition(self) -> dict:
+        # Implements FR-ORCH-005
+        return {
+            "name": "BMADSkill",
+            "description": "Initializes and guides a BMAD project lifecycle: Business Model → Architecture → Design → Code.",
+            "when": "user wants to build, create, or make a new app or project; OR user is in a BMAD project and asks about planning, architecture, PRD, sprint, or workflow",
+            "params": {
+                "action": "init_project | walk_workflow",
+                "name": "(optional) project name extracted from user message",
+            },
+        }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:
         action = params.get("action", "")

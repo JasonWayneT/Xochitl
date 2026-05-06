@@ -13,3 +13,5 @@ directories:
   projects: projects
   sdd_config: .sdd
   logs: .sdd/logs
+  templates: .sdd/templates
+  spec: docs/spec

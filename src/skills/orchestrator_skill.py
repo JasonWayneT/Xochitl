@@ -44,6 +44,17 @@ class OrchestratorSkill(Skill):
             "Want to delegate it?"
         )
 
+    def tool_definition(self) -> dict:
+        # Implements FR-ORCH-005
+        return {
+            "name": "OrchestratorSkill",
+            "description": "Delegates a task to a background autonomous agent and tracks its progress.",
+            "when": "user says 'delegate', 'background', 'handle it autonomously', 'spin up an agent', or asks about background task status",
+            "params": {
+                "task_id": "(optional) task ID to delegate; omit to show status",
+            },
+        }
+
     def execute(self, user_input: str, context: dict, params: dict) -> str:
         task_id = params.get("task_id")
         if task_id:

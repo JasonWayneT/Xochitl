@@ -3,13 +3,20 @@
 from src.skills.base import Skill
 
 
-_NOTION_KEYWORDS = ["notion", "sync", "pull", "push", "projects", "tasks", "queue"]
+# Specific Notion keywords only — "projects" is too generic and hijacks BMAD/file queries
+_NOTION_KEYWORDS = ["notion", "sync notion", "pull from notion", "push to notion", "notion tasks"]
+
+# If any of these are present, Notion should never intercept (higher-priority intent)
+_NOTION_EXCLUSIONS = ["bmad", "sdd", "spec", "read", "folder", "file", "zettle", "zettlelib"]
 
 
 class NotionSkill(Skill):
 
     def can_handle(self, user_input: str, context: dict) -> float:
         q = user_input.lower()
+        # Never intercept BMAD/file/spec workflows
+        if any(ex in q for ex in _NOTION_EXCLUSIONS):
+            return 0.0
         if any(kw in q for kw in _NOTION_KEYWORDS):
             return 0.7
         return 0.0
@@ -29,6 +36,17 @@ class NotionSkill(Skill):
             "I can sync with Notion to get the latest project and task data. "
             "Want me to pull updates or push completed tasks?"
         )
+
+    def tool_definition(self) -> dict:
+        # Implements FR-ORCH-005
+        return {
+            "name": "NotionSkill",
+            "description": "Syncs tasks and projects between Xochitl and Notion (pull latest or push completed).",
+            "when": "user mentions 'notion', 'sync', 'pull from notion', 'push to notion', or wants to update their task list from Notion",
+            "params": {
+                "direction": "pull | push",
+            },
+        }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:
         direction = params.get("direction", "pull")

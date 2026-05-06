@@ -1,9 +1,12 @@
 """Tiered router: classifies queries and dispatches to local model, cloud, or BMAD."""
 # Implements FR-ORCH-002 (Dynamic Skill Invocation — route() dispatches to local/cloud/hybrid based on intent)
+# Implements FR-ORCH-003 (PreFlight Fact Injection — SYSTEM_FACTS block prepended to every prompt)
 # Implements NFR-PERF-003 (Intent routing latency < 500ms)
+# Implements NFR-PERF-005 (Rolling latency tracking per provider)
 
 import os
 import json
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -36,7 +39,35 @@ _SELF_DIR_PHRASES = [
     "files in the directory", "files in the folder", "files in your directory",
     "read the files", "show me the files", "what files are", "files do you see",
     "read all files", "look at all files", "look at your files",
+    "what folder are you in", "what directory are you in", "where are you",
+    "what folder is this", "what directory is this"
 ]
+
+
+def _build_preflight_facts(project: str | None = None) -> str:
+    """Build a [SYSTEM_FACTS] block with hard environment facts.
+
+    Implements FR-ORCH-003 — PreFlight Fact Injection.
+    Prepended to every system prompt so the LLM cannot hallucinate its location.
+    """
+    cwd = str(Path.cwd())
+    project_line = f"Active Project: {project}" if project else "Active Project: none"
+    try:
+        wip_count = 0
+        from src import database as _db
+        with _db.get_connection() as _conn:
+            _wip = _db.get_queue(_conn)
+        wip_count = len(_wip)
+    except Exception:
+        wip_count = 0
+    return (
+        f"[SYSTEM_FACTS]\n"
+        f"Current Directory: {cwd}\n"
+        f"{project_line}\n"
+        f"WIP Queue: {wip_count}/3 items\n"
+        f"Platform: Windows (win32)\n"
+        f"[/SYSTEM_FACTS]"
+    )
 
 
 def _dir_tree(root: Path, depth: int = 2, _indent: int = 0) -> list[str]:
@@ -59,23 +90,30 @@ def _dir_tree(root: Path, depth: int = 2, _indent: int = 0) -> list[str]:
     return lines
 
 
-def _resolve_file_context(query: str) -> str:
+def _resolve_file_context(query: str, history: list[dict] | None = None) -> str:
     """
-    Find files or folders mentioned in the query and return their content for prompt injection.
-    Handles explicit paths, bare filenames with extensions, fuzzy name search, and
-    self-referential phrases like 'your folder' or 'the directory you're in'.
+    Find files or folders mentioned in the query (or recent history) and return
+    their content for prompt injection.
     """
     import re
     from src import security
 
     q_lower = query.lower()
+    combined_query = query
+    if history:
+        # Scan last 3 messages for context-dropping prevention (BUG-ORCH-001)
+        recent = [m.get("content", "") for m in history[-3:]]
+        combined_query = "\n".join(recent + [query])
+        q_lower = combined_query.lower()
+
     parts = []
 
     # ── Self-referential directory browse ────────────────────────────────────
-    if any(phrase in q_lower for phrase in _SELF_DIR_PHRASES):
-        tree = _dir_tree(_PROJECT_ROOT, depth=2)
+    if any(phrase in q_lower for phrase in _SELF_DIR_PHRASES) or re.search(r'\b(?:what|show|list|where|see|read|view|browse|look|check)\b.*\b(?:folder|dir|directory|files|path)\b', q_lower):
+        cwd = Path.cwd()
+        tree = _dir_tree(cwd, depth=2)
         parts.append(
-            f"## Your project directory: {_PROJECT_ROOT}\n" + "\n".join(tree)
+            f"## Your current working directory: {cwd}\n" + "\n".join(tree)
         )
         # Also check if they want file contents (e.g. "read through the files")
         read_words = ["read", "look at", "show me", "open", "browse"]
@@ -83,16 +121,21 @@ def _resolve_file_context(query: str) -> str:
             return "## File Context\n\n" + "\n\n".join(parts)
 
     # ── Explicit Windows absolute paths ──────────────────────────────────────
-    explicit = re.findall(r'[A-Za-z]:[/\\][\w/\\\-. ]+', query)
+    explicit = re.findall(r'[A-Za-z]:[/\\][\w/\\\-. ]+', combined_query)
 
     # ── Filenames with known extensions ──────────────────────────────────────
     ext_pattern = r'[\w][\w\-]*\.(?:md|txt|py|js|ts|json|yaml|yml|toml|csv|html|pdf|env)'
-    bare_names = re.findall(ext_pattern, query, re.IGNORECASE)
+    bare_names = re.findall(ext_pattern, combined_query, re.IGNORECASE)
 
     # ── Quoted strings (may be filenames or folder names) ────────────────────
-    quoted = [m[0] or m[1] for m in re.findall(r'"([^"]+)"|\'([^\']+)\'', query)]
+    quoted = [m[0] or m[1] for m in re.findall(r'"([^"]+)"|\'([^\']+)\'', combined_query)]
+
+    # ── Potential named folders (words in the query that might be directories) ──
+    # BUG-ORCH-003: find folders like 'zettlelib' even if not quoted.
+    potential_names = re.findall(r'\b\w{3,}\b', query)
 
     search_roots = [
+        Path.cwd(),
         _PROJECT_ROOT,
         Path.home() / "Desktop" / "Jason" / "Resource" / "Code Projects",
         Path.home() / "Documents",
@@ -101,11 +144,25 @@ def _resolve_file_context(query: str) -> str:
 
     def _find_by_name(name: str) -> Optional[Path]:
         name_clean = name.strip().lower()
+        # 1. Fast check: immediate children of search roots
+        for root in search_roots:
+            if not root.exists():
+                continue
+            # Check immediate children first (O(N) where N is number of files in root)
+            try:
+                for p in root.iterdir():
+                    if name_clean in p.name.lower() and security._is_allowed(p):
+                        return p
+            except PermissionError:
+                continue
+
+        # 2. Limited depth search (O(N^2) but restricted)
         for root in search_roots:
             if not root.exists():
                 continue
             try:
-                for p in root.rglob("*"):
+                # Only look 2 levels deep to avoid the "rglob hang"
+                for p in root.glob("*/*"):
                     if name_clean in p.name.lower() and security._is_allowed(p):
                         return p
             except PermissionError:
@@ -115,9 +172,9 @@ def _resolve_file_context(query: str) -> str:
     resolved_files: set[Path] = set()
     resolved_dirs: set[Path] = set()
 
-    for raw in explicit + bare_names + quoted:
+    for raw in explicit + bare_names + quoted + potential_names:
         raw = raw.strip()
-        if not raw:
+        if not raw or raw.lower() in {"the", "and", "read", "folder", "directory", "file"}:
             continue
         # Try as absolute path
         p = Path(raw)
@@ -215,6 +272,13 @@ _CLOUD_CATEGORIES = {
     "creative_writing", "data_analysis", "bmad_party_mode",
 }
 
+# Categories that MUST stay local (never fall back to cloud automatically)
+# BUG-ORCH-007: bmad_simple added — file+BMAD combined requests were hitting cloud quota (429)
+_FORCE_LOCAL_CATEGORIES = {
+    "file_operations", "task_management", "xochitl_help",
+    "memory_recall", "simple_qa", "bmad_simple",
+}
+
 _CLASSIFICATION_PROMPT = """Classify the user query into EXACTLY ONE category from this list:
 
 simple_qa          - Factual question, definition, general explanation
@@ -250,16 +314,28 @@ _KEYWORD_MAP = {
     "file_operations":  [
         ".md", ".txt", ".py", ".js", ".ts", ".json", ".yaml", ".pdf", ".env", ".toml", ".csv",
         "read the file", "read file", "read the files", "read all the files",
-        "open the file", "look at the file",
+        "open the file", "look at the file", "can you see", "do you see",
         "show me the file", "what's in the file", "whats in the file",
         "list files", "list directory", "list folder", "show files",
         "check the file", "find the file", "load the file",
         "files in the", "folder contents", "directory contents",
-        "look at the folder", "look at the directory",
+        "look at the folder", "look at the directory", "see the folder",
         "read through", "read my files", "see my files",
     ],
+    # bmad before task_management — "run through bmad" must not route to task mgmt
+    "bmad_simple":      [
+        "bmad", "b-mad", "sdd", "spec driven", "run it through", "run through bmad",
+        "bmad method", "bmad workflow", "bmad skill", "create a prd", "write a prd",
+        "create epics", "create stories", "sprint planning", "bmad help",
+        "bmad agent", "intake", "product brief", "feature spec", "create spec",
+    ],
+    "bmad_complex":     [
+        "full bmad", "full sdd", "create architecture", "create the architecture",
+        "architecture spec", "design spec", "traceability matrix", "requirements registry",
+    ],
+    "bmad_party_mode":  ["party mode", "multi-agent", "roundtable", "agent discussion"],
     "simple_qa":        ["hello", "hi", "hey", "hola", "good morning", "good afternoon", "good evening", "sup", "what's up", "whats up"],
-    "task_management":  ["done", "queue", "task", "today", "mark", "complete", "blocked", "project", "in progress", "my work"],
+    "task_management":  ["done", "queue", "task", "today", "mark", "complete", "blocked", "in progress", "my work"],
     "xochitl_help":     ["help", "what can you", "capabilities", "commands"],
     "memory_recall":    ["remember", "recall", "what did we", "earlier", "last time"],
     "code_generation":  ["write code", "implement", "create a script", "function that"],
@@ -276,6 +352,17 @@ def _fast_classify(query: str) -> Optional[tuple[str, float]]:
     # Any self-referential directory phrase → file operation
     if any(phrase in q for phrase in _SELF_DIR_PHRASES):
         return "file_operations", 1.0
+    # Fuzzy self-ref match: (what|show|list|see|read|view|browse|look|check) ... (folder|dir|files)
+    if re.search(r'\b(?:what|show|list|where|see|read|view|browse|look|check)\b.*\b(?:folder|dir|directory|files|path)\b', q):
+        return "file_operations", 1.0
+    # Top-priority BMAD check — before task_management so "run through bmad" never hijacked
+    if re.search(r'\bbmad\b|\bsdd\b|spec.driven|run.*through.*bmad|bmad.*method|bmad.*workflow', q):
+        # Distinguish complex from simple based on depth keywords
+        if any(w in q for w in ["architecture", "traceability", "design spec", "full bmad", "full sdd"]):
+            return "bmad_complex", 1.0
+        if any(w in q for w in ["party", "multi-agent", "roundtable"]):
+            return "bmad_party_mode", 1.0
+        return "bmad_simple", 1.0
     for category, keywords in _KEYWORD_MAP.items():
         for kw in keywords:
             if len(kw) <= 4 and kw.isalpha():
@@ -317,6 +404,17 @@ class TieredRouter:
     def __init__(self):
         self._consecutive_local_failures = 0
         self._failure_threshold = 2
+        # NFR-PERF-005: rolling latency tracking (exponential moving average)
+        self._local_avg_ms: float = 9999.0
+        self._cloud_avg_ms: float = 9999.0
+
+    def _update_latency(self, route: str, duration_ms: float) -> None:
+        """Exponential moving average update for latency tracking."""
+        alpha = 0.3
+        if route == "local":
+            self._local_avg_ms = alpha * duration_ms + (1 - alpha) * self._local_avg_ms
+        else:
+            self._cloud_avg_ms = alpha * duration_ms + (1 - alpha) * self._cloud_avg_ms
 
     def route(
         self,
@@ -353,11 +451,17 @@ class TieredRouter:
         # Inject live DB snapshot for any query that needs real task/project data
         if category in {"task_management", "simple_qa", "memory_recall"}:
             system_prompt = system_prompt + "\n\n" + _live_db_context()
-        elif category == "file_operations":
-            file_ctx = _resolve_file_context(query)
+
+        # FR-ORCH-003: Prepend SYSTEM_FACTS block to ground the LLM in reality
+        facts_block = _build_preflight_facts()
+        system_prompt = facts_block + "\n\n" + system_prompt
+
+        # Inject file context for relevant categories (BUG-ORCH-001)
+        if category in {"file_operations", "general", "simple_qa", "bmad_complex", "code_generation"}:
+            file_ctx = _resolve_file_context(query, conversation_history)
             if file_ctx:
                 system_prompt = system_prompt + "\n\n" + file_ctx
-            else:
+            elif category == "file_operations":
                 system_prompt = (
                     system_prompt
                     + "\n\nThe user is asking about a file or directory. "
@@ -366,7 +470,7 @@ class TieredRouter:
                 )
 
         if category in _LOCAL_CATEGORIES:
-            return self._route_local(query, conversation_history, system_prompt)
+            return self._route_local(query, conversation_history, system_prompt, category=category)
         elif category in _LOCAL_SPECIALIZED_CATEGORIES:
             model = _LOCAL_SPECIALIZED_CATEGORIES[category]
             return self._route_hybrid(
@@ -403,20 +507,29 @@ class TieredRouter:
         history: list[dict],
         system: str,
         model: str = "",
+        category: str = "",
     ) -> LLMResponse:
         messages = history + [{"role": "user", "content": query}]
+        t0 = time.monotonic()
         result = call_with_retry(call_local, messages=messages, system=system, model=model)
+        elapsed_ms = (time.monotonic() - t0) * 1000
 
         if result.error:
             self._consecutive_local_failures += 1
+            # BUG-ORCH-004 fix: don't fall back to cloud for local-first categories
+            # if the error is a systemic failure (like Ollama being down).
+            if category in _FORCE_LOCAL_CATEGORIES:
+                return result
+
             if self._consecutive_local_failures >= self._failure_threshold:
-                return self._route_cloud(query, history, system)
+                return self._route_cloud(query, history, system, category=category)
             return result
 
         self._consecutive_local_failures = 0
+        self._update_latency("local", elapsed_ms)
         confidence = estimate_confidence(result.content)
-        if confidence < 0.7:
-            return self._route_cloud(query, history, system)
+        if confidence < 0.7 and category not in _FORCE_LOCAL_CATEGORIES:
+            return self._route_cloud(query, history, system, category=category)
 
         return result
 
@@ -442,9 +555,12 @@ class TieredRouter:
         selected_model = CLOUD_MODEL_PRO if category in heavy_tasks else CLOUD_MODEL_FLASH
 
         messages = [{"role": "user", "content": compressed}]
+        t0 = time.monotonic()
         result = call_with_retry(call_cloud, messages=messages, system=system, model=selected_model)
+        elapsed_ms = (time.monotonic() - t0) * 1000
 
         if not result.error:
+            self._update_latency("cloud", elapsed_ms)
             self._log_cloud_usage(result)
 
         return result
@@ -458,7 +574,7 @@ class TieredRouter:
         model: str = "",
         **kwargs,
     ) -> LLMResponse:
-        local_result = self._route_local(query, history, system, model=model)
+        local_result = self._route_local(query, history, system, model=model, category=category)
         if local_result.error:
             return self._route_cloud(query, history, system, category=category, **kwargs)
 

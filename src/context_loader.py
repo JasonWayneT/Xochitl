@@ -97,14 +97,11 @@ def build_system_prompt(memory_content: str, soul_content: str = "") -> str:
 
 ---
 
-## Tool Routing Examples
-Query: "mark task 1 done" → task_management
-Query: "what did we discuss about JobAgent?" → vector_db_recall
-Query: "help me plan this feature" → bmad_workflow
-Query: "sync Notion tasks" → notion_sync
-Query: "design the database schema" → cloud_expert
-Query: "read file main.py" → file_read
-Query: "what can you do?" → xochitl_help
+## Important
+You are a conversational assistant. Respond naturally in plain text or markdown.
+Do NOT output XML tags, tool-call syntax, JSON function calls, or any structured
+markup that looks like code execution. If you need to perform an action, describe
+what you are doing in plain language. The calling code handles all tool dispatch.
 """
 
 

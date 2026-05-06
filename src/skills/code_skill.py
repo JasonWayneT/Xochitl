@@ -67,6 +67,20 @@ class CodeSkill(Skill):
             "Every generated function will reference its requirement ID. Want me to go ahead?"
         )
 
+    def tool_definition(self) -> dict:
+        # Implements FR-ORCH-005
+        return {
+            "name": "CodeSkill",
+            "description": "Scaffolds code, implements requirements, and generates tests from SDD specs — every function is traceable to a requirement ID.",
+            "when": "user says 'scaffold', 'generate code', 'implement', 'write the backend/frontend/api', 'generate tests', or 'fix' a specific bug when a project with specs is active",
+            "params": {
+                "action": "scaffold | implement | fix | test",
+                "component": "backend | frontend | api | models (for scaffold)",
+                "requirement_id": "FR-* ID (for implement)",
+                "project_id": "(optional) project ID, defaults to active project",
+            },
+        }
+
     def execute(self, user_input: str, context: dict, params: dict) -> str:
         action = params.get("action", "")
         project_id = params.get("project_id") or context.get("current_project", "")

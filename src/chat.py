@@ -1,25 +1,41 @@
 """XochitlChat — conversational layer over the tiered router.
-# Implements FR-ORCH-004 (Tool Outcome Narrative — tool results are synthesized into Matriarca-voice responses)
+# Implements FR-ORCH-003 (PreFlight Fact Injection via ContextManager)
+# Implements FR-ORCH-004 (Provenance Tagging via ContextManager)
+# Implements FR-ORCH-005 (Skill Manifest — skills described in every system prompt)
+# Implements FR-ORCH-006 (Universal ContextManager — all paths use cm.assemble_system_prompt())
+# Implements FR-ORCH-007 (Natural Confirmation — LLM fallback for yes/no)
+# Implements FR-ORCH-008 (Agent Loop — <skill_call> parsing and auto-execution)
+# Implements FR-ORCH-009 (Skill-Aware History — role=tool turns in session history)
+# Implements FR-UI-001 (Status Tiers — Rich Live sub-task feed)
+# Implements FR-UI-002 (Smart Ctrl-C — 2-stage: cancel then exit)
+# Implements FR-UI-003 (OSC 8 terminal hyperlinks for file paths)
 
 Design principles (from XOCHITL_CONVERSATIONAL_HARNESS.md):
 - Natural back-and-forth, like Claude.ai in the terminal
-- Detect skills, suggest them, only execute after user confirms
+- LLM knows its available skills via SkillManifestEngine and can invoke them
 - File ops go through FileTools permission model (overwrite/delete need consent)
 - Orchestrator is a tool Xochitl uses when user says "delegate it" — not a default
 """
 
+import json
 import os
 import re
+import signal
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from rich.console import Console
+from rich.live import Live
 from rich.markdown import Markdown
 from rich.prompt import Prompt
+from rich.spinner import Spinner
+from rich.text import Text
 
 from src.router import get_router, _live_db_context, _resolve_file_context
 from src.context_loader import build_system_prompt
+from src.context_manager import ContextManager
 from src.memory import read_memory
 from src import database as db
 from src.file_tools import FileTools
@@ -35,6 +51,74 @@ _FYI = "Fíjate"  # informational flag — "look here"
 _ERR = "Ay no"   # error / blocked
 
 _PROJECT_ROOT = Path(__file__).parent.parent
+
+# ── OSC 8 terminal hyperlink helper (FR-UI-003) ────────────────────────────
+
+def _osc8_link(path: str) -> str:
+    """Format a file path as an OSC 8 clickable terminal hyperlink.
+
+    Implements FR-UI-003. Works in Windows Terminal, VS Code integrated terminal.
+    Falls back to plain path if TERM=dumb or terminal doesn't support OSC 8.
+    """
+    if _TERM_DUMB:
+        return path
+    abs_path = str(Path(path).resolve())
+    uri = "file:///" + abs_path.replace("\\", "/")
+    # OSC 8 ;; URI ST   text   OSC 8 ;; ST
+    return f"\033]8;;{uri}\033\\{path}\033]8;;\033\\"
+
+
+# ── Status Tier renderer (FR-UI-001) ─────────────────────────────────────────
+
+class _StatusContext:
+    """Context manager that shows a live flower-animated status during LLM calls.
+
+    Implements FR-UI-001 — replaces static 'thinking...' spinner with a
+    Rich Live display showing a cycling flower glyph, the current sub-task,
+    and elapsed time. Flower sequence mirrors the Xochitl splash screen.
+    """
+
+    # Flower frames — mirrors the ✿ ❀ splash screen pattern
+    _FLOWERS = ["✿", "❀", "✿", "❀"]
+
+    def __init__(self, label: str = "Thinking"):
+        self._label = label
+        self._start = time.monotonic()
+        self._live: Optional[Live] = None
+        self._frame = 0
+
+    def _render(self) -> Text:
+        elapsed = time.monotonic() - self._start
+        # Advance flower frame (4 fps via refresh_per_second=4)
+        flower = self._FLOWERS[self._frame % len(self._FLOWERS)]
+        self._frame += 1
+        t = Text()
+        t.append("  ", style="")
+        t.append(f"{flower} ", style="bold magenta")
+        t.append(self._label, style="dim")
+        t.append(f"  ({elapsed:.1f}s)", style="dim")
+        return t
+
+    def update(self, label: str) -> None:
+        self._label = label
+        if self._live:
+            self._live.update(self._render())
+
+    def __enter__(self) -> "_StatusContext":
+        if not _TERM_DUMB:
+            self._live = Live(
+                self._render(),
+                console=console,
+                refresh_per_second=4,
+                transient=True,
+            )
+            self._live.__enter__()
+        return self
+
+    def __exit__(self, *args) -> None:
+        if self._live:
+            self._live.__exit__(*args)
+            self._live = None
 
 
 def _print_boot_banner(con: Console) -> None:
@@ -81,9 +165,9 @@ _BMAD_KEYWORDS    = ["plan", "design", "architect", "prd", "sprint", "feature", 
 
 # SDD / project lifecycle keywords
 _BUILD_KEYWORDS   = [
-    "i want to build", "i want to make", "i want to create",
+    "i want to build", "i want to make", "i want to create", "i want to rebuild",
     "build an app", "create an app", "new app", "new project", "start a project",
-    "let's build", "let's make", "let's create",
+    "let's build", "let's make", "let's create", "rebuild",
 ]
 _SDD_KEYWORDS      = ["spec", "requirement", "fr-", "ac-", "ec-", "traceability"]
 _ISSUE_KEYWORDS    = ["bug", "issue", "broken", "doesn't work", "failing", "wrong behavior", "error in"]
@@ -93,6 +177,32 @@ _RESEARCH_KEYWORDS = [
     "synthesize", "look into", "find out about", "what do we know about",
     "poke holes", "stress test this", "steelman", "play devil",
 ]
+
+
+# ── Skill-call parsing (FR-ORCH-008) ─────────────────────────────────────────
+
+_SKILL_CALL_RE = re.compile(
+    r'<skill_call\s+name=["\'](\w+)["\']>(.*?)</skill_call>',
+    re.DOTALL | re.IGNORECASE,
+)
+
+
+def _parse_skill_call(response: str) -> Optional[tuple[str, dict]]:
+    """Extract <skill_call name="X">{...}</skill_call> from an LLM response.
+
+    Implements FR-ORCH-008. Returns (skill_name, params) or None.
+    Tolerant of missing/malformed JSON in the body.
+    """
+    m = _SKILL_CALL_RE.search(response)
+    if not m:
+        return None
+    skill_name = m.group(1)
+    body = m.group(2).strip()
+    try:
+        params = json.loads(body) if body else {}
+    except json.JSONDecodeError:
+        params = {}
+    return skill_name, params
 
 
 class XochitlChat:
@@ -120,6 +230,10 @@ class XochitlChat:
         self.current_project: Optional[str] = None
 
         self._skills: Optional[list[Skill]] = None
+
+        # FR-UI-002: Smart Ctrl-C — track last interrupt time for 2-stage exit
+        self._last_interrupt: float = 0.0
+        self._active_status: Optional[_StatusContext] = None
 
     @property
     def skills(self) -> list[Skill]:
@@ -152,13 +266,31 @@ class XochitlChat:
         with db.get_connection() as conn:
             self.session_id = db.create_session(conn)
 
-        console.print("[dim]Type 'quit' or Ctrl+C to exit.[/dim]\n")
+        console.print("[dim]Type 'quit' or Ctrl+C to exit. (Ctrl+C twice quickly to force-quit)[/dim]\n")
 
         try:
             while True:
                 try:
                     user_input = Prompt.ask("[bold cyan]you[/bold cyan]")
-                except (EOFError, KeyboardInterrupt):
+                except KeyboardInterrupt:
+                    # FR-UI-002: Smart Ctrl-C — 2-stage exit
+                    now = time.monotonic()
+                    if self._active_status is not None:
+                        # First press: cancel active LLM call
+                        console.print("\n[dim]Cancelled.[/dim]")
+                        self._active_status = None
+                        continue
+                    if now - self._last_interrupt < 1.2:
+                        # Second press within 1.2s: exit
+                        console.print("\n[dim]Hasta luego 👋[/dim]\n")
+                        break
+                    else:
+                        self._last_interrupt = now
+                        console.print(
+                            "\n[dim]Press Ctrl+C again to exit, or keep typing.[/dim]"
+                        )
+                        continue
+                except EOFError:
                     break
 
                 if not user_input.strip():
@@ -180,8 +312,15 @@ class XochitlChat:
                     console.print()
                     continue
 
-                with console.status("[dim]thinking...[/dim]", spinner="xochitl"):
-                    response = self.process_message(user_input)
+                # FR-UI-001: Live status tier — show current sub-task during processing
+                status_ctx = _StatusContext("Thinking")
+                self._active_status = status_ctx
+                try:
+                    with status_ctx:
+                        status_ctx.update("Classifying intent")
+                        response = self.process_message(user_input, _status=status_ctx)
+                finally:
+                    self._active_status = None
 
                 console.print(f"\n[bold]Xochitl[/bold]: ", end="")
                 try:
@@ -195,7 +334,7 @@ class XochitlChat:
 
         console.print("[dim]Session ended.[/dim]")
 
-    def process_message(self, user_input: str) -> str:
+    def process_message(self, user_input: str, _status: Optional["_StatusContext"] = None) -> str:
         """Process one user message and return Xochitl's response."""
         self.session_history.append({
             "role": "user",
@@ -215,11 +354,12 @@ class XochitlChat:
             if action_resp is not None:
                 return self._record(action_resp)
 
-        # ── 3. Refresh BMAD context ───────────────────────────────────────────
+        # ── 3. Refresh BMAD and SDD context ──────────────────────────────────
+        if _status:
+            _status.update("Refreshing context")
         from src.bmad import detect_bmad_project
         self.current_context["bmad_project"] = detect_bmad_project(Path.cwd())
 
-        # ── 3b. Refresh SDD project context ──────────────────────────────────
         self.current_project = self._detect_current_project()
         if self.current_project:
             self.current_context["current_project"] = self.current_project
@@ -230,39 +370,116 @@ class XochitlChat:
             self.current_context.pop("specs_generated", None)
             self.current_context.pop("bmad_complete", None)
 
-        # ── 4. Classify intent ────────────────────────────────────────────────
+        # ── 4. Build universal ContextManager with skill manifest ─────────────
+        # Implements FR-ORCH-006 (universal CM) + FR-ORCH-005 (skill manifest)
+        route = "cloud" if self.force_cloud else "local"
+        cm = ContextManager(route=route, skills=self.skills)
+        cm.ingest(
+            query=user_input,
+            history=self._clean_history(),
+            project=self.current_project,
+            local_mode=(route == "local"),
+        )
+
+        # ── 5. Classify intent (fast keyword path for unambiguous cases) ──────
+        if _status:
+            _status.update("Classifying intent")
         intent = self._classify_intent(user_input)
 
-        # ── 5. Check if a skill applies (suggest first, don't execute) ────────
-        skill_suggestion = self._check_skills(user_input, self.current_context)
-        if skill_suggestion and intent["type"] not in ("general", "simple_question", "task_query"):
-            return self._record(skill_suggestion)
+        # ── 6. Route: special handlers for file/task/research; agent loop for rest ──
+        if _status:
+            _status.update(f"Handling: {intent['type'].replace('_', ' ')}")
 
-        # ── 6. Route to intent handler ────────────────────────────────────────
         if intent["type"] == "task_query":
-            response = self._handle_task_query(user_input)
-        elif intent["type"] == "action_request":
-            response = self._handle_action_request(user_input, intent)
+            response = self._handle_task_query(user_input, cm)
         elif intent["type"] == "file_operation":
-            response = self._handle_file_operation(user_input, intent)
-        elif intent["type"] == "orchestrator_query":
-            response = self._handle_orchestrator_query()
-        elif intent["type"] == "bmad_workflow":
-            response = self._handle_bmad_workflow(user_input)
-        elif intent["type"] == "new_project":
-            response = self._handle_new_project_request(user_input)
-        elif intent["type"] == "sdd_workflow":
-            response = self._handle_sdd_workflow(user_input)
-        elif intent["type"] == "issue_tracking":
-            response = self._handle_issue_tracking(user_input)
-        elif intent["type"] == "code_generation_intent":
-            response = self._handle_code_generation_request(user_input)
+            if _status:
+                _status.update("Resolving file context")
+            response = self._handle_file_operation(user_input, intent, cm)
         elif intent["type"] == "research":
+            if _status:
+                _status.update("Researching")
             response = self._handle_research(user_input, intent)
         else:
-            response = self._general_conversation(user_input)
+            # ── Agent loop: LLM controls routing and skill dispatch ────────────
+            # Implements FR-ORCH-008 — covers general, simple_question,
+            # bmad_workflow, new_project, sdd_workflow, issue_tracking,
+            # code_generation_intent, orchestrator_query, action_request.
+            if _status:
+                _status.update("Asking model")
+            response = self._agent_loop(user_input, cm, _status)
 
         return self._record(response)
+
+    # ── Agent loop (FR-ORCH-008) ──────────────────────────────────────────────
+
+    def _agent_loop(
+        self,
+        user_input: str,
+        cm: ContextManager,
+        _status: Optional[_StatusContext] = None,
+    ) -> str:
+        """LLM-controlled turn: model sees skill manifest and may invoke a skill.
+
+        Implements FR-ORCH-008. Flow:
+          1. Route to LLM with full context + skill manifest
+          2. Parse response for <skill_call name="X">{...}</skill_call>
+          3. If found: execute skill, record in history, append result to response
+          4. Strip any stray <skill_call> tags from visible output
+        """
+        system_prompt = cm.assemble_system_prompt()
+        messages = cm.assemble_messages(self._clean_history(), user_input, tag_provenance=True)
+
+        force = "code_generation" if self.force_cloud else None
+        result = self.router.route(
+            query=user_input,
+            conversation_history=messages,
+            system_prompt=system_prompt,
+            force_route=force,
+        )
+
+        if result.error:
+            return f"{_ERR} — {result.error}"
+
+        response_text = result.content or ""
+
+        # Parse for skill call (NFR-PERF-006 — regex only, <10ms)
+        skill_call = _parse_skill_call(response_text)
+
+        # Strip <skill_call> XML from the visible part of the response
+        visible = _SKILL_CALL_RE.sub("", response_text).strip()
+
+        if skill_call:
+            skill_name, params = skill_call
+            skill = self._find_skill_by_name(skill_name)
+            if skill:
+                if _status:
+                    _status.update(f"Running {skill_name}")
+                tool_result = skill.execute(user_input, self.current_context, params)
+
+                # Implements FR-ORCH-009 — persist tool turn in session history
+                self.session_history.append({
+                    "role": "tool",
+                    "skill": skill_name,
+                    "content": tool_result,
+                    "timestamp": datetime.now().isoformat(),
+                })
+
+                if visible:
+                    return f"{visible}\n\n{tool_result}"
+                return tool_result
+
+        return visible or response_text
+
+    def _find_skill_by_name(self, name: str) -> Optional[Skill]:
+        """Look up a skill by its class name or tool_definition name."""
+        for skill in self.skills:
+            defn = skill.tool_definition()
+            if defn.get("name", "").lower() == name.lower():
+                return skill
+            if type(skill).__name__.lower() == name.lower():
+                return skill
+        return None
 
     # ── Intent classification ─────────────────────────────────────────────────
 
@@ -277,6 +494,7 @@ class XochitlChat:
         has_file_verb = any(kw in q for kw in _FILE_VERB_KW)
         has_path_indicator = has_extension or has_path or any(kw in q for kw in _PATH_INDICATOR_KW)
 
+        # BUG-CHAT-001 fix: file_operation checked FIRST — explicit path/extension wins
         if has_extension or has_path or has_file_kw or (has_file_verb and has_path_indicator):
             if any(kw in q for kw in _FILE_DELETE_KW):
                 op = "delete"
@@ -286,7 +504,7 @@ class XochitlChat:
                 op = "read"
             return {"type": "file_operation", "operation": op}
 
-        # Research / adversarial checked before task keywords — "research X for task Y" must route here
+        # Research checked before task keywords
         if any(kw in q for kw in _RESEARCH_KEYWORDS):
             adversarial = any(kw in q for kw in ["devil", "adversarial", "challenge", "poke holes", "stress test", "steelman"])
             return {"type": "research", "adversarial": adversarial}
@@ -294,212 +512,57 @@ class XochitlChat:
         if any(kw in q for kw in _TASK_KEYWORDS):
             return {"type": "task_query"}
 
-        if any(kw in q for kw in _BG_KEYWORDS):
-            return {"type": "orchestrator_query"}
-
-        if any(kw in q for kw in _ACTION_KEYWORDS):
-            action = "sync_notion" if ("sync" in q or "pull" in q or "push" in q or "notion" in q) else "start_task"
-            return {"type": "action_request", "action": action}
-
-        # New project initialization — check before generic BMAD
-        if any(kw in q for kw in _BUILD_KEYWORDS):
-            return {"type": "new_project"}
-
-        if any(kw in q for kw in _BMAD_KEYWORDS) and self.current_context.get("bmad_project"):
-            return {"type": "bmad_workflow"}
-
-        # SDD / issue / code intents — only when a project is active
-        if self.current_project:
-            if any(kw in q for kw in _ISSUE_KEYWORDS):
-                return {"type": "issue_tracking"}
-            if any(kw in q for kw in _CODE_GEN_KEYWORDS):
-                return {"type": "code_generation_intent"}
-            if any(kw in q for kw in _SDD_KEYWORDS):
-                return {"type": "sdd_workflow"}
-
-        if len(user_input.split()) <= 6:
-            return {"type": "simple_question"}
-
+        # Everything else goes to the agent loop — the LLM handles it
         return {"type": "general"}
-
-    # ── Skill detection ───────────────────────────────────────────────────────
-
-    def _check_skills(self, user_input: str, context: dict) -> Optional[str]:
-        scored = [(s, s.can_handle(user_input, context)) for s in self.skills]
-        best, score = max(scored, key=lambda x: x[1])
-        if score > 0.6:
-            return best.suggest(user_input, context)
-        return None
 
     # ── Intent handlers ───────────────────────────────────────────────────────
 
-    def _handle_task_query(self, user_input: str) -> str:
-        system = build_system_prompt(read_memory()) + "\n\n" + _live_db_context()
+    def _handle_task_query(self, user_input: str, cm: ContextManager) -> str:
+        # Implements FR-ORCH-006 — uses CM for system prompt assembly
+        system = cm.assemble_system_prompt() + "\n\n" + _live_db_context()
         result = self.router.route(
             query=user_input,
-            conversation_history=self._clean_history(),
+            conversation_history=cm.assemble_messages(self._clean_history(), user_input, tag_provenance=True),
             system_prompt=system,
             force_route="task_management",
         )
         return result.content if not result.error else f"{_ERR} — {result.error}"
 
-    def _handle_action_request(self, user_input: str, intent: dict) -> str:
-        action = intent.get("action", "generic")
-
-        if action == "sync_notion":
-            self.current_context["pending_action"] = "sync_notion"
-            q = user_input.lower()
-            if "push" in q:
-                self.current_context["pending_action"] = "push_notion"
-                return "I can push your completed tasks to Notion. Want me to do that?"
-            return (
-                "I can pull the latest updates from Notion — projects, deadlines, new tasks. "
-                "Want me to run the sync?"
-            )
-
-        if action == "start_task":
-            return (
-                "Two ways to tackle this:\n\n"
-                "1. **Work together** — I help you step by step in chat\n"
-                "2. **Delegate it** — I spin up a background agent and you check in later\n\n"
-                "Which one?"
-            )
-
-        return self._general_conversation(user_input)
-
-    def _handle_file_operation(self, user_input: str, intent: dict) -> str:
+    def _handle_file_operation(self, user_input: str, intent: dict, cm: ContextManager) -> str:
         op = intent.get("operation", "read")
 
         if op == "read":
-            file_ctx = _resolve_file_context(user_input)
+            # BUG-CHAT-002 fix: catch permission errors and surface them clearly
+            try:
+                file_ctx = _resolve_file_context(user_input, self.session_history)
+            except Exception as exc:
+                return (
+                    f"{_ERR} — couldn't read that path: {exc}\n\n"
+                    "If the file is outside my project directory, authorize it first:\n"
+                    "`/authorize C:\\Users\\Jason\\Desktop\\Jason\\Resource\\Code Projects`"
+                )
             if file_ctx:
-                system = build_system_prompt(read_memory()) + "\n\n" + file_ctx
+                # Implements FR-ORCH-006 — CM system prompt + file context appended
+                system = cm.assemble_system_prompt() + "\n\n" + file_ctx
                 result = self.router.route(
                     query=user_input,
                     conversation_history=self._clean_history(),
                     system_prompt=system,
                 )
                 return result.content if not result.error else f"{_ERR} — {result.error}"
+            import re as _re
+            paths_found = _re.findall(r'[A-Za-z]:[/\\][\w/\\\-. ]+', user_input)
+            quoted_found = [m[0] or m[1] for m in _re.findall(r'"([^"]+)"|\'([^\']+)\'', user_input)]
+            hint = (paths_found + quoted_found)
+            if hint:
+                return (
+                    f"{_FYI} — I couldn't find or access `{hint[0].strip()}`.\n\n"
+                    "Make sure the path is correct. If it's outside my authorized directories, run:\n"
+                    "`/authorize <parent-folder>`"
+                )
             return f"{_FYI} — I don't see a specific file in that message. Can you give me the full path?"
 
-        return self._general_conversation(user_input)
-
-    def _handle_orchestrator_query(self) -> str:
-        from src.skills.orchestrator_skill import OrchestratorSkill
-        orch = next((s for s in self.skills if isinstance(s, OrchestratorSkill)), None)
-        if orch:
-            return orch._format_status()
-        return "No background tasks running. Want to delegate something?"
-
-    def _handle_bmad_workflow(self, user_input: str) -> str:
-        from src.bmad import build_bmad_context
-        bmad_project = self.current_context.get("bmad_project")
-        bmad_ctx = build_bmad_context(bmad_project) if bmad_project else ""
-        system = build_system_prompt(read_memory())
-        result = self.router.route(
-            query=user_input,
-            conversation_history=self._clean_history(),
-            system_prompt=system,
-            bmad_context=bmad_ctx,
-            force_route="bmad_complex",
-        )
-        return result.content if not result.error else f"Error: {result.error}"
-
-    def _handle_new_project_request(self, user_input: str) -> str:
-        """Ask for confirmation before creating the project structure."""
-        project_name = self._extract_project_name(user_input)
-        project_id = re.sub(r"[^a-z0-9]+", "-", project_name.lower()).strip("-")
-
-        self.current_context["pending_action"] = "init_project"
-        self.current_context["pending_project_id"] = project_id
-        self.current_context["pending_project_name"] = project_name
-        self.current_context["pending_project_description"] = user_input
-
-        return (
-            f"I'll set up **{project_name}** as a new BMAD-SDD project at `projects/{project_id}/`. "
-            "I'll then walk you through Business Model → Architecture → Design before we touch any code. "
-            "Shall I create the structure?"
-        )
-
-    def _handle_sdd_workflow(self, user_input: str) -> str:
-        """Route SDD-related requests (specs, requirements, traceability)."""
-        project_id = self.current_project
-        if not project_id:
-            return self._general_conversation(user_input)
-
-        from src.skills.sdd_skill import SDDSkill
-        sdd = SDDSkill()
-        meta = sdd._read_meta(project_id)
-
-        q = user_input.lower()
-
-        if "generate" in q and "spec" in q:
-            self.current_context["pending_action"] = "generate_specs"
-            return sdd.suggest(user_input, self.current_context)
-
-        if "list" in q and ("requirement" in q or "spec" in q):
-            reqs = sdd.list_requirements(project_id)
-            if not reqs:
-                return "No requirements yet. Generate specs first."
-            lines = [f"- **{r['id']}**: {r['description'][:80]} `[{r['status']}]`" for r in reqs]
-            return f"**{len(reqs)} requirements** for {project_id}:\n\n" + "\n".join(lines)
-
-        if re.search(r"\bFR-[A-Z]+-\d+\b", user_input.upper()):
-            req_id = re.search(r"\bFR-[A-Z]+-\d+\b", user_input.upper()).group(0)
-            req = sdd.get_requirement(project_id, req_id)
-            if req:
-                acs = "\n".join(f"  - {ac}" for ac in req.get("acceptance_criteria", []))
-                return (
-                    f"**{req_id}** ({req.get('status', '?')} / {req.get('priority', '?')})\n\n"
-                    f"{req.get('description', '')}\n\n"
-                    f"**Acceptance Criteria:**\n{acs}\n\n"
-                    f"**Implementation:** {req.get('implementation', '_(pending)_')}"
-                )
-            return f"{req_id} not found in specs."
-
-        # Suggest next step based on project state
-        return sdd.get_next_step_suggestion(project_id)
-
-    def _handle_issue_tracking(self, user_input: str) -> str:
-        """Handle bug reports and issue analysis requests."""
-        project_id = self.current_project
-        if not project_id:
-            return self._general_conversation(user_input)
-
-        self.current_context["pending_action"] = "analyze_issue"
-        self.current_context["pending_issue_description"] = user_input
-
-        return (
-            "I can analyze this against your specs — "
-            "figure out if it's a spec gap, a spec bug, or an implementation bug — "
-            "and suggest the exact requirement update needed. Should I?"
-        )
-
-    def _handle_code_generation_request(self, user_input: str) -> str:
-        """Handle scaffold/implement/test requests."""
-        project_id = self.current_project
-        if not project_id:
-            return self._general_conversation(user_input)
-
-        if not self.current_context.get("specs_generated"):
-            return "Specs aren't generated yet. Want me to do that first?"
-
-        q = user_input.lower()
-        component = "backend"
-        if "frontend" in q:
-            component = "frontend"
-        elif "api" in q:
-            component = "api"
-        elif "model" in q:
-            component = "models"
-
-        self.current_context["pending_action"] = "scaffold_code"
-        self.current_context["pending_component"] = component
-
-        return (
-            f"I can scaffold the **{component}** from your specs. "
-            "Every function will reference its FR-* requirement. Want me to go ahead?"
-        )
+        return self._agent_loop(user_input, cm)
 
     def _handle_research(self, user_input: str, intent: dict) -> str:
         """Route to research module for synthesis, adversarial review, or conflict detection."""
@@ -522,16 +585,6 @@ class XochitlChat:
                 parts.append(f"- {c['source']}: {c['verdict'][:100]}")
         return "\n".join(parts)
 
-    def _general_conversation(self, user_input: str) -> str:
-        force = "code_generation" if self.force_cloud else None
-        result = self.router.route(
-            query=user_input,
-            conversation_history=self._clean_history(),
-            system_prompt=build_system_prompt(read_memory()),
-            force_route=force,
-        )
-        return result.content if not result.error else f"{_ERR} — {result.error}"
-
     # ── Confirmation handlers ─────────────────────────────────────────────────
 
     def _handle_permission_response(self, user_input: str) -> Optional[str]:
@@ -553,15 +606,26 @@ class XochitlChat:
         return None
 
     def _handle_action_confirmation(self, user_input: str) -> Optional[str]:
+        # Implements FR-ORCH-007 — LLM fallback when exact-match fails
         q = user_input.lower().strip()
         action = self.current_context.get("pending_action")
         if not action:
             return None
 
+        # Fast path: exact-match sets
         if q in _CONFIRM_YES:
+            verdict = "yes"
+        elif q in _CONFIRM_NO:
+            verdict = "no"
+        else:
+            # FR-ORCH-007: LLM micro-call to interpret natural confirmation
+            verdict = self._llm_classify_confirm(action, user_input)
+            if verdict == "unclear":
+                return None  # fall through to normal conversation
+
+        if verdict == "yes":
             del self.current_context["pending_action"]
 
-            # ── Existing actions ──────────────────────────────────────────
             if action == "sync_notion":
                 from src.skills.notion_skill import NotionSkill
                 return NotionSkill().execute(user_input, self.current_context, {"direction": "pull"})
@@ -570,31 +634,54 @@ class XochitlChat:
                 from src.skills.notion_skill import NotionSkill
                 return NotionSkill().execute(user_input, self.current_context, {"direction": "push"})
 
-            # ── Phase 1: New project init ─────────────────────────────────
             if action == "init_project":
                 from src.skills.bmad_skill import BMADSkill
                 skill = BMADSkill()
-                project_id = self.current_context.pop("pending_project_id", "")
+                project_id = self.current_context.pop("pending_project_id", "new-project")
                 name = self.current_context.pop("pending_project_name", project_id)
                 desc = self.current_context.pop("pending_project_description", "")
                 skill.init_project(project_id, name, desc)
+
+                # BUG-ORCH-002 fix: seed Business Model from spec if one was mentioned
+                from src.router import _resolve_file_context
+                file_ctx = _resolve_file_context("", self.session_history)
+                if file_ctx:
+                    prompt = (
+                        f"I have just initialized the project '{name}'.\n"
+                        f"Based on the following product specification, please draft a "
+                        "Business Model (BMM) summary including: Core Value Prop, "
+                        "Target Users, and Key Features.\n\n"
+                        f"{file_ctx}"
+                    )
+                    result = self.router.route(
+                        query=prompt,
+                        conversation_history=[],
+                        system_prompt="You are a Product Manager drafting a Business Model (BMM) artifact.",
+                        force_route="general",
+                    )
+                    if not result.error:
+                        skill.save_bmad_artifact(project_id, "business-model", result.content)
+                        return (
+                            f"{_OK} — Created **{name}**.\n\n"
+                            "I've read the spec and drafted the **Business Model** for you:\n\n"
+                            f"{result.content}\n\n"
+                            "Shall we move to **Architecture**?"
+                        )
+
                 return (
-                    f"Created **{name}** at `projects/{project_id}/`.\n\n"
+                    f"{_OK} — Created **{name}** at `projects/{project_id}/`.\n\n"
                     "Let's start with the Business Model. "
                     "What's the core struggle this app solves? "
                     "Who's experiencing it, and what do they do today instead?"
                 )
 
-            # ── Phase 2: Spec generation ──────────────────────────────────
             if action == "generate_specs":
                 from src.skills.sdd_skill import SDDSkill
                 project_id = self.current_project or self.current_context.get("pending_project_id", "")
                 return SDDSkill().generate_specs_from_bmad(project_id)
 
-            # ── Phase 3: Issue analysis ───────────────────────────────────
             if action == "analyze_issue":
                 from src.skills.sdd_skill import SDDSkill
-                import json
                 project_id = self.current_project or ""
                 issue_desc = self.current_context.pop("pending_issue_description", "")
                 sdd = SDDSkill()
@@ -619,22 +706,18 @@ class XochitlChat:
                         lines.append(f"- {g}")
                 if confidence < 0.75:
                     lines.append(f"\n⚠ Confidence {confidence:.0%} — review before applying changes.")
-
-                # Store analysis for follow-up update
                 if changes:
                     self.current_context["pending_spec_changes"] = changes
                     lines.append("\nWant me to apply the spec changes and create an issue?")
-
                 return "\n".join(lines)
 
-            # ── Phase 4: Code scaffolding ─────────────────────────────────
             if action == "scaffold_code":
                 from src.skills.code_skill import CodeSkill
                 project_id = self.current_project or ""
                 component = self.current_context.pop("pending_component", "backend")
                 return CodeSkill().scaffold_from_specs(project_id, component)
 
-        if q in _CONFIRM_NO:
+        if verdict == "no":
             del self.current_context["pending_action"]
             self.current_context.pop("pending_project_id", None)
             self.current_context.pop("pending_project_name", None)
@@ -644,6 +727,34 @@ class XochitlChat:
             return f"{_OK}, no problem."
 
         return None
+
+    def _llm_classify_confirm(self, pending_action: str, user_input: str) -> str:
+        """LLM micro-call to interpret a natural-language yes/no response.
+
+        Implements FR-ORCH-007. Returns 'yes' | 'no' | 'unclear'.
+        Uses force_route='simple_qa' to keep it local and fast.
+        """
+        prompt = (
+            f"Pending action: {pending_action}\n"
+            f"User says: \"{user_input}\"\n\n"
+            "Does the user want to confirm (yes), cancel (no), or is it unclear?\n"
+            "Reply with exactly one word: yes | no | unclear"
+        )
+        result = self.router.route(
+            query=prompt,
+            conversation_history=[],
+            system_prompt="Classify user intent as: yes, no, or unclear. Reply with one word only.",
+            force_route="simple_qa",
+        )
+        if result.error:
+            return "unclear"
+        raw = (result.content or "").strip().lower()
+        first = raw.split()[0] if raw.split() else "unclear"
+        if first in {"yes", "y", "confirm", "sure", "ok", "okay", "yep", "yeah", "do", "go", "proceed"}:
+            return "yes"
+        if first in {"no", "n", "cancel", "stop", "don't", "nope", "never", "abort"}:
+            return "no"
+        return "unclear"
 
     # ── Project context detection ─────────────────────────────────────────────
 
@@ -692,7 +803,6 @@ class XochitlChat:
                 name = m.group(1).strip().title()
                 if len(name) < 60:
                     return name
-        # Fallback: take last few words
         words = user_input.strip().split()
         return " ".join(words[-3:]).title() if len(words) >= 3 else user_input.strip().title()
 
@@ -700,7 +810,6 @@ class XochitlChat:
 
     def _handle_slash_command(self, raw: str) -> str:
         """Dispatch /command [args] without going through the LLM."""
-        # Implements FR-SEC-001, FR-SEC-003, FR-SEC-004
         from src.security import cmd_authorize, cmd_revoke, cmd_list_registry, cmd_audit
 
         parts = raw.split(maxsplit=1)
@@ -723,20 +832,19 @@ class XochitlChat:
             project_id = arg or self.current_project or ""
             return SDDSkill().review_code_traceability(project_id)
 
-        # FR-RES: Research slash commands
         if verb == "/research":
             if not arg:
-                return f"Usage: /research <topic>"
+                return "Usage: /research <topic>"
             from src.research import run_research
             result = run_research(arg, adversarial=False, check_conflicts=True)
-            parts = [f"**Research: {result['topic']}**", f"_{result['budget']}_\n"]
+            parts_out = [f"**Research: {result['topic']}**", f"_{result['budget']}_\n"]
             if result["synthesis"]:
-                parts.append(result["synthesis"])
+                parts_out.append(result["synthesis"])
             if result["conflicts"]:
-                parts.append(f"\n**Conflicts detected ({len(result['conflicts'])}):**")
+                parts_out.append(f"\n**Conflicts detected ({len(result['conflicts'])}):**")
                 for c in result["conflicts"]:
-                    parts.append(f"- {c['source']}: {c['verdict'][:120]}")
-            return "\n".join(parts)
+                    parts_out.append(f"- {c['source']}: {c['verdict'][:120]}")
+            return "\n".join(parts_out)
 
         if verb == "/adversarial":
             if not arg:
@@ -750,7 +858,22 @@ class XochitlChat:
     # ── Helpers ───────────────────────────────────────────────────────────────
 
     def _record(self, response: str) -> str:
-        """Append response to session history and persist."""
+        """Append response to session history and persist.
+
+        Implements FR-ORCH-009 (partial) — strips stray <skill_call> tags
+        that survived to the visible response (BUG-CHAT-003 coverage) and
+        strips other LLM-hallucinated tool-call syntax.
+        """
+        # Strip any <execute_tool>...</execute_tool> blocks (BUG-CHAT-003)
+        response = re.sub(
+            r'<execute_tool>.*?</execute_tool>',
+            '',
+            response,
+            flags=re.DOTALL,
+        ).strip()
+        # Strip any stray <skill_call> tags that weren't caught in _agent_loop
+        response = _SKILL_CALL_RE.sub("", response).strip()
+
         self.session_history.append({
             "role": "assistant",
             "content": response,
@@ -760,8 +883,24 @@ class XochitlChat:
         return response
 
     def _clean_history(self) -> list[dict]:
-        """Strip timestamps for LLM calls."""
-        return [{"role": m["role"], "content": m["content"]} for m in self.session_history[:-1]]
+        """Strip timestamps and serialize tool turns for LLM calls.
+
+        Implements FR-ORCH-009 — role=tool turns become assistant messages
+        prefixed [Tool: SkillName] so the LLM has continuity over skill results.
+        """
+        result = []
+        for m in self.session_history[:-1]:
+            role = m["role"]
+            content = m["content"]
+            if role == "tool":
+                skill = m.get("skill", "Tool")
+                result.append({
+                    "role": "assistant",
+                    "content": f"[Tool: {skill}]\n{content}",
+                })
+            else:
+                result.append({"role": role, "content": content})
+        return result
 
     def _persist_session(self) -> None:
         if not self.session_id:
@@ -781,5 +920,3 @@ class XochitlChat:
                 console.print(f"[dim]{msg}[/dim]\n")
         except Exception:
             pass
-
-

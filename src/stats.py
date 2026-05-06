@@ -55,9 +55,9 @@ def health_check() -> dict:
         db_ok = False
         issues.append("SQLite database error")
 
-    vector_ok = mem._get_collection() is not None
+    vector_ok = mem.VectorMemory()._open_table() is not None  # BUG-UI-001 fix: LanceDB replaces ChromaDB
     if not vector_ok:
-        issues.append("ChromaDB unavailable")
+        issues.append("LanceDB unavailable")
 
     return {
         "local_model": local_ok,

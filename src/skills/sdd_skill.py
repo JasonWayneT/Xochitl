@@ -65,6 +65,18 @@ class SDDSkill(Skill):
 
         return "I can manage your SDD requirements and issue tracking."
 
+    def tool_definition(self) -> dict:
+        # Implements FR-ORCH-005
+        return {
+            "name": "SDDSkill",
+            "description": "Manages Spec-Driven Development: generates SDD specs from BMAD artifacts, lists requirements, and analyzes bugs against specs.",
+            "when": "user asks about specs, requirements, FR-* IDs, traceability, or wants to generate SDD specs for the active project; OR user reports a bug and a project is active",
+            "params": {
+                "action": "generate_specs | list_requirements | analyze_issue",
+                "project_id": "(optional) project ID, defaults to active project",
+            },
+        }
+
     def execute(self, user_input: str, context: dict, params: dict) -> str:
         action = params.get("action", "")
         project_id = params.get("project_id") or context.get("current_project", "")
