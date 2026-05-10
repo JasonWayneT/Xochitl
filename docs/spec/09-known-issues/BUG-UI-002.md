@@ -17,7 +17,7 @@ to hang even when the system is actively working.
 ## Root Cause
 `_resolve_file_context()` in `router.py` used `root.rglob("*")` — a fully
 recursive directory walk — to search for named folders/files. When the search
-root was a large directory (e.g., `Code Projects` containing hundreds of
+root was a large directory (e.g., `CodeProjects` containing hundreds of
 sub-folders), this call blocked the Python thread entirely, preventing the
 `Rich.Live` display from refreshing its render loop. Since `Rich.Live` updates
 on the same thread, the elapsed timer was never incremented.

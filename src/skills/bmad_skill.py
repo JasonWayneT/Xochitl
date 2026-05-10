@@ -2,6 +2,7 @@
 # Implements FR-BMAD-001 (Discovery Session Facilitation — init_project() scaffolds project dirs and metadata)
 # Implements FR-BMAD-002 (PRD & SDD Artifact Generation — save_bmad_artifact() writes BMAD docs to bmad/ folder)
 
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -111,15 +112,19 @@ class BMADSkill(Skill):
     # ── Project lifecycle ─────────────────────────────────────────────────────
 
     def init_project(self, project_id: str, name: str, description: str) -> dict:
-        """Create projects/<project_id>/ directory structure and .project-meta.yml."""
+        """Create projects/<project_id>/ BMAD and SDD workspace scaffolding."""
+        # Implements FR-SDD-005 / AC-CR004-010.
         project_path = _PROJECTS_DIR / project_id
         for subdir in [
             "bmad",
             "specs",
+            "docs",
             "issues/open",
             "issues/in-progress",
             "issues/closed",
             "src",
+            "tests",
+            ".xochitl/skills",
         ]:
             (project_path / subdir).mkdir(parents=True, exist_ok=True)
 
@@ -133,12 +138,173 @@ class BMADSkill(Skill):
             "bmad_complete": False,
             "specs_generated": False,
             "code_scaffolded": False,
+            "sdd_scaffolded": True,
             "stack": {"backend": None, "frontend": None, "database": None},
             "stats": {"total_requirements": 0, "implemented_requirements": 0, "open_issues": 0},
             "last_worked": now,
         }
         self._write_meta(project_id, meta)
+        self._write_initial_bmad_scaffold(project_path, name, description)
+        self._write_initial_sdd_scaffold(project_path, project_id, name, description, now)
+        self._write_project_agents(project_path, name)
+        self._write_project_skill_readme(project_path)
         return {"project_id": project_id, "name": name, "path": str(project_path)}
+
+    def _write_initial_bmad_scaffold(self, project_path: Path, name: str, description: str) -> None:
+        self._write_if_missing(
+            project_path / "bmad" / "README.md",
+            f"""# BMAD Artifacts - {name}
+
+Use this folder for discovery and planning before SDD requirements are generated.
+
+Suggested order:
+
+1. `business-model.md`
+2. `architecture.md`
+3. `design-specs.md`
+4. `constraints.md`
+""",
+        )
+        for filename, title in {
+            "business-model.md": "Business Model",
+            "architecture.md": "Architecture",
+            "design-specs.md": "Design Specs",
+            "constraints.md": "Constraints",
+        }.items():
+            self._write_if_missing(
+                project_path / "bmad" / filename,
+                f"""# {title} - {name}
+
+Status: draft
+
+## Project Summary
+
+{description or "_To be discovered._"}
+
+## Notes
+
+- Capture decisions here before generating SDD requirements.
+""",
+            )
+
+    def _write_initial_sdd_scaffold(
+        self,
+        project_path: Path,
+        project_id: str,
+        name: str,
+        description: str,
+        created_at: str,
+    ) -> None:
+        self._write_if_missing(
+            project_path / "specs" / "README.md",
+            f"""# SDD Specs - {name}
+
+Specs in this folder are the source of truth for implementation.
+
+Workflow:
+
+1. Finish BMAD artifacts in `../bmad/`.
+2. Generate or edit `core-features.md` with requirement IDs.
+3. Keep `traceability.json` aligned with requirements, code, tests, and issues.
+4. Cite requirement IDs in generated code.
+""",
+        )
+        self._write_if_missing(
+            project_path / "specs" / "core-features.md",
+            f"""---
+feature: core
+owner: you
+status: draft
+---
+
+# Core Features - {name}
+
+Project ID: `{project_id}`
+
+## Source
+
+{description or "_To be discovered from BMAD artifacts._"}
+
+## Requirements
+
+_Generate requirements after BMAD business model and architecture are ready._
+""",
+        )
+        traceability = {
+            "project": project_id,
+            "version": "1.0",
+            "last_updated": created_at,
+            "mappings": [],
+        }
+        self._write_if_missing(
+            project_path / "specs" / "traceability.json",
+            json.dumps(traceability, indent=2),
+        )
+
+    def _write_project_agents(self, project_path: Path, name: str) -> None:
+        self._write_if_missing(
+            project_path / "AGENTS.md",
+            f"""# Agent Instructions for {name}
+
+This project uses the Xochitl BMAD to SDD to code workflow.
+
+## Prime Directive
+
+Do not edit code first. Material changes start from the planning chain:
+
+1. Review BMAD artifacts in `bmad/`.
+2. Review SDD specs in `specs/`.
+3. Identify or create requirement IDs.
+4. Update specs and `specs/traceability.json`.
+5. Create or update implementation tasks.
+6. Modify code in `src/`.
+7. Add or update tests in `tests/`.
+8. Run verification and record results.
+
+## Requirement IDs
+
+Use Xochitl-style IDs such as `FR-CORE-001`, `AC-CORE-001`, `TEST-CORE-001`,
+`BUG-CORE-001`, and `ADR-001`. Every generated code path should cite the
+requirement it implements in a short comment.
+
+## Safety Rules
+
+- Treat BMAD and SDD docs as source of truth when code disagrees.
+- Do not silently invent requirements.
+- Do not delete or rename requirement IDs without recording a replacement.
+- Keep traceability current before marking work complete.
+- Ask for approval before destructive file operations or external side effects.
+""",
+        )
+
+    def _write_project_skill_readme(self, project_path: Path) -> None:
+        self._write_if_missing(
+            project_path / ".xochitl" / "skills" / "README.md",
+            """# Project Skills
+
+Place project-local dynamic skills here.
+
+Expected structure:
+
+```text
+<skill-id>/
+  SKILL.md
+  metadata.yaml
+  examples.md
+  scripts/
+  templates/
+```
+
+Enabled skills are loaded into Xochitl's conversational skill manifest while
+working in this project.
+""",
+        )
+
+    def _write_if_missing(self, path: Path, content: str) -> None:
+        if path.exists():
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content.strip() + "\n", encoding="utf-8")
 
     def save_bmad_artifact(self, project_id: str, artifact_type: str, content: str) -> str:
         """Write to projects/<project_id>/bmad/<artifact_type>.md."""

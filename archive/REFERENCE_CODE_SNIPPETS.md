@@ -302,7 +302,7 @@ Location: `~/.openclaw/skills/xochitl/`
 - `xochitl_help/` - Introspection and capability listing
 
 #### 2. BMAD Workflows
-Location: `~/Code Projects/*/​.clinerules/workflows/`
+Location: `~/CodeProjects/*/​.clinerules/workflows/`
 
 - Automatically detected when working in BMAD projects
 - Loaded on-demand based on user intent
@@ -502,7 +502,7 @@ class SecureMCPServer:
     """
     
     ALLOWED_PATHS = [
-        Path.home() / "Code Projects",
+        Path.home() / "CodeProjects",
         Path.home() / "Documents/Xochitl",
         Path.home() / "Downloads"  # Read-only
     ]
@@ -1090,7 +1090,7 @@ class BMADAwareFiler:
         
         if not project_root:
             # No BMAD project detected, use Xochitl's workspace
-            target = Path.home() / "Code Projects/Xochitl/data/generated"
+            target = Path.home() / "CodeProjects/Xochitl/data/generated"
             target.mkdir(parents=True, exist_ok=True)
         else:
             # BMAD project detected, use proper structure

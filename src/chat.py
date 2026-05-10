@@ -26,16 +26,60 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from rich.console import Console
-from rich.live import Live
-from rich.markdown import Markdown
-from rich.prompt import Prompt
-from rich.spinner import Spinner
-from rich.text import Text
+try:
+    from rich.console import Console
+    from rich.live import Live
+    from rich.markdown import Markdown
+    from rich.prompt import Prompt
+    from rich.spinner import Spinner
+    from rich.text import Text
+except ModuleNotFoundError:
+    class Console:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def print(self, *args, **kwargs):
+            end = kwargs.get("end", "\n")
+            print(*args, end=end)
+
+    class Live:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def update(self, *args, **kwargs):
+            return None
+
+    class Markdown(str):
+        pass
+
+    class Prompt:
+        @staticmethod
+        def ask(prompt: str, **kwargs) -> str:
+            return input(f"{prompt} ")
+
+    class Spinner:
+        pass
+
+    class Text:
+        def __init__(self):
+            self.parts: list[str] = []
+
+        def append(self, text: str, **kwargs) -> None:
+            self.parts.append(text)
+
+        def __str__(self) -> str:
+            return "".join(self.parts)
 
 from src.router import get_router, _live_db_context, _resolve_file_context
 from src.context_loader import build_system_prompt
 from src.context_manager import ContextManager
+from src.intent import classify_conversation_intent
 from src.memory import read_memory
 from src import database as db
 from src.file_tools import FileTools
@@ -205,6 +249,13 @@ def _parse_skill_call(response: str) -> Optional[tuple[str, dict]]:
     return skill_name, params
 
 
+_MUTATING_SKILL_ACTIONS = {
+    "BMADSkill": {"init_project", "save_bmad_artifact"},
+    "SDDSkill": {"generate_specs", "create_requirement", "create_issue", "update_requirement", "close_issue"},
+    "CodeSkill": {"scaffold", "implement", "fix", "tests", "test"},
+}
+
+
 class XochitlChat:
     """
     Primary conversational interface.
@@ -229,7 +280,8 @@ class XochitlChat:
         self.session_id: Optional[int] = None
         self.current_project: Optional[str] = None
 
-        self._skills: Optional[list[Skill]] = None
+        self._builtin_skills: Optional[list[Skill]] = None
+        self._skills: Optional[list[Skill]] = None  # Backward-compatible test hook.
 
         # FR-UI-002: Smart Ctrl-C — track last interrupt time for 2-stage exit
         self._last_interrupt: float = 0.0
@@ -237,14 +289,19 @@ class XochitlChat:
 
     @property
     def skills(self) -> list[Skill]:
-        if self._skills is None:
+        if getattr(self, "_skills", None) is not None:
+            return self._skills or []
+
+        if getattr(self, "_builtin_skills", None) is None:
             from src.skills.bmad_skill import BMADSkill
             from src.skills.sdd_skill import SDDSkill
             from src.skills.code_skill import CodeSkill
             from src.skills.notion_skill import NotionSkill
             from src.skills.orchestrator_skill import OrchestratorSkill
-            self._skills = [BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill()]
-        return self._skills
+            self._builtin_skills = [BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill()]
+
+        from src.skills.dynamic_skill import load_dynamic_skills
+        return (self._builtin_skills or []) + load_dynamic_skills(self.current_project)
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -372,6 +429,10 @@ class XochitlChat:
 
         # ── 4. Build universal ContextManager with skill manifest ─────────────
         # Implements FR-ORCH-006 (universal CM) + FR-ORCH-005 (skill manifest)
+        preference_resp = self._maybe_save_preference(user_input)
+        if preference_resp is not None:
+            return self._record(preference_resp)
+
         route = "cloud" if self.force_cloud else "local"
         cm = ContextManager(route=route, skills=self.skills)
         cm.ingest(
@@ -385,6 +446,7 @@ class XochitlChat:
         if _status:
             _status.update("Classifying intent")
         intent = self._classify_intent(user_input)
+        self.current_context["last_intent"] = intent
 
         # ── 6. Route: special handlers for file/task/research; agent loop for rest ──
         if _status:
@@ -400,6 +462,10 @@ class XochitlChat:
             if _status:
                 _status.update("Researching")
             response = self._handle_research(user_input, intent)
+        elif intent.get("intent_type") == "exploration" and intent.get("context_scope") == "active_project":
+            if _status:
+                _status.update("Exploring project")
+            response = self._handle_repo_exploration(user_input, cm)
         else:
             # ── Agent loop: LLM controls routing and skill dispatch ────────────
             # Implements FR-ORCH-008 — covers general, simple_question,
@@ -409,6 +475,7 @@ class XochitlChat:
                 _status.update("Asking model")
             response = self._agent_loop(user_input, cm, _status)
 
+        response = self._maybe_offer_skill_creation(user_input, response)
         return self._record(response)
 
     # ── Agent loop (FR-ORCH-008) ──────────────────────────────────────────────
@@ -453,6 +520,9 @@ class XochitlChat:
             skill_name, params = skill_call
             skill = self._find_skill_by_name(skill_name)
             if skill:
+                if self._skill_call_requires_approval(skill, params):
+                    return self._stage_skill_call_plan(skill, params, user_input, visible)
+
                 if _status:
                     _status.update(f"Running {skill_name}")
                 tool_result = skill.execute(user_input, self.current_context, params)
@@ -471,6 +541,113 @@ class XochitlChat:
 
         return visible or response_text
 
+    def _skill_call_requires_approval(self, skill: Skill, params: dict) -> bool:
+        """Return True when a skill call can mutate files, state, or services.
+
+        Implements FR-ORCH-011 / AC-CR004-003: LLM-selected tools still pass
+        through a plan and approval gate before side effects.
+        """
+        name = type(skill).__name__
+        action = str(params.get("action", "")).strip()
+
+        if name == "NotionSkill":
+            return True
+        if name == "OrchestratorSkill":
+            return bool(params.get("task_id"))
+        if action and action in _MUTATING_SKILL_ACTIONS.get(name, set()):
+            return True
+        if name == "CodeSkill":
+            return True
+        return False
+
+    def _stage_skill_call_plan(self, skill: Skill, params: dict, user_input: str, visible: str) -> str:
+        name = type(skill).__name__
+        risk = self._risk_label_for_skill(name, params)
+        action = params.get("action") or params.get("direction") or "execute"
+        self.current_context["pending_action"] = "execute_skill_call"
+        self.current_context["pending_skill_call"] = {
+            "skill_name": name,
+            "params": params,
+            "user_input": user_input,
+        }
+
+        lines = []
+        if visible:
+            lines.append(visible)
+            lines.append("")
+        lines.extend([
+            "**Plan before I touch anything:**",
+            f"- Skill: `{name}`",
+            f"- Action: `{action}`",
+            f"- Risk: `{risk}`",
+            "- I will run only this approved skill call, then report the result.",
+            "",
+            "Reply `yes` to proceed, or `no` to cancel.",
+        ])
+        return "\n".join(lines)
+
+    def _risk_label_for_skill(self, skill_name: str, params: dict) -> str:
+        if skill_name == "NotionSkill":
+            return "external side effect with Notion"
+        if skill_name == "OrchestratorSkill":
+            return "background command/workspace execution"
+        if skill_name == "CodeSkill":
+            return "file writes in the active project"
+        if skill_name in {"BMADSkill", "SDDSkill"}:
+            return "project/spec file writes"
+        return "state change"
+
+    def _execute_pending_skill_call(self) -> str:
+        pending = self.current_context.pop("pending_skill_call", None)
+        if not pending:
+            return f"{_FYI} - I do not have a pending skill call to run."
+
+        skill_name = pending.get("skill_name", "")
+        skill = self._find_skill_by_name(skill_name)
+        if not skill:
+            return f"{_ERR} - I could not find `{skill_name}` anymore, so I did not run it."
+
+        tool_result = skill.execute(
+            pending.get("user_input", ""),
+            self.current_context,
+            pending.get("params", {}),
+        )
+        self.session_history.append({
+            "role": "tool",
+            "skill": skill_name,
+            "content": tool_result,
+            "timestamp": datetime.now().isoformat(),
+        })
+        return tool_result
+
+    def _maybe_offer_skill_creation(self, user_input: str, response: str) -> str:
+        """Offer skill creation after reusable multi-step work.
+
+        Implements FR-ORCH-013 / AC-CR004-008. The trigger is deliberately
+        balanced: explicit reusable-workflow language, or at least two tool
+        results in this session. It offers, but never forces, creation.
+        """
+        if self.current_context.get("skill_creation_offered"):
+            return response
+        if self.current_context.get("pending_action"):
+            return response
+
+        q = user_input.lower()
+        explicit = any(phrase in q for phrase in (
+            "do this often",
+            "reusable workflow",
+            "make this a skill",
+            "turn this into a skill",
+            "next time",
+        ))
+        tool_turns = sum(1 for msg in self.session_history if msg.get("role") == "tool")
+        if not explicit and tool_turns < 2:
+            return response
+
+        self.current_context["skill_creation_offered"] = True
+        from src.skills.dynamic_skill import build_skill_creation_offer
+        return response.rstrip() + build_skill_creation_offer(user_input, self.current_context)
+
     def _find_skill_by_name(self, name: str) -> Optional[Skill]:
         """Look up a skill by its class name or tool_definition name."""
         for skill in self.skills:
@@ -483,7 +660,80 @@ class XochitlChat:
 
     # ── Intent classification ─────────────────────────────────────────────────
 
+    def _maybe_save_preference(self, user_input: str) -> Optional[str]:
+        """Save explicit stable user preferences.
+
+        Implements DATA-DATA-004 / AC-CR004-006. This is deliberately an
+        explicit path, not passive surveillance: the user must say remember,
+        prefer, or "for this project".
+        """
+        extracted = self._extract_preference(user_input)
+        if not extracted:
+            return None
+
+        value, scope_hint = extracted
+        category = self._preference_category(value)
+        scope = "project" if scope_hint == "project" and self.current_project else "global"
+        project_id = self.current_project if scope == "project" else None
+        key = self._preference_key(category, value)
+        with db.get_connection() as conn:
+            db.upsert_preference(conn, {
+                "scope": scope,
+                "project_id": project_id,
+                "category": category,
+                "preference_key": key,
+                "preference_value": value,
+                "source": "chat",
+                "confidence": 1.0,
+            })
+
+        scope_label = f" for `{project_id}`" if project_id else ""
+        return f"{_OK} - I'll remember that{scope_label}: {value}"
+
+    def _extract_preference(self, user_input: str) -> Optional[tuple[str, str]]:
+        q = user_input.strip()
+        patterns = [
+            r"(?i)\bfor this project, remember that (.+)$",
+            r"(?i)\bfor this project, i prefer (.+)$",
+            r"(?i)\bremember that (.+)$",
+            r"(?i)\bplease remember (.+)$",
+            r"(?i)\bi prefer (.+)$",
+            r"(?i)\bmy preference is (.+)$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, q)
+            if not match:
+                continue
+            value = match.group(1).strip().rstrip(".")
+            if len(value) < 4:
+                return None
+            scope_hint = "project" if "for this project" in match.group(0).lower() else "global"
+            return value, scope_hint
+        return None
+
+    def _preference_category(self, value: str) -> str:
+        q = value.lower()
+        if any(word in q for word in ("concise", "tone", "explain", "detail", "push back", "question")):
+            return "communication"
+        if any(word in q for word in ("morning", "daily", "task", "priority", "focus", "workflow")):
+            return "productivity"
+        if any(word in q for word in ("test", "code", "commit", "branch", "architecture", "spec")):
+            return "development"
+        return "general"
+
+    def _preference_key(self, category: str, value: str) -> str:
+        words = re.findall(r"[a-z0-9]+", value.lower())[:8]
+        slug = "-".join(words)[:60] or "preference"
+        return f"{category}:{slug}"
+
     def _classify_intent(self, user_input: str) -> dict:
+        # Implements FR-ORCH-010: structured intent, while preserving the
+        # legacy `type` field used by existing handlers.
+        return classify_conversation_intent(
+            user_input,
+            current_project=self.current_project,
+        ).to_dict()
+
         q = user_input.lower()
 
         has_extension = any(ext in q for ext in _FILE_EXTENSIONS)
@@ -539,7 +789,7 @@ class XochitlChat:
                 return (
                     f"{_ERR} — couldn't read that path: {exc}\n\n"
                     "If the file is outside my project directory, authorize it first:\n"
-                    "`/authorize C:\\Users\\Jason\\Desktop\\Jason\\Resource\\Code Projects`"
+                    "`/authorize C:\\Users\\Jason\\Desktop\\Jason\\Resource\\CodeProjects`"
                 )
             if file_ctx:
                 # Implements FR-ORCH-006 — CM system prompt + file context appended
@@ -563,6 +813,57 @@ class XochitlChat:
             return f"{_FYI} — I don't see a specific file in that message. Can you give me the full path?"
 
         return self._agent_loop(user_input, cm)
+
+    def _handle_repo_exploration(self, user_input: str, cm: ContextManager) -> str:
+        """Bounded read-only project exploration for architecture summaries.
+
+        Implements FR-ORCH-011 / AC-CR004-002. This gathers a small, fixed
+        amount of local context before asking the router to synthesize.
+        """
+        project_root = _PROJECT_ROOT
+        snippets = [self._project_tree_snapshot(project_root)]
+        for rel in (
+            "pyproject.toml",
+            "requirements.txt",
+            "docs/spec/00-project-constitution.md",
+            "docs/spec/02-requirements-registry.md",
+            "docs/spec/06-traceability/traceability-matrix.md",
+        ):
+            text = self._read_bounded(project_root / rel, limit=2200)
+            if text:
+                snippets.append(f"## {rel}\n{text}")
+
+        src_files = sorted((project_root / "src").glob("*.py"))[:12]
+        if src_files:
+            module_lines = ["## src modules"]
+            module_lines.extend(f"- {p.name}" for p in src_files)
+            snippets.append("\n".join(module_lines))
+
+        system = cm.assemble_system_prompt() + "\n\n[READ_ONLY_EXPLORATION]\n" + "\n\n".join(snippets)
+        result = self.router.route(
+            query=user_input,
+            conversation_history=cm.assemble_messages(self._clean_history(), user_input, tag_provenance=True),
+            system_prompt=system,
+            force_route="simple_qa",
+        )
+        return result.content if not result.error else f"{_ERR} - {result.error}"
+
+    def _project_tree_snapshot(self, root: Path) -> str:
+        lines = ["## Project snapshot"]
+        for child in sorted(root.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower()))[:40]:
+            if child.name in {".git", "__pycache__", ".pytest_cache"}:
+                continue
+            kind = "dir" if child.is_dir() else "file"
+            lines.append(f"- {kind}: {child.name}")
+        return "\n".join(lines)
+
+    def _read_bounded(self, path: Path, *, limit: int) -> str:
+        try:
+            if not path.exists() or not path.is_file():
+                return ""
+            return path.read_text(encoding="utf-8", errors="replace")[:limit]
+        except Exception:
+            return ""
 
     def _handle_research(self, user_input: str, intent: dict) -> str:
         """Route to research module for synthesis, adversarial review, or conflict detection."""
@@ -625,6 +926,9 @@ class XochitlChat:
 
         if verdict == "yes":
             del self.current_context["pending_action"]
+
+            if action == "execute_skill_call":
+                return self._execute_pending_skill_call()
 
             if action == "sync_notion":
                 from src.skills.notion_skill import NotionSkill
@@ -724,6 +1028,7 @@ class XochitlChat:
             self.current_context.pop("pending_project_description", None)
             self.current_context.pop("pending_issue_description", None)
             self.current_context.pop("pending_component", None)
+            self.current_context.pop("pending_skill_call", None)
             return f"{_OK}, no problem."
 
         return None

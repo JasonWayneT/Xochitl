@@ -137,7 +137,7 @@ def _resolve_file_context(query: str, history: list[dict] | None = None) -> str:
     search_roots = [
         Path.cwd(),
         _PROJECT_ROOT,
-        Path.home() / "Desktop" / "Jason" / "Resource" / "Code Projects",
+        Path.home() / "Desktop" / "Jason" / "Resource" / "CodeProjects",
         Path.home() / "Documents",
         Path.home() / "Desktop",
     ]

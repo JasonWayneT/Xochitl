@@ -1,7 +1,7 @@
 """FileTools — conversational file operations with a permission model.
 
 Read: automatic.
-Write new file: automatic.
+Write new file: returns pending_permission, requires confirm_operation().
 Overwrite existing: returns pending_permission, requires confirm_operation().
 Delete: returns pending_permission, requires confirm_operation().
 """
@@ -27,20 +27,12 @@ class FileTools:
         if not security._is_allowed(path):
             raise security.PermissionError(f"Cannot write to {path} — outside allowed directories")
 
-        if path.exists():
-            op_id = self._create_pending("overwrite", path, content)
-            return {
-                "status": "pending_permission",
-                "message": f"File {path.name} already exists. Overwrite it?",
-                "operation_id": op_id,
-            }
-
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        op_type = "overwrite" if path.exists() else "write"
+        op_id = self._create_pending(op_type, path, content)
         return {
-            "status": "written",
-            "message": f"Created: file:///{path.absolute().as_posix()}",
-            "operation_id": None,
+            "status": "pending_permission",
+            "message": f"Write {path.name}? This will {'overwrite the existing file' if path.exists() else 'create a new file'}.",
+            "operation_id": op_id,
         }
 
     def delete_file(self, path: Path) -> dict:
@@ -63,9 +55,11 @@ class FileTools:
         if not op:
             return {"status": "error", "message": "Unknown operation"}
 
-        if op["type"] == "overwrite":
+        if op["type"] in {"write", "overwrite"}:
+            op["path"].parent.mkdir(parents=True, exist_ok=True)
             op["path"].write_text(op["content"], encoding="utf-8")
-            msg = f"Overwrote: file:///{op['path'].absolute().as_posix()}"
+            verb = "Overwrote" if op["type"] == "overwrite" else "Created"
+            msg = f"{verb}: file:///{op['path'].absolute().as_posix()}"
         elif op["type"] == "delete":
             op["path"].unlink()
             msg = f"Deleted: {op['path'].name}"

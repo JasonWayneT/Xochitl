@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Generator
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv() -> None:
+        return None
 
 load_dotenv()
 

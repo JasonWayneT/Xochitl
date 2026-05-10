@@ -24,7 +24,7 @@ Three compounding issues:
 2. **CWD missing from search roots**: `_resolve_file_context()` in `router.py`
    searched `_PROJECT_ROOT`, `~/Desktop/...`, and `~/Documents` — but NOT
    `Path.cwd()`. If the user was in a different working directory (e.g.,
-   `Code Projects`), the fuzzy folder search came up empty and Xochitl
+   `CodeProjects`), the fuzzy folder search came up empty and Xochitl
    defaulted to claiming she couldn't see any files.
 
 3. **Fuzzy regex too narrow**: `_fast_classify()` only matched

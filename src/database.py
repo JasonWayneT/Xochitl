@@ -102,7 +102,40 @@ def init_db() -> None:
                 path TEXT,
                 details TEXT
             );
+
+            CREATE TABLE IF NOT EXISTS preferences (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope TEXT NOT NULL DEFAULT 'global' CHECK(scope IN ('global','project')),
+                project_id TEXT,
+                category TEXT NOT NULL DEFAULT 'general',
+                preference_key TEXT NOT NULL,
+                preference_value TEXT NOT NULL,
+                source TEXT,
+                confidence REAL DEFAULT 1.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_used_at TIMESTAMP
+            );
         """)
+
+
+def _ensure_preferences_table(conn: sqlite3.Connection) -> None:
+    """Create the CR-004 structured preferences table for upgraded databases."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS preferences (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            scope TEXT NOT NULL DEFAULT 'global' CHECK(scope IN ('global','project')),
+            project_id TEXT,
+            category TEXT NOT NULL DEFAULT 'general',
+            preference_key TEXT NOT NULL,
+            preference_value TEXT NOT NULL,
+            source TEXT,
+            confidence REAL DEFAULT 1.0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_used_at TIMESTAMP
+        )
+    """)
 
 
 # ── Projects ──────────────────────────────────────────────────────────────────
@@ -285,6 +318,129 @@ def update_session_summary(
 
 
 # ── Token Usage ───────────────────────────────────────────────────────────────
+
+# Preferences
+
+def upsert_preference(conn: sqlite3.Connection, preference: dict) -> int:
+    """Persist a structured user preference.
+
+    Implements DATA-DATA-004 for CR-004. Preferences are intentionally separate
+    from semantic memory so stable user instructions can be recalled cheaply.
+    """
+    _ensure_preferences_table(conn)
+    scope = preference.get("scope", "global")
+    project_id = preference.get("project_id")
+    key = preference["preference_key"]
+    existing = conn.execute(
+        """
+        SELECT id FROM preferences
+        WHERE scope=?
+          AND COALESCE(project_id, '')=COALESCE(?, '')
+          AND preference_key=?
+        """,
+        (scope, project_id, key),
+    ).fetchone()
+    values = {
+        "scope": scope,
+        "project_id": project_id,
+        "category": preference.get("category", "general"),
+        "preference_key": key,
+        "preference_value": preference["preference_value"],
+        "source": preference.get("source", "chat"),
+        "confidence": float(preference.get("confidence", 1.0)),
+    }
+    if existing:
+        conn.execute(
+            """
+            UPDATE preferences
+            SET category=:category,
+                preference_value=:preference_value,
+                source=:source,
+                confidence=:confidence,
+                updated_at=CURRENT_TIMESTAMP
+            WHERE id=:id
+            """,
+            {**values, "id": existing["id"]},
+        )
+        return int(existing["id"])
+
+    cursor = conn.execute(
+        """
+        INSERT INTO preferences
+            (scope, project_id, category, preference_key, preference_value, source, confidence)
+        VALUES
+            (:scope, :project_id, :category, :preference_key, :preference_value, :source, :confidence)
+        """,
+        values,
+    )
+    return int(cursor.lastrowid)
+
+
+def search_preferences(
+    conn: sqlite3.Connection,
+    query: str = "",
+    *,
+    project_id: str | None = None,
+    limit: int = 5,
+) -> list[sqlite3.Row]:
+    """Return relevant global and project-scoped preferences for a turn."""
+    _ensure_preferences_table(conn)
+    normalized = " ".join(query.lower().split())
+    tokens = [
+        t for t in normalized.replace("-", " ").replace("_", " ").split()
+        if len(t) >= 4
+    ][:6]
+    scope_filter = (
+        "(scope='global' OR (scope='project' AND project_id=?))"
+        if project_id else "scope='global'"
+    )
+    params: list = [project_id] if project_id else []
+
+    if not tokens:
+        params.append(limit)
+        return conn.execute(
+            f"""
+            SELECT * FROM preferences
+            WHERE {scope_filter}
+            ORDER BY updated_at DESC
+            LIMIT ?
+            """,
+            params,
+        ).fetchall()
+
+    like_clauses = []
+    for token in tokens:
+        like_clauses.append(
+            "(LOWER(category) LIKE ? OR LOWER(preference_key) LIKE ? OR LOWER(preference_value) LIKE ?)"
+        )
+        like = f"%{token}%"
+        params.extend([like, like, like])
+    params.append(limit)
+    return conn.execute(
+        f"""
+        SELECT * FROM preferences
+        WHERE {scope_filter}
+          AND ({' OR '.join(like_clauses)})
+        ORDER BY updated_at DESC
+        LIMIT ?
+        """,
+        params,
+    ).fetchall()
+
+
+def mark_preferences_used(conn: sqlite3.Connection, preference_ids: list[int]) -> None:
+    """Record that preference rows were injected into context."""
+    if not preference_ids:
+        return
+    _ensure_preferences_table(conn)
+    placeholders = ",".join("?" for _ in preference_ids)
+    conn.execute(
+        f"UPDATE preferences SET last_used_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+        preference_ids,
+    )
+
+
+# Token Usage
 
 def record_token_usage(
     conn: sqlite3.Connection,

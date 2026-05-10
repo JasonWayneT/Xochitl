@@ -52,7 +52,7 @@ _DEFAULT: dict[str, Any] = {
     "authorized_directories": {
         "paths": [
             str(_PROJECT_ROOT),
-            str(Path.home() / "Desktop" / "Jason" / "Resource" / "Code Projects"),
+            str(Path.home() / "Desktop" / "Jason" / "Resource" / "CodeProjects"),
             str(Path.home() / "Documents"),
             str(Path.home() / "Downloads"),
         ],

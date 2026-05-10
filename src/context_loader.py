@@ -9,6 +9,24 @@ from typing import Optional
 
 GLOBAL_CONTEXT_PATH = Path(__file__).parent.parent / "config" / "global.md"
 PROJECTS_CONTEXT_DIR = Path(__file__).parent.parent / "config" / "projects"
+PROJECT_ROOT = Path(__file__).parent.parent
+
+
+def _first_existing(paths: list[Path]) -> Optional[Path]:
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+def load_soul_text() -> str:
+    """Load Xochitl's persona from project, user, or repo example paths."""
+    path = _first_existing([
+        Path.cwd() / ".xochitl" / "SOUL.md",
+        Path.home() / ".xochitl" / "SOUL.md",
+        PROJECT_ROOT / "SOUL.md.example",
+    ])
+    return path.read_text(encoding="utf-8") if path else ""
 
 
 # ── FR-MEM-007: Verify-on-Call Protocol ──────────────────────────────────────
@@ -77,8 +95,7 @@ def build_system_prompt(memory_content: str, soul_content: str = "") -> str:
     from src.memory import read_memory
     memory = memory_content or read_memory()
 
-    soul_path = Path(__file__).parent.parent / "SOUL.md"
-    soul = soul_content or (soul_path.read_text(encoding="utf-8") if soul_path.exists() else "")  # Implements FR-UX-002
+    soul = soul_content or load_soul_text()  # Implements FR-UX-002
 
     project_root = Path(__file__).parent.parent.resolve()
 

@@ -109,6 +109,21 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `FR-ORCH-009` | functional | P1 | accepted | Skill-aware history: tool invocations and results are stored as `role=tool` turns and serialized as `[Tool: X]\n{result}` assistant messages for LLM context | `AC-CR003-005` | `CR-003` | |
 | `NFR-PERF-006` | non-functional | P1 | accepted | `<skill_call>` regex parsing adds <10ms per turn; re-synthesis LLM call only fires when a skill executes | — | `CR-003` | |
 
+### Conversation Layer - Conversational Intelligence (CR-004)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-010` | functional | P0 | implemented | Xochitl classifies each chat turn into exploration, execution, planning, clarification, productivity, emotional/support, or skill-learning intent before tool selection | `AC-CR004-001` | `CR-004` | Structured intent object |
+| `FR-ORCH-011` | functional | P0 | implemented | Xochitl chains read-only exploration actions automatically and requires a plan plus explicit approval before writes, deletes, or mutating commands | `AC-CR004-002`, `AC-CR004-003` | `CR-004` | Claude Code-style exploration with safety gate |
+| `FR-ORCH-012` | functional | P0 | implemented | Xochitl loads persona and behavior instructions from project-local overrides, `~/.xochitl/`, repo fallback templates, and a central system prompt template through the existing context assembly path | `AC-CR004-004`, `AC-CR004-013` | `CR-004` | Persona architecture, including Latina/Mexican voice |
+| `DATA-DATA-004` | data | P0 | implemented | Xochitl stores structured user preferences separately from semantic memory and recalls relevant preferences at the start of conversations | `AC-CR004-005`, `AC-CR004-006` | `CR-004` | Preference table/tools |
+| `DATA-DATA-005` | data | P1 | implemented | Xochitl preloads relevant long-term semantic memories for each turn using meaning-based retrieval while respecting token budgets | `AC-CR004-007` | `CR-004` | Memory bank preload |
+| `FR-ORCH-013` | functional | P1 | implemented | Xochitl detects successful reusable multi-step workflows and offers to create a skill after the task completes | `AC-CR004-008` | `CR-004` | Balanced trigger |
+| `FR-ORCH-014` | functional | P1 | implemented | Xochitl loads global and project-specific dynamic skills from filesystem skill folders with metadata, examples, and optional assets | `AC-CR004-009` | `CR-004` | Global and project skills |
+| `FR-SDD-005` | functional | P0 | implemented | Project initialization creates BMAD artifacts, SDD workflow scaffolding, and project-local agent instructions explaining the BMAD to SDD to code process | `AC-CR004-010` | `CR-004` | Init project caveat |
+| `NFR-PERF-007` | non-functional | P0 | proposed | Conversational context assembly prefers selective retrieval and mode-specific context to minimize token use and reduce confusion | `AC-CR004-011` | `CR-004` | Token discipline |
+| `ARCH-SDD-002` | architecture | P0 | proposed | Conversational model calls continue to route through `TieredRouter`; no new raw model API calls are introduced | `AC-CR004-012` | `CR-004` | Routing preservation |
+
 ## Acceptance criteria
 
 | ID | Parent requirement | Scenario | Given | When | Then | Status |
@@ -142,6 +157,20 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR003-003` | `FR-ORCH-007` | Natural confirmation | User says "go for it" / "sounds good" after a pending action | `_handle_action_confirmation` runs | The LLM micro-call classifies the response as "yes" and the action executes | accepted |
 | `AC-CR003-004` | `FR-ORCH-006` | Universal CM | Any `_handle_*` method assembles a system prompt | The method runs | It calls `cm.assemble_system_prompt()` — no direct `build_system_prompt()` call | accepted |
 | `AC-CR003-005` | `FR-ORCH-009` | Tool history | A skill executes via `<skill_call>` | `_clean_history()` is called | The tool turn appears as an assistant message prefixed `[Tool: SkillName]` | accepted |
+
+| `AC-CR004-001` | `FR-ORCH-010` | Intent classification | A user sends a chat message | Xochitl processes the turn | The turn has a structured intent used by routing and tool selection | implemented |
+| `AC-CR004-002` | `FR-ORCH-011` | Read-only chain | User asks "help me understand this project" | Xochitl can inspect files | It performs bounded read-only exploration without asking for each read | implemented |
+| `AC-CR004-003` | `FR-ORCH-011` | Mutating action | User asks Xochitl to fix a bug | Xochitl identifies code changes | It presents a plan and waits for approval before editing files or running mutating commands | implemented |
+| `AC-CR004-004` | `FR-ORCH-012` | Persona loading | A chat session starts | Context is assembled | The system prompt includes persona and behavior layers from the configured artifacts | implemented |
+| `AC-CR004-013` | `FR-ORCH-012` | Cultural voice | Xochitl responds in casual or supportive conversation | Persona guidance is active | She blends warmth, Mexican/Latina cultural texture, and light A1-A2 Spanish words or short phrases without overusing Spanish or switching into full untranslated Spanish | implemented |
+| `AC-CR004-005` | `DATA-DATA-004` | Preference recall | A stored user preference is relevant | A new session or turn begins | Xochitl recalls and applies the preference without requiring the user to repeat it | implemented |
+| `AC-CR004-006` | `DATA-DATA-004` | Preference save | User states a stable preference | The turn completes | Xochitl records the preference through an explicit preference save path | implemented |
+| `AC-CR004-007` | `DATA-DATA-005` | Memory preload | A current message relates to prior experience | Context is assembled | Relevant semantic memories are injected within the token budget | implemented |
+| `AC-CR004-008` | `FR-ORCH-013` | Skill proposal | A multi-step reusable workflow succeeds | The final response is generated | Xochitl offers to create a skill without forcing it | implemented |
+| `AC-CR004-009` | `FR-ORCH-014` | Dynamic skill loading | A valid skill folder exists globally or in the project | Xochitl starts or refreshes skills | The skill is available for conversational tool selection | implemented |
+| `AC-CR004-010` | `FR-SDD-005` | Project init | User asks to initialize a project | BMADSkill runs | The project includes BMAD files, SDD scaffolding, and project-local agent instructions | implemented |
+| `AC-CR004-011` | `NFR-PERF-007` | Token discipline | The active project has large docs | Xochitl handles a normal productivity chat | It does not inject unrelated BMAD/SDD context unless project workflow intent is detected | proposed |
+| `AC-CR004-012` | `ARCH-SDD-002` | Routing preservation | The conversational layer needs an LLM response | It calls a model | The call goes through `TieredRouter` | proposed |
 
 ## Requirement lifecycle notes
 

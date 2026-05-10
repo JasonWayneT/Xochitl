@@ -1,5 +1,5 @@
 ---
-validationTarget: 'C:\Users\Jason\Desktop\Jason\Resource\Code Projects\Xochitl\_bmad-output\planning-artifacts\prd.md'
+validationTarget: 'C:\Users\Jason\Desktop\Jason\Resource\CodeProjects\Xochitl\_bmad-output\planning-artifacts\prd.md'
 validationDate: '2026-05-03'
 inputDocuments: 
   - _bmad-output/planning-artifacts/product-brief.md
@@ -17,7 +17,7 @@ overallStatus: 'Pass'
 
 # PRD Validation Report
 
-**PRD Being Validated:** C:\Users\Jason\Desktop\Jason\Resource\Code Projects\Xochitl\_bmad-output\planning-artifacts\prd.md
+**PRD Being Validated:** C:\Users\Jason\Desktop\Jason\Resource\CodeProjects\Xochitl\_bmad-output\planning-artifacts\prd.md
 **Validation Date:** 2026-05-03
 
 ## Input Documents

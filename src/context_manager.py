@@ -31,6 +31,26 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // _CHARS_PER_TOKEN)
 
 
+_PROJECT_ROOT = Path(__file__).parent.parent
+
+
+def _first_existing(paths: list[Path]) -> Optional[Path]:
+    for path in paths:
+        if path.exists():
+            return path
+    return None
+
+
+def _persona_search_paths(filename: str, example_name: str) -> list[Path]:
+    cwd = Path.cwd()
+    home_config = Path.home() / ".xochitl"
+    return [
+        cwd / ".xochitl" / filename,
+        home_config / filename,
+        _PROJECT_ROOT / example_name,
+    ]
+
+
 # ── Engine base ──────────────────────────────────────────────────────────────
 
 @dataclass
@@ -132,8 +152,8 @@ class SoulEngine(ContextEngine):
         super().__init__(name="soul")
 
     def ingest(self) -> None:  # type: ignore[override]
-        soul_path = Path(__file__).parent.parent / "SOUL.md"
-        if soul_path.exists():
+        soul_path = _first_existing(_persona_search_paths("SOUL.md", "SOUL.md.example"))
+        if soul_path:
             self._content = soul_path.read_text(encoding="utf-8")
         else:
             self._content = "You are Xochitl, an AI Chief of Staff assistant."
@@ -161,16 +181,143 @@ class SoulEngine(ContextEngine):
 
 
 @dataclass
+class ConversationConfigEngine(ContextEngine):
+    """Loads tunable conversation behavior from conversation.config.yaml.
+
+    Implements FR-ORCH-012 and AC-CR004-013.
+    """
+
+    def __init__(self):
+        super().__init__(name="conversation_config")
+
+    def ingest(self) -> None:  # type: ignore[override]
+        config_path = _first_existing(_persona_search_paths("conversation.config.yaml", "conversation.config.example.yaml"))
+        if not config_path:
+            self._content = ""
+            return
+        try:
+            from src.skills._yaml_helpers import yaml_load
+            data = yaml_load(config_path.read_text(encoding="utf-8"))
+            self._content = _format_conversation_config(data)
+        except Exception:
+            self._content = config_path.read_text(encoding="utf-8")
+        self._loaded_at = time.time()
+
+    def assemble(self) -> str:
+        if not self._content:
+            return ""
+        return f"## Conversation Config\n{self._content}"
+
+    def compact(self, max_tokens: int) -> str:
+        text = self.assemble()
+        max_chars = max_tokens * _CHARS_PER_TOKEN
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "\n[Conversation config compacted]"
+
+
+def _format_conversation_config(data: dict) -> str:
+    """Render selected behavior config as compact prompt text."""
+    lines: list[str] = []
+    persona = data.get("persona", {})
+    if persona:
+        lines.append(f"Persona: {persona.get('name', 'Xochitl')} - {persona.get('archetype', '')}")
+        cultural = persona.get("cultural_voice")
+        if cultural:
+            lines.append(f"Cultural voice: {cultural}")
+
+    tone = data.get("tone_by_context", {})
+    if tone:
+        lines.append("Tone by context:")
+        for key, value in tone.items():
+            lines.append(f"- {key}: {value}")
+
+    spanish = data.get("spanish_blending", {})
+    if spanish:
+        examples = ", ".join(spanish.get("allowed_examples", []))
+        lines.append(f"Spanish blending: {spanish.get('level', 'A1-A2')} examples: {examples}")
+        avoid = spanish.get("avoid", [])
+        if avoid:
+            lines.append("Spanish blending avoids: " + "; ".join(avoid))
+
+    disagreement = data.get("disagreement_style", {})
+    if disagreement:
+        lines.append("Disagreement style:")
+        for key, value in disagreement.items():
+            lines.append(f"- {key}: {value}")
+
+    curiosity = data.get("intellectual_curiosity", {})
+    if curiosity:
+        max_q = curiosity.get("max_followup_questions_per_turn")
+        if max_q is not None:
+            lines.append(f"Max follow-up questions per turn: {max_q}")
+
+    context_policy = data.get("context_policy", {})
+    if context_policy:
+        lines.append("Context policy:")
+        for key in ("default_scope", "prefer_small_context", "read_only_actions_auto_allowed", "mutations_require_plan_and_approval"):
+            if key in context_policy:
+                lines.append(f"- {key}: {context_policy[key]}")
+
+    stability = data.get("character_stability", {})
+    if stability:
+        lines.append("Character stability:")
+        for key, value in stability.items():
+            lines.append(f"- {key}: {value}")
+
+    return "\n".join(lines)
+
+
+def _load_system_prompt_template() -> str:
+    """Load the central system prompt template for FR-ORCH-012."""
+    template_path = _first_existing([
+        Path.cwd() / ".xochitl" / "prompts" / "system_xochitl.txt",
+        Path.home() / ".xochitl" / "prompts" / "system_xochitl.txt",
+        _PROJECT_ROOT / "prompts" / "system_xochitl.txt",
+    ])
+    if template_path:
+        return template_path.read_text(encoding="utf-8")
+    return "{{IDENTITY_GUARD}}\n\n{{SOUL}}\n\n{{CONVERSATION_CONFIG}}"
+
+
+def _render_system_prompt_template(
+    *,
+    identity_guard: str,
+    soul: str,
+    conversation_config: str,
+) -> str:
+    template = _load_system_prompt_template()
+    return (
+        template
+        .replace("{{IDENTITY_GUARD}}", identity_guard)
+        .replace("{{SOUL}}", soul)
+        .replace("{{CONVERSATION_CONFIG}}", conversation_config)
+    )
+
+
+@dataclass
 class MemoryEngine(ContextEngine):
-    """Loads MEMORY.md and ChromaDB excerpts."""
+    """Loads profile memory and selective semantic memory excerpts."""
 
     def __init__(self):
         super().__init__(name="memory")
 
-    def ingest(self) -> None:  # type: ignore[override]
+    def ingest(self, query: str = "", project: Optional[str] = None) -> None:  # type: ignore[override]
+        # Implements DATA-DATA-005: preload only relevant semantic memories.
         try:
-            from src.memory import read_memory
-            self._content = read_memory() or ""
+            from src.memory import read_memory, recall
+            parts = [read_memory() or ""]
+            if query:
+                memories = recall(query, n_results=3, project=project)
+                if memories:
+                    lines = ["## Relevant Semantic Memories"]
+                    for memory in memories[:3]:
+                        topic = memory.get("topic", "memory")
+                        summary = memory.get("summary", "")
+                        if summary:
+                            lines.append(f"- {topic}: {summary[:500]}")
+                    parts.append("\n".join(lines))
+            self._content = "\n\n".join(p for p in parts if p)
         except Exception:
             self._content = ""
         self._loaded_at = time.time()
@@ -191,6 +338,47 @@ class MemoryEngine(ContextEngine):
         if first_nl > 0:
             truncated = truncated[first_nl + 1:]
         return f"[Memory compacted — showing most recent entries]\n{truncated}"
+
+
+@dataclass
+class PreferenceEngine(ContextEngine):
+    """Loads structured user preferences separately from semantic memory."""
+
+    _rows: list = field(default_factory=list, init=False)
+
+    def __init__(self):
+        super().__init__(name="preferences")
+
+    def ingest(self, query: str = "", project: Optional[str] = None) -> None:  # type: ignore[override]
+        # Implements DATA-DATA-004: recall relevant preferences at turn start.
+        try:
+            from src import database as db
+            with db.get_connection() as conn:
+                self._rows = db.search_preferences(conn, query, project_id=project, limit=5)
+                db.mark_preferences_used(conn, [int(row["id"]) for row in self._rows])
+        except Exception:
+            self._rows = []
+        self._loaded_at = time.time()
+
+    def assemble(self) -> str:
+        if not self._rows:
+            return ""
+        lines = ["## User Preferences"]
+        for row in self._rows:
+            scope = row["scope"]
+            project = row["project_id"]
+            scope_label = f"project:{project}" if scope == "project" and project else scope
+            lines.append(
+                f"- [{scope_label}/{row['category']}] {row['preference_value']}"
+            )
+        return "\n".join(lines)
+
+    def compact(self, max_tokens: int) -> str:
+        text = self.assemble()
+        max_chars = max_tokens * _CHARS_PER_TOKEN
+        if len(text) <= max_chars:
+            return text
+        return text[:max_chars] + "\n[Preferences compacted]"
 
 
 @dataclass
@@ -272,7 +460,7 @@ class SkillManifestEngine(ContextEngine):
             "",
             '  <skill_call name="SKILL_NAME">{"param": "value"}</skill_call>',
             "",
-            "The skill executes immediately and its result is appended to your response.",
+            "Read-only skills may execute immediately; mutating skills are staged for user approval first.",
             "Only invoke a skill when the user clearly wants that action — not for planning or discussion.",
             "",
         ]
@@ -368,6 +556,8 @@ class ContextManager:
         # Initialize engines
         self.facts   = FactsEngine()
         self.soul    = SoulEngine()
+        self.behavior = ConversationConfigEngine()
+        self.preferences = PreferenceEngine()
         self.memory  = MemoryEngine()
         self.files   = FileContextEngine()
         self.skills  = SkillManifestEngine()  # FR-ORCH-005
@@ -384,7 +574,9 @@ class ContextManager:
         """Load all engine data. Call once per request."""
         self.facts.ingest(project=project, local_mode=local_mode)
         self.soul.ingest()
-        self.memory.ingest()
+        self.behavior.ingest()
+        self.preferences.ingest(query=query, project=project)
+        self.memory.ingest(query=query, project=project)
         self.files.ingest(query=query, history=history)
         self.skills.ingest(skills=self._skills_list)  # FR-ORCH-005
         self._ingested = True
@@ -413,20 +605,27 @@ class ContextManager:
 
         facts_text   = self.facts.assemble()
         soul_text    = self.soul.assemble()
+        behavior_text = self.behavior.assemble()
+        preferences_text = self.preferences.assemble()
         memory_text  = self.memory.assemble()
         files_text   = self.files.assemble()
         skills_text  = self.skills.assemble()   # FR-ORCH-005
+        persona_text = _render_system_prompt_template(
+            identity_guard=guard_text,
+            soul=soul_text,
+            conversation_config=behavior_text,
+        )
 
-        total = self._total_tokens(guard_text, facts_text, soul_text, memory_text, files_text, skills_text)
+        total = self._total_tokens(persona_text, facts_text, preferences_text, memory_text, files_text, skills_text)
         budget_remaining = self._budget
 
         # If under budget, assemble without compaction
         if total <= budget_remaining:
-            parts = [guard_text, facts_text]
-            if soul_text:
-                parts.append(soul_text)
+            parts = [persona_text, facts_text]
             if skills_text:
                 parts.append(skills_text)
+            if preferences_text:
+                parts.append(preferences_text)
             if memory_text:
                 parts.append(memory_text)
             if files_text:
@@ -437,19 +636,27 @@ class ContextManager:
         # Reserve minimum allocations
         facts_budget  = min(_estimate_tokens(facts_text), 200)
         soul_budget   = min(_estimate_tokens(soul_text), 1_200)
+        behavior_budget = min(_estimate_tokens(behavior_text), 500)
         skills_budget = min(_estimate_tokens(skills_text), 400)
+        preferences_budget = min(_estimate_tokens(preferences_text), 400)
         memory_budget = min(_estimate_tokens(memory_text), 600)
         files_budget  = (
             budget_remaining
             - _estimate_tokens(guard_text)
-            - facts_budget - soul_budget - skills_budget - memory_budget
+            - facts_budget - soul_budget - behavior_budget - skills_budget
+            - preferences_budget - memory_budget
         )
 
-        parts = [guard_text, self.facts.compact(facts_budget)]
-        if soul_text:
-            parts.append(self.soul.compact(soul_budget))
+        compact_persona = _render_system_prompt_template(
+            identity_guard=guard_text,
+            soul=self.soul.compact(soul_budget) if soul_text else "",
+            conversation_config=self.behavior.compact(behavior_budget) if behavior_text else "",
+        )
+        parts = [compact_persona, self.facts.compact(facts_budget)]
         if skills_text:
             parts.append(self.skills.compact(skills_budget))
+        if preferences_text:
+            parts.append(self.preferences.compact(preferences_budget))
         if memory_text:
             mem_compact = self.memory.compact(max(memory_budget, 100))
             if mem_compact:
@@ -515,6 +722,8 @@ class ContextManager:
         total = self._total_tokens(
             self.facts.assemble(),
             self.soul.assemble(),
+            self.behavior.assemble(),
+            self.preferences.assemble(),
             self.memory.assemble(),
             self.files.assemble(),
             self.skills.assemble(),

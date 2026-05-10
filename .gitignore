@@ -4,6 +4,11 @@
 .env copy*
 *.env
 
+# Personal Xochitl persona/config
+SOUL.md
+conversation.config.yaml
+.xochitl/
+
 
 # Python
 __pycache__/

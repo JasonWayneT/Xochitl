@@ -43,6 +43,17 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-ORCH-009` | `CR-003` | `CR-003` | `AC-CR003-005` | `TASK-CR003-006` | `src/chat.py` (_clean_history, _record — role=tool handling) | manual | implemented |
 | `NFR-PERF-006` | `CR-003` | `CR-003` | — | `TASK-CR003-004` | `src/chat.py` (_parse_skill_call — regex, no LLM) | manual | implemented |
 
+| `FR-ORCH-010` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-001` | `TASK-CR004-001` | `src/intent.py`, `src/chat.py` | syntax + structured intent sanity check | implemented |
+| `FR-ORCH-011` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-002`, `AC-CR004-003` | `TASK-CR004-002` | `src/intent.py` (project exploration scope), `src/chat.py` (bounded repo exploration, skill-call approval gate), `src/file_tools.py` (all writes pending confirmation) | py_compile + targeted gate/exploration sanity checks | implemented |
+| `FR-ORCH-012` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-004`, `AC-CR004-013` | `TASK-CR004-003` | `src/context_manager.py`, `src/context_loader.py`, `SOUL.md.example`, `conversation.config.example.yaml`, `prompts/system_xochitl.txt`, `docs/conversation-scenarios.md` | syntax + prompt assembly sanity check | implemented |
+| `DATA-DATA-004` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-005`, `AC-CR004-006` | `TASK-CR004-004` | `src/database.py` (preferences table/helpers), `src/context_manager.py` (PreferenceEngine), `src/chat.py` (explicit preference save path) | syntax + structured preference sanity check | implemented |
+| `DATA-DATA-005` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-007` | `TASK-CR004-005` | `src/context_manager.py` (MemoryEngine selective `memory.recall()` preload), `src/memory.py` | syntax + bounded preload sanity by construction | implemented |
+| `FR-ORCH-013` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-008` | `TASK-CR004-006` | `src/chat.py` (_maybe_offer_skill_creation), `src/skills/dynamic_skill.py` (offer text) | targeted reusable-workflow offer sanity check | implemented |
+| `FR-ORCH-014` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-009` | `TASK-CR004-006` | `src/skills/dynamic_skill.py` (DynamicSkill/load_dynamic_skills), `src/chat.py` (skill loading), `src/context_manager.py` (manifest copy) | py_compile + targeted dynamic skill loading sanity check | implemented |
+| `FR-SDD-005` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-010` | `TASK-CR004-007` | `src/skills/bmad_skill.py` (BMAD/SDD/project AGENTS scaffold), `src/skills/_yaml_helpers.py` (stdlib YAML fallback for metadata) | py_compile + targeted project-init sanity check | implemented |
+| `NFR-PERF-007` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-011` | `TASK-CR004-001`, `TASK-CR004-005` | proposed: `src/context_manager.py`, router/context policy | `TEST-CR004-009` | proposed |
+| `ARCH-SDD-002` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-012` | `TASK-CR004-008` | proposed: all new conversational modules | `TEST-CR004-010` | proposed |
+
 ## Coverage checklist
 
 - [ ] Every P0 requirement has acceptance criteria.
