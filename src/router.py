@@ -452,9 +452,10 @@ class TieredRouter:
         if category in {"task_management", "simple_qa", "memory_recall"}:
             system_prompt = system_prompt + "\n\n" + _live_db_context()
 
-        # FR-ORCH-003: Prepend SYSTEM_FACTS block to ground the LLM in reality
-        facts_block = _build_preflight_facts()
-        system_prompt = facts_block + "\n\n" + system_prompt
+        # FR-ORCH-003: Prepend SYSTEM_FACTS block — skip if CM already injected it
+        if "[SYSTEM_FACTS]" not in system_prompt:
+            facts_block = _build_preflight_facts()
+            system_prompt = facts_block + "\n\n" + system_prompt
 
         # Inject file context for relevant categories (BUG-ORCH-001)
         if category in {"file_operations", "general", "simple_qa", "bmad_complex", "code_generation"}:

@@ -102,12 +102,12 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 
 | ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
 |---|---|---|---|---|---|---|---|
-| `FR-ORCH-005` | functional | P0 | accepted | Each skill exposes `tool_definition()` descriptor injected into every system prompt so the LLM knows what it can invoke | `AC-CR003-001`, `AC-CR003-002` | `CR-003` | Via SkillManifestEngine |
-| `FR-ORCH-006` | functional | P0 | accepted | All response paths assemble the system prompt via `ContextManager` — no ad-hoc `build_system_prompt()` calls outside it | `AC-CR003-004` | `CR-003` | Universal CM |
-| `FR-ORCH-007` | functional | P1 | accepted | Natural confirmation: pending-action yes/no detection falls back to an LLM micro-call when exact-match against `_CONFIRM_YES`/`_CONFIRM_NO` fails | `AC-CR003-003` | `CR-003` | |
-| `FR-ORCH-008` | functional | P0 | accepted | Agent loop: `process_message()` parses LLM responses for `<skill_call name="X">{}</skill_call>` markers and auto-executes the named skill, appending the result to the response | `AC-CR003-001`, `AC-CR003-002` | `CR-003` | |
-| `FR-ORCH-009` | functional | P1 | accepted | Skill-aware history: tool invocations and results are stored as `role=tool` turns and serialized as `[Tool: X]\n{result}` assistant messages for LLM context | `AC-CR003-005` | `CR-003` | |
-| `NFR-PERF-006` | non-functional | P1 | accepted | `<skill_call>` regex parsing adds <10ms per turn; re-synthesis LLM call only fires when a skill executes | — | `CR-003` | |
+| `FR-ORCH-005` | functional | P0 | implemented | Each skill exposes `tool_definition()` descriptor injected into every system prompt so the LLM knows what it can invoke | `AC-CR003-001`, `AC-CR003-002` | `CR-003` | Via SkillManifestEngine |
+| `FR-ORCH-006` | functional | P0 | implemented | All response paths assemble the system prompt via `ContextManager` — no ad-hoc `build_system_prompt()` calls outside it | `AC-CR003-004` | `CR-003` | Universal CM |
+| `FR-ORCH-007` | functional | P1 | implemented | Natural confirmation: pending-action yes/no detection falls back to an LLM micro-call when exact-match against `_CONFIRM_YES`/`_CONFIRM_NO` fails | `AC-CR003-003` | `CR-003` | |
+| `FR-ORCH-008` | functional | P0 | implemented | Agent loop: `process_message()` parses LLM responses for `<skill_call name="X">{}</skill_call>` markers and auto-executes the named skill, appending the result to the response | `AC-CR003-001`, `AC-CR003-002` | `CR-003` | |
+| `FR-ORCH-009` | functional | P1 | implemented | Skill-aware history: tool invocations and results are stored as `role=tool` turns and serialized as `[Tool: X]\n{result}` assistant messages for LLM context | `AC-CR003-005` | `CR-003` | |
+| `NFR-PERF-006` | non-functional | P1 | implemented | `<skill_call>` regex parsing adds <10ms per turn; re-synthesis LLM call only fires when a skill executes | — | `CR-003` | |
 
 ## Acceptance criteria
 
@@ -137,11 +137,11 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR002-003` | `FR-UI-001`, `FR-UI-002` | Smart Ctrl-C | Xochitl chat is running | User presses Ctrl-C once | Input is cleared or active tool is cancelled; a second press within 1.2s exits | implemented |
 | `AC-CR002-004` | `NFR-PERF-004` | Token budget | A large file is injected | Token count exceeds 75% of model limit | ContextManager compacts lower-priority sections before sending to LLM | implemented |
 | `AC-CR002-005` | `NFR-PERF-005` | Latency tracking | A local or cloud LLM call completes | The result is returned | TieredRouter updates the provider's rolling average latency | implemented |
-| `AC-CR003-001` | `FR-ORCH-005`, `FR-ORCH-008` | Direct skill execution | User says "sync my notion tasks" | process_message runs | NotionSkill executes and returns result without a separate confirmation turn | accepted |
-| `AC-CR003-002` | `FR-ORCH-005`, `FR-ORCH-008` | Skill from manifest | User says "I want to build a recipe tracking app" | process_message runs | BMADSkill fires via skill manifest, not keyword matching | accepted |
-| `AC-CR003-003` | `FR-ORCH-007` | Natural confirmation | User says "go for it" / "sounds good" after a pending action | `_handle_action_confirmation` runs | The LLM micro-call classifies the response as "yes" and the action executes | accepted |
-| `AC-CR003-004` | `FR-ORCH-006` | Universal CM | Any `_handle_*` method assembles a system prompt | The method runs | It calls `cm.assemble_system_prompt()` — no direct `build_system_prompt()` call | accepted |
-| `AC-CR003-005` | `FR-ORCH-009` | Tool history | A skill executes via `<skill_call>` | `_clean_history()` is called | The tool turn appears as an assistant message prefixed `[Tool: SkillName]` | accepted |
+| `AC-CR003-001` | `FR-ORCH-005`, `FR-ORCH-008` | Direct skill execution | User says "sync my notion tasks" | process_message runs | NotionSkill executes and returns result without a separate confirmation turn | implemented |
+| `AC-CR003-002` | `FR-ORCH-005`, `FR-ORCH-008` | Skill from manifest | User says "I want to build a recipe tracking app" | process_message runs | BMADSkill fires via skill manifest, not keyword matching | implemented |
+| `AC-CR003-003` | `FR-ORCH-007` | Natural confirmation | User says "go for it" / "sounds good" after a pending action | `_handle_action_confirmation` runs | The LLM micro-call classifies the response as "yes" and the action executes | implemented |
+| `AC-CR003-004` | `FR-ORCH-006` | Universal CM | Any `_handle_*` method assembles a system prompt | The method runs | It calls `cm.assemble_system_prompt()` — no direct `build_system_prompt()` call | implemented |
+| `AC-CR003-005` | `FR-ORCH-009` | Tool history | A skill executes via `<skill_call>` | `_clean_history()` is called | The tool turn appears as an assistant message prefixed `[Tool: SkillName]` | implemented |
 
 ## Requirement lifecycle notes
 

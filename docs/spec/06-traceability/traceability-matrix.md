@@ -19,7 +19,7 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |
 | `DATA-DATA-003` | `BMAD-SRC-001` | TBD | `AC-DATA-003` | TBD | `src/database.py` | `TEST-DATA-003` | accepted |
 | `SEC-AUTH-001` | `BMAD-SRC-001` | TBD | `AC-AUTH-001` | TBD | `src/security.py` | `TEST-AUTH-001` | accepted |
-| `SEC-AUTH-002` | `BMAD-SRC-001` | TBD | `AC-AUTH-002` | TBD | `src/security.py` | `TEST-AUTH-002` | accepted |
+| `SEC-AUTH-002` | `BMAD-SRC-001` | TBD | `AC-AUTH-002`, `AC-BUG-SEC-001` | TBD | `src/security.py`, `src/chat.py`, `src/file_tools.py` | `TEST-AUTH-002` | accepted |
 | `ARCH-SDD-001` | `BMAD-SRC-001` | TBD | `AC-SDD-001` | TBD | `src/router.py` | `TEST-SDD-001` | accepted |
 | `FR-SDD-001` | `BMAD-SRC-001` | TBD | `AC-SDD-002` | TBD | `src/skills/bmad_skill.py` | `TEST-SDD-002` | accepted |
 | `FR-SDD-002` | `BMAD-SRC-001` | TBD | `AC-SDD-003` | TBD | `src/skills/sdd_skill.py` | `TEST-SDD-003` | accepted |
@@ -42,6 +42,11 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-ORCH-008` | `CR-003` | `CR-003` | `AC-CR003-001`, `AC-CR003-002` | `TASK-CR003-004` | `src/chat.py` (_agent_loop, _parse_skill_call, _find_skill_by_name) | manual | implemented |
 | `FR-ORCH-009` | `CR-003` | `CR-003` | `AC-CR003-005` | `TASK-CR003-006` | `src/chat.py` (_clean_history, _record — role=tool handling) | manual | implemented |
 | `NFR-PERF-006` | `CR-003` | `CR-003` | — | `TASK-CR003-004` | `src/chat.py` (_parse_skill_call — regex, no LLM) | manual | implemented |
+| `BUG-ORCH-008` | session | `BUG-ORCH-008.md` | `AC-BUG-ORCH-008` | resolved | `src/router.py` (guard in route() skips _build_preflight_facts when [SYSTEM_FACTS] present) | manual | resolved |
+| `BUG-ORCH-009` | session | `BUG-ORCH-009.md` | `AC-BUG-ORCH-009` | resolved | `src/skills/bmad_skill.py` (execute init_project), `src/skills/code_skill.py` (execute implement/fix/tests) | manual | resolved |
+| `BUG-ORCH-010` | session | `BUG-ORCH-010.md` | `AC-BUG-ORCH-010` | resolved | `src/chat.py` (_agent_loop — try/except around skill.execute) | manual | resolved |
+| `BUG-SDD-001` | session | `BUG-SDD-001.md` | `AC-BUG-SDD-001` | resolved | `src/skills/sdd_skill.py` (create_requirement — max-based ID) | manual | resolved |
+| `BUG-SEC-001` | session | `BUG-SEC-001.md` | `AC-BUG-SEC-001` | resolved | `src/chat.py` (_handle_file_operation — explicit delete branch via FileTools) | manual | resolved |
 
 ## Coverage checklist
 

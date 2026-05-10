@@ -20,7 +20,6 @@ Design principles (from XOCHITL_CONVERSATIONAL_HARNESS.md):
 import json
 import os
 import re
-import signal
 import time
 from datetime import datetime
 from pathlib import Path
@@ -30,13 +29,10 @@ from rich.console import Console
 from rich.live import Live
 from rich.markdown import Markdown
 from rich.prompt import Prompt
-from rich.spinner import Spinner
 from rich.text import Text
 
 from src.router import get_router, _live_db_context, _resolve_file_context
-from src.context_loader import build_system_prompt
 from src.context_manager import ContextManager
-from src.memory import read_memory
 from src import database as db
 from src.file_tools import FileTools
 from src.skills.base import Skill
@@ -152,8 +148,6 @@ _CONFIRM_YES = {"yes", "y", "ok", "sure", "yeah", "yep", "do it", "go ahead"}
 _CONFIRM_NO  = {"no", "n", "nope", "cancel", "nevermind", "stop", "don't"}
 
 _TASK_KEYWORDS    = ["task", "queue", "what's on my plate", "what am i working on", "blocked", "in progress", "today"]
-_BG_KEYWORDS      = ["background", "orchestrator", "delegated task", "how is the agent", "what are background"]
-_ACTION_KEYWORDS  = ["sync", "pull from notion", "push to notion", "notion", "start working", "work on", "delegate"]
 _FILE_READ_KW     = ["read", "open", "show me", "what is in", "what's in", "look at"]
 _FILE_WRITE_KW    = ["write", "create file", "save to", "overwrite"]
 _FILE_DELETE_KW   = ["delete", "remove file"]
@@ -161,17 +155,6 @@ _FILE_EXTENSIONS  = [".py", ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".
 _FILE_VERB_KW     = ["read", "write", "delete", "show", "list", "analyze",
                      "look at", "check", "view", "open", "see"]
 _PATH_INDICATOR_KW = ["file", "folder", "directory", "project", "path"]
-_BMAD_KEYWORDS    = ["plan", "design", "architect", "prd", "sprint", "feature", "workflow"]
-
-# SDD / project lifecycle keywords
-_BUILD_KEYWORDS   = [
-    "i want to build", "i want to make", "i want to create", "i want to rebuild",
-    "build an app", "create an app", "new app", "new project", "start a project",
-    "let's build", "let's make", "let's create", "rebuild",
-]
-_SDD_KEYWORDS      = ["spec", "requirement", "fr-", "ac-", "ec-", "traceability"]
-_ISSUE_KEYWORDS    = ["bug", "issue", "broken", "doesn't work", "failing", "wrong behavior", "error in"]
-_CODE_GEN_KEYWORDS = ["scaffold", "generate code", "implement the", "code for", "build the backend", "build the frontend"]
 _RESEARCH_KEYWORDS = [
     "research", "devil's advocate", "adversarial", "challenge this", "challenge that",
     "synthesize", "look into", "find out about", "what do we know about",
@@ -455,7 +438,10 @@ class XochitlChat:
             if skill:
                 if _status:
                     _status.update(f"Running {skill_name}")
-                tool_result = skill.execute(user_input, self.current_context, params)
+                try:
+                    tool_result = skill.execute(user_input, self.current_context, params)
+                except Exception as exc:
+                    tool_result = f"{_ERR} — {skill_name} failed: {exc}"
 
                 # Implements FR-ORCH-009 — persist tool turn in session history
                 self.session_history.append({
@@ -531,6 +517,28 @@ class XochitlChat:
     def _handle_file_operation(self, user_input: str, intent: dict, cm: ContextManager) -> str:
         op = intent.get("operation", "read")
 
+        if op == "delete":
+            # Implements FR-SEC-002 — deletes require FileTools confirmation
+            paths_found = re.findall(r'[A-Za-z]:[/\\][\w/\\\-. ]+', user_input)
+            quoted_found = [m[0] or m[1] for m in re.findall(r'"([^"]+)"|\'([^\']+)\'', user_input)]
+            ext_found = re.findall(
+                r'[\w][\w\-]*\.(?:md|txt|py|js|ts|json|yaml|yml|toml|csv|html|pdf|env)',
+                user_input, re.IGNORECASE,
+            )
+            candidates = paths_found + quoted_found + ext_found
+            if candidates:
+                from pathlib import Path as _Path
+                raw = candidates[0].strip()
+                path = _Path(raw) if _Path(raw).is_absolute() else _Path.cwd() / raw
+                try:
+                    result = self.file_tools.delete_file(path)
+                    if result["status"] == "pending_permission":
+                        self.current_context["pending_file_operation"] = result["operation_id"]
+                    return result["message"]
+                except Exception as exc:
+                    return f"{_ERR} — {exc}"
+            return f"{_FYI} — Which file should I delete? Give me the full path."
+
         if op == "read":
             # BUG-CHAT-002 fix: catch permission errors and surface them clearly
             try:
@@ -550,9 +558,8 @@ class XochitlChat:
                     system_prompt=system,
                 )
                 return result.content if not result.error else f"{_ERR} — {result.error}"
-            import re as _re
-            paths_found = _re.findall(r'[A-Za-z]:[/\\][\w/\\\-. ]+', user_input)
-            quoted_found = [m[0] or m[1] for m in _re.findall(r'"([^"]+)"|\'([^\']+)\'', user_input)]
+            paths_found = re.findall(r'[A-Za-z]:[/\\][\w/\\\-. ]+', user_input)
+            quoted_found = [m[0] or m[1] for m in re.findall(r'"([^"]+)"|\'([^\']+)\'', user_input)]
             hint = (paths_found + quoted_found)
             if hint:
                 return (

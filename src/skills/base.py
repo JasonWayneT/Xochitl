@@ -6,14 +6,15 @@ from abc import ABC, abstractmethod
 
 class Skill(ABC):
     """
-    A skill is a conversational tool Xochitl can suggest and execute.
+    A skill is a conversational tool Xochitl can invoke.
 
-    Xochitl scores every skill on each user message. If the top score
-    exceeds 0.6 she surfaces a suggestion. The user then chooses whether
-    to proceed, and only then does execute() run.
+    The LLM sees each skill's tool_definition() in the system prompt
+    (via SkillManifestEngine) and may invoke it by emitting a
+    <skill_call name="X">{}</skill_call> marker. The agent loop in
+    chat.py parses that marker and calls execute() (FR-ORCH-005, FR-ORCH-008).
 
-    Skills also expose tool_definition() so the LLM knows when and how
-    to invoke them via <skill_call> markers (FR-ORCH-005, FR-ORCH-008).
+    can_handle() and suggest() are preserved for future use but are not
+    called by the current agent loop.
     """
 
     @abstractmethod

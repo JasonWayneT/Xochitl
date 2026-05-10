@@ -7,11 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from src.skills.base import Skill
-from src.skills._yaml_helpers import yaml_load, yaml_dump
-
-
-_PROJECT_ROOT = Path(__file__).parent.parent.parent
-_PROJECTS_DIR = _PROJECT_ROOT / "projects"
+from src.skills._skill_helpers import PROJECTS_DIR as _PROJECTS_DIR, read_project_meta, write_project_meta
 
 _PLANNING_KEYWORDS = ["plan", "design", "architect", "prd", "feature", "workflow", "sprint"]
 _BUILD_KEYWORDS = [
@@ -75,11 +71,14 @@ class BMADSkill(Skill):
         action = params.get("action", "")
 
         if action == "init_project":
-            result = self.init_project(
-                params["project_id"],
-                params["name"],
-                params.get("description", ""),
-            )
+            project_id = params.get("project_id")
+            name = params.get("name")
+            if not project_id or not name:
+                return (
+                    "I need a project ID and name to initialize a project. "
+                    "Try saying 'I want to build [app name]' and I'll set it up."
+                )
+            result = self.init_project(project_id, name, params.get("description", ""))
             return (
                 f"Created project '{result['name']}' at projects/{result['project_id']}/\n\n"
                 "Let's start the BMAD process. First: what's the core problem this app solves? "
@@ -137,7 +136,7 @@ class BMADSkill(Skill):
             "stats": {"total_requirements": 0, "implemented_requirements": 0, "open_issues": 0},
             "last_worked": now,
         }
-        self._write_meta(project_id, meta)
+        write_project_meta(project_id, meta)
         return {"project_id": project_id, "name": name, "path": str(project_path)}
 
     def save_bmad_artifact(self, project_id: str, artifact_type: str, content: str) -> str:
@@ -154,11 +153,11 @@ class BMADSkill(Skill):
         required = {"business-model", "architecture"}
         existing = {p.stem for p in (_PROJECTS_DIR / project_id / "bmad").glob("*.md")}
         if required.issubset(existing):
-            meta = self._read_meta(project_id)
+            meta = read_project_meta(project_id)
             if not meta.get("bmad_complete"):
                 meta["bmad_complete"] = True
                 meta["last_worked"] = datetime.now().isoformat()
-                self._write_meta(project_id, meta)
+                write_project_meta(project_id, meta)
 
         return f"projects/{project_id}/bmad/{artifact_type}.md"
 
@@ -177,7 +176,7 @@ class BMADSkill(Skill):
 
     def is_bmad_complete(self, project_id: str) -> bool:
         """True if .project-meta.yml has bmad_complete=true and business-model.md exists."""
-        meta = self._read_meta(project_id)
+        meta = read_project_meta(project_id)
         if meta.get("bmad_complete"):
             return True
         # Re-derive from file presence in case meta is stale
@@ -192,17 +191,17 @@ class BMADSkill(Skill):
         for project_dir in sorted(_PROJECTS_DIR.iterdir()):
             if not project_dir.is_dir():
                 continue
-            meta = self._read_meta(project_dir.name)
+            meta = read_project_meta(project_dir.name)
             if meta:
                 results.append(meta)
         return results
 
     def update_project_stack(self, project_id: str, stack: dict) -> None:
         """Update the stack section of .project-meta.yml."""
-        meta = self._read_meta(project_id)
+        meta = read_project_meta(project_id)
         meta.setdefault("stack", {}).update(stack)
         meta["last_worked"] = datetime.now().isoformat()
-        self._write_meta(project_id, meta)
+        write_project_meta(project_id, meta)
 
     # ── Existing .clinerules/ workflow ────────────────────────────────────────
 
@@ -218,18 +217,3 @@ class BMADSkill(Skill):
             "Give me the one-sentence pitch: what's the feature?"
         )
 
-    # ── Meta helpers ──────────────────────────────────────────────────────────
-
-    def _read_meta(self, project_id: str) -> dict:
-        meta_path = _PROJECTS_DIR / project_id / ".project-meta.yml"
-        if not meta_path.exists():
-            return {}
-        try:
-            return yaml_load(meta_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return {}
-
-    def _write_meta(self, project_id: str, meta: dict) -> None:
-        meta_path = _PROJECTS_DIR / project_id / ".project-meta.yml"
-        meta_path.parent.mkdir(parents=True, exist_ok=True)
-        meta_path.write_text(yaml_dump(meta), encoding="utf-8")

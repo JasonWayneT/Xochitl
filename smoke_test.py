@@ -53,17 +53,16 @@ def t_init_project():
 test("BMADSkill.init_project: creates dirs and meta", t_init_project)
 
 
-# ── 3. _read_meta correctness ────────────────────────────────────────────────
+# ── 3. read_project_meta correctness ─────────────────────────────────────────
 def t_read_meta():
-    from src.skills.bmad_skill import BMADSkill
-    s = BMADSkill()
-    meta = s._read_meta(TEST_PROJECT)
+    from src.skills._skill_helpers import read_project_meta
+    meta = read_project_meta(TEST_PROJECT)
     assert meta["project_id"] == TEST_PROJECT
     assert meta["name"] == "Smoke Test App"
     assert meta["bmad_complete"] == False
     assert meta["specs_generated"] == False
     assert "stack" in meta
-test("BMADSkill._read_meta: reads correct values", t_read_meta)
+test("read_project_meta: reads correct values", t_read_meta)
 
 
 # ── 4. save_bmad_artifact + is_bmad_complete ─────────────────────────────────
@@ -99,21 +98,20 @@ def t_list_projects():
 test("BMADSkill.list_projects: finds test project", t_list_projects)
 
 
-# ── 7. _parse_json_response ──────────────────────────────────────────────────
+# ── 7. parse_skill_json ──────────────────────────────────────────────────────
 def t_json_parse():
-    from src.skills.sdd_skill import SDDSkill
-    s = SDDSkill()
+    from src.skills._skill_helpers import parse_skill_json
     # Plain JSON
-    r1 = s._parse_json_response('{"key": "value"}')
+    r1 = parse_skill_json('{"key": "value"}')
     assert r1 == {"key": "value"}, f"Plain JSON failed: {r1}"
     # With markdown fences
     fenced = "```json\n{\"key\": \"value\"}\n```"
-    r2 = s._parse_json_response(fenced)
+    r2 = parse_skill_json(fenced)
     assert r2 == {"key": "value"}, f"Fenced JSON failed: {r2}"
     # Bad JSON (no retry_prompt) → error dict
-    r3 = s._parse_json_response("not json at all")
+    r3 = parse_skill_json("not json at all")
     assert "error" in r3, f"Bad JSON should return error dict: {r3}"
-test("SDDSkill._parse_json_response: plain, fenced, bad", t_json_parse)
+test("parse_skill_json: plain, fenced, bad", t_json_parse)
 
 
 # ── 8. _build_spec_file_content + _init_traceability ────────────────────────
@@ -148,10 +146,11 @@ def t_spec_write():
     s._init_traceability(TEST_PROJECT, FAKE_REQS)
     assert (PROJECT_PATH / "specs" / "traceability.json").exists()
     # Mark specs_generated
-    meta = s._read_meta(TEST_PROJECT)
+    from src.skills._skill_helpers import read_project_meta, write_project_meta
+    meta = read_project_meta(TEST_PROJECT)
     meta["specs_generated"] = True
     meta["stats"]["total_requirements"] = 2
-    s._write_meta(TEST_PROJECT, meta)
+    write_project_meta(TEST_PROJECT, meta)
 test("SDDSkill._build_spec_file_content + _init_traceability", t_spec_write)
 
 

@@ -9,10 +9,15 @@ from typing import Optional
 
 from src.skills.base import Skill
 from src.skills._yaml_helpers import yaml_load
-
+from src.skills._skill_helpers import (
+    PROJECTS_DIR as _PROJECTS_DIR,
+    read_project_meta,
+    write_project_meta,
+    call_skill_llm,
+    parse_skill_json,
+)
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
-_PROJECTS_DIR = _PROJECT_ROOT / "projects"
 _SDD_DIR = _PROJECT_ROOT / ".sdd"
 
 _CODE_KEYWORDS = [
@@ -88,11 +93,20 @@ class CodeSkill(Skill):
         if action == "scaffold":
             return self.scaffold_from_specs(project_id, params.get("component", "backend"))
         if action == "implement":
-            return self.generate_code_for_requirement(project_id, params["requirement_id"])
+            req_id = params.get("requirement_id")
+            if not req_id:
+                return "Specify a requirement_id (e.g. FR-CORE-001) to implement."
+            return self.generate_code_for_requirement(project_id, req_id)
         if action == "fix":
-            return self.fix_issue(project_id, params["issue_id"])
+            issue_id = params.get("issue_id")
+            if not issue_id:
+                return "Specify an issue_id (e.g. BUG-001) to fix."
+            return self.fix_issue(project_id, issue_id)
         if action == "tests":
-            return self.generate_tests(project_id, params["requirement_id"])
+            req_id = params.get("requirement_id")
+            if not req_id:
+                return "Specify a requirement_id (e.g. FR-CORE-001) to generate tests for."
+            return self.generate_tests(project_id, req_id)
 
         return "Specify an action: scaffold, implement, fix, or tests."
 
@@ -103,7 +117,7 @@ class CodeSkill(Skill):
         from src.skills.sdd_skill import SDDSkill
         sdd = SDDSkill()
 
-        if not sdd._read_meta(project_id).get("specs_generated"):
+        if not read_project_meta(project_id).get("specs_generated"):
             return "Specs not generated yet. Run generate_specs first."
 
         reqs = sdd.list_requirements(project_id)
@@ -120,8 +134,8 @@ class CodeSkill(Skill):
         system_ctx = self._load_code_prompt()
         prompt = self._build_scaffold_prompt(project_id, component, stack, req_details)
 
-        response_text = self._call_llm(prompt, system_ctx, route="code_generation")
-        parsed = self._parse_json_response(
+        response_text = call_skill_llm(prompt, system_ctx, route="code_generation")
+        parsed = parse_skill_json(
             response_text,
             retry_prompt=prompt,
             retry_system=system_ctx,
@@ -142,10 +156,10 @@ class CodeSkill(Skill):
                 sdd.update_traceability(project_id, req_id, impl_data)
 
         # Mark code_scaffolded in meta
-        meta = sdd._read_meta(project_id)
+        meta = read_project_meta(project_id)
         meta["code_scaffolded"] = True
         meta["last_worked"] = datetime.now().isoformat()
-        sdd._write_meta(project_id, meta)
+        write_project_meta(project_id, meta)
 
         all_written = written + test_written
         if not all_written:
@@ -174,8 +188,8 @@ class CodeSkill(Skill):
         system_ctx = self._load_code_prompt()
         prompt = self._build_requirement_prompt(project_id, req, stack)
 
-        response_text = self._call_llm(prompt, system_ctx, route="code_generation")
-        parsed = self._parse_json_response(
+        response_text = call_skill_llm(prompt, system_ctx, route="code_generation")
+        parsed = parse_skill_json(
             response_text,
             retry_prompt=prompt,
             retry_system=system_ctx,
@@ -223,8 +237,8 @@ class CodeSkill(Skill):
         system_ctx = self._load_code_prompt()
         prompt = self._build_fix_prompt(project_id, issue_data, req_details, existing_code)
 
-        response_text = self._call_llm(prompt, system_ctx, route="code_generation")
-        parsed = self._parse_json_response(
+        response_text = call_skill_llm(prompt, system_ctx, route="code_generation")
+        parsed = parse_skill_json(
             response_text,
             retry_prompt=prompt,
             retry_system=system_ctx,
@@ -266,8 +280,8 @@ class CodeSkill(Skill):
         system_ctx = self._load_code_prompt()
         prompt = self._build_test_prompt(project_id, req, stack)
 
-        response_text = self._call_llm(prompt, system_ctx, route="code_generation")
-        parsed = self._parse_json_response(
+        response_text = call_skill_llm(prompt, system_ctx, route="code_generation")
+        parsed = parse_skill_json(
             response_text,
             retry_prompt=prompt,
             retry_system=system_ctx,
@@ -446,50 +460,3 @@ class CodeSkill(Skill):
                         pass
         return result
 
-    def _call_llm(self, prompt: str, system_context: str, route: str = "code_generation") -> str:
-        from src.router import get_router
-        router = get_router()
-        result = router.route(
-            query=prompt,
-            conversation_history=[],
-            system_prompt=system_context,
-            force_route=route,
-        )
-        return result.content if not result.error else ""
-
-    def _parse_json_response(
-        self,
-        response_text: str,
-        retry_prompt: str = "",
-        retry_system: str = "",
-        retry_route: str = "code_generation",
-    ) -> dict:
-        """Strip markdown fences and parse JSON. Retry once on failure."""
-
-        def _try_parse(text: str) -> Optional[dict]:
-            text = text.strip()
-            if text.startswith("```"):
-                text = re.sub(r"^```(?:json)?\n?", "", text)
-                text = re.sub(r"\n?```$", "", text)
-                text = text.strip()
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                return None
-
-        parsed = _try_parse(response_text)
-        if parsed is not None:
-            return parsed
-
-        if retry_prompt:
-            retry_text = self._call_llm(
-                f"Your previous response was not valid JSON. "
-                f"Return ONLY a JSON object, no markdown wrapping.\n\n{retry_prompt}",
-                retry_system,
-                route=retry_route,
-            )
-            parsed = _try_parse(retry_text)
-            if parsed is not None:
-                return parsed
-
-        return {"error": "Could not parse LLM response as JSON", "raw": response_text[:500]}

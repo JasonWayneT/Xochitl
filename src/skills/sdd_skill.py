@@ -8,10 +8,15 @@ from typing import Optional
 
 from src.skills.base import Skill
 from src.skills._yaml_helpers import yaml_load, yaml_dump
-
+from src.skills._skill_helpers import (
+    PROJECTS_DIR as _PROJECTS_DIR,
+    read_project_meta,
+    write_project_meta,
+    call_skill_llm,
+    parse_skill_json,
+)
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
-_PROJECTS_DIR = _PROJECT_ROOT / "projects"
 _SDD_DIR = _PROJECT_ROOT / ".sdd"
 
 _SDD_KEYWORDS = [
@@ -130,8 +135,8 @@ class SDDSkill(Skill):
             f"Output ONLY JSON, no markdown wrapping."
         )
 
-        response_text = self._call_llm(prompt, system_ctx, route="bmad_complex")
-        parsed = self._parse_json_response(
+        response_text = call_skill_llm(prompt, system_ctx, route="bmad_complex")
+        parsed = parse_skill_json(
             response_text,
             retry_prompt=prompt,
             retry_system=system_ctx,
@@ -155,11 +160,11 @@ class SDDSkill(Skill):
         self._init_traceability(project_id, requirements)
 
         # Update meta
-        meta = self._read_meta(project_id)
+        meta = read_project_meta(project_id)
         meta["specs_generated"] = True
         meta["stats"]["total_requirements"] = len(requirements)
         meta["last_worked"] = datetime.now().isoformat()
-        self._write_meta(project_id, meta)
+        write_project_meta(project_id, meta)
 
         lines = [f"Generated {len(requirements)} requirements in `specs/core-features.md`:"]
         for r in requirements[:8]:
@@ -170,7 +175,7 @@ class SDDSkill(Skill):
         return "\n".join(lines)
 
     def _build_spec_file_content(self, project_id: str, requirements: list[dict]) -> str:
-        meta = self._read_meta(project_id)
+        meta = read_project_meta(project_id)
         name = meta.get("name", project_id)
         today = datetime.now().strftime("%Y-%m-%d")
 
@@ -324,7 +329,8 @@ class SDDSkill(Skill):
 
         reqs = self.list_requirements(project_id)
         type_reqs = [r for r in reqs if f"-{req_type}-" in r["id"]]
-        next_num = len(type_reqs) + 1
+        nums = [int(m.group(1)) for r in type_reqs if (m := re.search(r'-(\d+)$', r["id"]))]
+        next_num = max(nums) + 1 if nums else 1
         req_id = f"FR-{req_type}-{next_num:03d}"
         today = datetime.now().strftime("%Y-%m-%d")
 
@@ -365,9 +371,9 @@ class SDDSkill(Skill):
         self._save_traceability(project_id, trace)
 
         # Update meta stats
-        meta = self._read_meta(project_id)
+        meta = read_project_meta(project_id)
         meta.setdefault("stats", {})["total_requirements"] = len(reqs) + 1
-        self._write_meta(project_id, meta)
+        write_project_meta(project_id, meta)
 
         return f"Created {req_id} in specs/core-features.md"
 
@@ -478,11 +484,11 @@ class SDDSkill(Skill):
         issue_path.write_text(yaml_dump(issue_data), encoding="utf-8")
 
         # Update meta
-        meta = self._read_meta(project_id)
+        meta = read_project_meta(project_id)
         meta.setdefault("stats", {})["open_issues"] = (
             meta["stats"].get("open_issues", 0) + 1
         )
-        self._write_meta(project_id, meta)
+        write_project_meta(project_id, meta)
 
         return f"Created {issue_id}: {issue_data['title']}\nFile: issues/open/{issue_id}.yml"
 
@@ -502,8 +508,8 @@ class SDDSkill(Skill):
             f"Output ONLY JSON, no markdown wrapping."
         )
 
-        response_text = self._call_llm(prompt, system_ctx, route="bmad_complex")
-        parsed = self._parse_json_response(
+        response_text = call_skill_llm(prompt, system_ctx, route="bmad_complex")
+        parsed = parse_skill_json(
             response_text,
             retry_prompt=prompt,
             retry_system=system_ctx,
@@ -536,10 +542,10 @@ class SDDSkill(Skill):
             issue_path.unlink()
 
             # Update meta
-            meta = self._read_meta(project_id)
+            meta = read_project_meta(project_id)
             open_count = meta.get("stats", {}).get("open_issues", 1)
             meta.setdefault("stats", {})["open_issues"] = max(0, open_count - 1)
-            self._write_meta(project_id, meta)
+            write_project_meta(project_id, meta)
 
             return f"Closed {issue_id} → issues/closed/{issue_id}.yml"
         except Exception as e:
@@ -570,9 +576,9 @@ class SDDSkill(Skill):
         # Update meta stats
         reqs = self.list_requirements(project_id)
         implemented = sum(1 for r in reqs if r["status"] == "implemented")
-        meta = self._read_meta(project_id)
+        meta = read_project_meta(project_id)
         meta.setdefault("stats", {})["implemented_requirements"] = implemented
-        self._write_meta(project_id, meta)
+        write_project_meta(project_id, meta)
 
     def _load_traceability(self, project_id: str) -> dict:
         trace_path = _PROJECTS_DIR / project_id / "specs" / "traceability.json"
@@ -595,7 +601,7 @@ class SDDSkill(Skill):
 
     def get_next_step_suggestion(self, project_id: str) -> str:
         """Return a natural next-step suggestion based on project state."""
-        meta = self._read_meta(project_id)
+        meta = read_project_meta(project_id)
         if not meta:
             return "Project not found."
         if not meta.get("bmad_complete"):
@@ -718,54 +724,6 @@ class SDDSkill(Skill):
             return prompt_path.read_text(encoding="utf-8")
         return ""
 
-    def _call_llm(self, prompt: str, system_context: str, route: str = "bmad_complex") -> str:
-        from src.router import get_router
-        router = get_router()
-        result = router.route(
-            query=prompt,
-            conversation_history=[],
-            system_prompt=system_context,
-            force_route=route,
-        )
-        return result.content if not result.error else ""
-
-    def _parse_json_response(
-        self,
-        response_text: str,
-        retry_prompt: str = "",
-        retry_system: str = "",
-        retry_route: str = "bmad_complex",
-    ) -> dict:
-        """Strip markdown fences and parse JSON. Retry once on failure."""
-
-        def _try_parse(text: str) -> Optional[dict]:
-            text = text.strip()
-            if text.startswith("```"):
-                text = re.sub(r"^```(?:json)?\n?", "", text)
-                text = re.sub(r"\n?```$", "", text)
-                text = text.strip()
-            try:
-                return json.loads(text)
-            except json.JSONDecodeError:
-                return None
-
-        parsed = _try_parse(response_text)
-        if parsed is not None:
-            return parsed
-
-        if retry_prompt:
-            retry_text = self._call_llm(
-                f"Your previous response was not valid JSON. "
-                f"Return ONLY a JSON object, no markdown wrapping.\n\n{retry_prompt}",
-                retry_system,
-                route=retry_route,
-            )
-            parsed = _try_parse(retry_text)
-            if parsed is not None:
-                return parsed
-
-        return {"error": "Could not parse LLM response as JSON", "raw": response_text[:500]}
-
     # ── Spec parsing helpers ──────────────────────────────────────────────────
 
     def _extract_field(self, body: str, field_name: str) -> str:
@@ -822,18 +780,3 @@ class SDDSkill(Skill):
         except Exception:
             pass
 
-    # ── Meta helpers ──────────────────────────────────────────────────────────
-
-    def _read_meta(self, project_id: str) -> dict:
-        meta_path = _PROJECTS_DIR / project_id / ".project-meta.yml"
-        if not meta_path.exists():
-            return {}
-        try:
-            return yaml_load(meta_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return {}
-
-    def _write_meta(self, project_id: str, meta: dict) -> None:
-        meta_path = _PROJECTS_DIR / project_id / ".project-meta.yml"
-        meta_path.parent.mkdir(parents=True, exist_ok=True)
-        meta_path.write_text(yaml_dump(meta), encoding="utf-8")
