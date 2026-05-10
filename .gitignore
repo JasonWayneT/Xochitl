@@ -45,3 +45,11 @@ desktop.ini
 # Logs
 *.log
 audit.log
+
+# Temporary & Research Bloat
+Inspiration/
+scratch/
+_bmad-output/
+.agent/
+.agents/
+.claude/worktrees/
