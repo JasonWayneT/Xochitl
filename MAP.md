@@ -29,6 +29,7 @@
 - **Goal:** Enable agent-agnostic fast-onboarding via this map.
 
 ## 5. Quick Links
+- [Capabilities Manifest](CAPABILITIES.md)
 - [Requirements Registry](docs/spec/02-requirements-registry.md)
 - [Traceability Matrix](docs/spec/06-traceability/traceability-matrix.md)
 - [System Prompt Template](prompts/system_xochitl.txt)
