@@ -7,7 +7,8 @@
 # Personal Xochitl persona/config
 SOUL.md
 conversation.config.yaml
-.xochitl/
+.xochitl/*
+!.xochitl/skills/
 
 
 # Python
