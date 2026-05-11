@@ -52,5 +52,10 @@ Inspiration/
 scratch/
 _bmad-output/
 .agent/
-.agents/
+.agents*/
 .claude/worktrees/
+
+# Private Review & Logs
+*DEEP_DIVE.md
+decision_log.jsonl
+session_history.db
