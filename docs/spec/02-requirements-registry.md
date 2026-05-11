@@ -93,6 +93,7 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `FR-UI-001` | functional | P1 | implemented | TUI status bar shows live sub-task feed with elapsed timer during LLM reasoning | `AC-CR002-003` | `CR-002` | Rich Live display |
 | `FR-UI-002` | functional | P1 | implemented | Smart Ctrl-C: first press cancels active tool or clears input; second press within 1.2s exits | `AC-CR002-003` | `CR-002` | 2-stage exit |
 | `FR-UI-003` | functional | P2 | implemented | File paths in agent output are formatted as OSC 8 terminal hyperlinks | `AC-CR002-005` | `CR-002` | Windows Terminal / VS Code |
+| `FR-UI-004` | functional | P1 | implemented | Chat responses are rendered incrementally for plain-text turns, with markdown-safe full-render fallback | `AC-CR005-002`, `AC-CR005-003` | `CR-005` | Streaming UX |
 | `FR-ORCH-003` | functional | P0 | implemented | PreFlight Fact Injection: every system prompt includes [SYSTEM_FACTS] block with CWD, project, WIP, and platform | `AC-CR002-001` | `CR-002` | Prevents LLM hallucination |
 | `FR-ORCH-004` | functional | P0 | implemented | Provenance Tagging: history messages tagged [SOURCE: USER] vs [SOURCE: SYSTEM] to prevent role confusion | `AC-CR002-002` | `CR-002` | Via ContextManager |
 | `NFR-PERF-004` | non-functional | P1 | implemented | ContextManager enforces token budget at 75% of model limit, triggering compaction before overflow | `AC-CR002-004` | `CR-002` | Local: 6k, Cloud: 28k |
@@ -157,6 +158,9 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR003-003` | `FR-ORCH-007` | Natural confirmation | User says "go for it" / "sounds good" after a pending action | `_handle_action_confirmation` runs | The LLM micro-call classifies the response as "yes" and the action executes | accepted |
 | `AC-CR003-004` | `FR-ORCH-006` | Universal CM | Any `_handle_*` method assembles a system prompt | The method runs | It calls `cm.assemble_system_prompt()` — no direct `build_system_prompt()` call | accepted |
 | `AC-CR003-005` | `FR-ORCH-009` | Tool history | A skill executes via `<skill_call>` | `_clean_history()` is called | The tool turn appears as an assistant message prefixed `[Tool: SkillName]` | accepted |
+| `AC-CR005-001` | `FR-UI-001` | Non-hanging thinking UI | Chat is waiting on model/tool work | A turn takes more than 1 second | Flower animation continues updating with `thinking...` and a live working note; it does not appear frozen | implemented |
+| `AC-CR005-002` | `FR-UI-004` | Incremental response rendering | Assistant returns plain text | Xochitl prints the response | Output appears incrementally rather than as one final blob | implemented |
+| `AC-CR005-003` | `FR-UI-004` | Markdown safety | Assistant returns markdown-heavy content | Xochitl prints the response | Renderer falls back to full markdown print so formatting stays intact | implemented |
 
 | `AC-CR004-001` | `FR-ORCH-010` | Intent classification | A user sends a chat message | Xochitl processes the turn | The turn has a structured intent used by routing and tool selection | implemented |
 | `AC-CR004-002` | `FR-ORCH-011` | Read-only chain | User asks "help me understand this project" | Xochitl can inspect files | It performs bounded read-only exploration without asking for each read | implemented |

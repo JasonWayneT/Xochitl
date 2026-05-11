@@ -28,6 +28,7 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-UI-001` | `CR-002` | `CR-002` | `AC-CR002-003`, `AC-BUG-UI-002-A` | `TASK-CR002-004` | `src/chat.py` (_StatusContext, flower ✿❀ animation) | manual | implemented |
 | `FR-UI-002` | `CR-002` | `CR-002` | `AC-CR002-003` | `TASK-CR002-004` | `src/chat.py` (Ctrl-C handler) | manual | implemented |
 | `FR-UI-003` | `CR-002` | `CR-002` | `AC-CR002-005` | `TASK-CR002-004` | `src/chat.py` (_osc8_link) | manual | implemented |
+| `FR-UI-004` | `CR-005` | `CR-005` | `AC-CR005-002`, `AC-CR005-003` | `TASK-UI-007` | `src/chat.py` (`_stream_response`) | manual | implemented |
 | `FR-ORCH-003` | `CR-002` | `CR-002` | `AC-CR002-001` | `TASK-CR002-001`, `TASK-CR002-002` | `src/context_manager.py`, `src/router.py` | manual | implemented |
 | `FR-ORCH-004` | `CR-002` | `CR-002` | `AC-CR002-002` | `TASK-CR002-001`, `TASK-CR002-004` | `src/context_manager.py`, `src/chat.py` | manual | implemented |
 | `NFR-PERF-004` | `CR-002` | `CR-002` | `AC-CR002-004` | `TASK-CR002-001` | `src/context_manager.py` (ContextManager) | manual | implemented |

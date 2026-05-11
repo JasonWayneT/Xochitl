@@ -21,6 +21,7 @@ import json
 import os
 import re
 import signal
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -125,11 +126,14 @@ class _StatusContext:
     # Flower frames — mirrors the ✿ ❀ splash screen pattern
     _FLOWERS = ["✿", "❀", "✿", "❀"]
 
-    def __init__(self, label: str = "Thinking"):
+    def __init__(self, label: str = "thinking..."):
         self._label = label
+        self._note = "starting up"
         self._start = time.monotonic()
         self._live: Optional[Live] = None
         self._frame = 0
+        self._stop_event = threading.Event()
+        self._refresh_thread: Optional[threading.Thread] = None
 
     def _render(self) -> Text:
         elapsed = time.monotonic() - self._start
@@ -140,13 +144,21 @@ class _StatusContext:
         t.append("  ", style="")
         t.append(f"{flower} ", style="bold magenta")
         t.append(self._label, style="dim")
-        t.append(f"  ({elapsed:.1f}s)", style="dim")
+        t.append("  ", style="dim")
+        t.append(self._note, style="dim")
         return t
 
     def update(self, label: str) -> None:
-        self._label = label
+        self._label = "thinking..."
+        self._note = (label or "working").strip().lower()
         if self._live:
             self._live.update(self._render())
+
+    def _tick(self) -> None:
+        while not self._stop_event.is_set():
+            if self._live:
+                self._live.update(self._render())
+            time.sleep(0.12)
 
     def __enter__(self) -> "_StatusContext":
         if not _TERM_DUMB:
@@ -157,9 +169,16 @@ class _StatusContext:
                 transient=True,
             )
             self._live.__enter__()
+            self._stop_event.clear()
+            self._refresh_thread = threading.Thread(target=self._tick, daemon=True)
+            self._refresh_thread.start()
         return self
 
     def __exit__(self, *args) -> None:
+        self._stop_event.set()
+        if self._refresh_thread:
+            self._refresh_thread.join(timeout=0.3)
+            self._refresh_thread = None
         if self._live:
             self._live.__exit__(*args)
             self._live = None
@@ -370,26 +389,45 @@ class XochitlChat:
                     continue
 
                 # FR-UI-001: Live status tier — show current sub-task during processing
-                status_ctx = _StatusContext("Thinking")
+                status_ctx = _StatusContext("thinking...")
                 self._active_status = status_ctx
                 try:
                     with status_ctx:
-                        status_ctx.update("Classifying intent")
+                        status_ctx.update("getting oriented")
                         response = self.process_message(user_input, _status=status_ctx)
                 finally:
                     self._active_status = None
 
                 console.print(f"\n[bold]Xochitl[/bold]: ", end="")
-                try:
-                    console.print(Markdown(response))
-                except Exception:
-                    console.print(response)
+                self._stream_response(response)
                 console.print()
 
         except KeyboardInterrupt:
             pass
 
         console.print("[dim]Session ended.[/dim]")
+
+    def _stream_response(self, response: str) -> None:
+        """Render assistant output incrementally instead of as one large blob.
+
+        Keeps UX conversational and avoids the "hung then dump" effect.
+        """
+        # For markdown-heavy responses, fall back to rich markdown rendering.
+        md_markers = ("```", "\n#", "\n- ", "\n1. ", "|---", "</")
+        if any(marker in response for marker in md_markers):
+            try:
+                console.print(Markdown(response))
+                return
+            except Exception:
+                pass
+
+        # Stream plain responses by word to simulate live typing while staying readable.
+        words = response.split(" ")
+        for i, word in enumerate(words):
+            if i > 0:
+                console.print(" ", end="")
+            console.print(word, end="")
+            time.sleep(0.012)
 
     def process_message(self, user_input: str, _status: Optional["_StatusContext"] = None) -> str:
         """Process one user message and return Xochitl's response."""
@@ -413,7 +451,7 @@ class XochitlChat:
 
         # ── 3. Refresh BMAD and SDD context ──────────────────────────────────
         if _status:
-            _status.update("Refreshing context")
+            _status.update("refreshing context")
         from src.bmad import detect_bmad_project
         self.current_context["bmad_project"] = detect_bmad_project(Path.cwd())
 
@@ -444,27 +482,27 @@ class XochitlChat:
 
         # ── 5. Classify intent (fast keyword path for unambiguous cases) ──────
         if _status:
-            _status.update("Classifying intent")
+            _status.update("classifying request")
         intent = self._classify_intent(user_input)
         self.current_context["last_intent"] = intent
 
         # ── 6. Route: special handlers for file/task/research; agent loop for rest ──
         if _status:
-            _status.update(f"Handling: {intent['type'].replace('_', ' ')}")
+            _status.update(f"choosing path: {intent['type'].replace('_', ' ')}")
 
         if intent["type"] == "task_query":
             response = self._handle_task_query(user_input, cm)
         elif intent["type"] == "file_operation":
             if _status:
-                _status.update("Resolving file context")
+                _status.update("resolving file context")
             response = self._handle_file_operation(user_input, intent, cm)
         elif intent["type"] == "research":
             if _status:
-                _status.update("Researching")
+                _status.update("gathering references")
             response = self._handle_research(user_input, intent)
         elif intent.get("intent_type") == "exploration" and intent.get("context_scope") == "active_project":
             if _status:
-                _status.update("Exploring project")
+                _status.update("exploring project")
             response = self._handle_repo_exploration(user_input, cm)
         else:
             # ── Agent loop: LLM controls routing and skill dispatch ────────────
@@ -472,7 +510,7 @@ class XochitlChat:
             # bmad_workflow, new_project, sdd_workflow, issue_tracking,
             # code_generation_intent, orchestrator_query, action_request.
             if _status:
-                _status.update("Asking model")
+                _status.update("drafting response")
             response = self._agent_loop(user_input, cm, _status)
 
         response = self._maybe_offer_skill_creation(user_input, response)
@@ -524,7 +562,7 @@ class XochitlChat:
                     return self._stage_skill_call_plan(skill, params, user_input, visible)
 
                 if _status:
-                    _status.update(f"Running {skill_name}")
+                    _status.update(f"running skill: {skill_name}")
                 tool_result = skill.execute(user_input, self.current_context, params)
 
                 # Implements FR-ORCH-009 — persist tool turn in session history
