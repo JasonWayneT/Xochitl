@@ -2,20 +2,17 @@
 # Implements FR-TASK-003 (Bi-directional Notion sync — pull_and_sync() and sync_completed_to_notion())
 # Implements NFR-SYNC-001 (Local cache overrides sync conflicts — on_conflict defaults to 'pull'; 'keep' preserves local)
 
-import os
 import httpx
 from datetime import datetime, timezone
 from typing import Optional
 
-from dotenv import load_dotenv
+from src.secrets import get_secret
 
-load_dotenv()
-
-NOTION_API_KEY        = os.getenv("NOTION_API_KEY", "")
-NOTION_PROJECTS_DB_ID = os.getenv("NOTION_PROJECTS_DB_ID", "")
-NOTION_AREAS_DB_ID    = os.getenv("NOTION_AREAS_DB_ID", "")
-NOTION_TASKS_DB_ID    = os.getenv("NOTION_TASKS_DB_ID", "")
-NOTION_RESOURCES_DB_ID = os.getenv("NOTION_RESOURCES_DB_ID", "")
+NOTION_API_KEY         = get_secret("NOTION_API_KEY", "")
+NOTION_PROJECTS_DB_ID  = get_secret("NOTION_PROJECTS_DB_ID", "")
+NOTION_AREAS_DB_ID     = get_secret("NOTION_AREAS_DB_ID", "")
+NOTION_TASKS_DB_ID     = get_secret("NOTION_TASKS_DB_ID", "")
+NOTION_RESOURCES_DB_ID = get_secret("NOTION_RESOURCES_DB_ID", "")
 
 _NOTION_VERSION = "2022-06-28"
 _BASE = "https://api.notion.com/v1"

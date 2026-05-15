@@ -14,10 +14,6 @@ from rich.prompt import Prompt
 from rich.text import Text
 from rich.spinner import SPINNERS
 
-from dotenv import load_dotenv
-
-load_dotenv()
-
 # Flower blooming sequence — dot → sparkle → bud → full bloom → bud → sparkle
 SPINNERS["xochitl"] = {
     "interval": 180,
@@ -408,6 +404,77 @@ def projects_list():
         console.print(f"  [{p['priority'].upper()}] {p['name']} — {p.get('description','')[:60]}")
 
 
+# ── secrets ───────────────────────────────────────────────────────────────────
+
+@cli.group()
+def secrets():
+    """Manage secrets stored in the local DB (API keys, tokens, config)."""
+    pass
+
+
+@secrets.command("set")
+@click.argument("key")
+@click.argument("value")
+def secrets_set(key, value):
+    """Store a secret: xochitl secrets set KEY VALUE"""
+    from src.secrets import set_secret
+    set_secret(key, value)
+    console.print(f"[green]Set:[/green] {key}")
+
+
+@secrets.command("get")
+@click.argument("key")
+def secrets_get(key):
+    """Print the value of a stored secret."""
+    from src.secrets import get_secret
+    val = get_secret(key)
+    if val:
+        console.print(val)
+    else:
+        console.print(f"[yellow]No secret found for '{key}'.[/yellow]")
+
+
+@secrets.command("list")
+def secrets_list():
+    """List all stored secret keys (values are hidden)."""
+    from src.secrets import list_secrets
+    rows = list_secrets()
+    if not rows:
+        console.print("[yellow]No secrets stored. Run 'xochitl secrets migrate' to import from .env[/yellow]")
+        return
+    console.print(Panel.fit("[bold]Stored Secrets[/bold]", border_style="cyan"))
+    for r in rows:
+        console.print(f"  {r['key']:<35} [dim]updated {r['updated_at']}[/dim]")
+
+
+@secrets.command("delete")
+@click.argument("key")
+def secrets_delete(key):
+    """Remove a secret from the DB."""
+    from src.secrets import delete_secret
+    if delete_secret(key):
+        console.print(f"[green]Deleted:[/green] {key}")
+    else:
+        console.print(f"[yellow]Not found:[/yellow] {key}")
+
+
+@secrets.command("migrate")
+@click.option("--env-file", default=".env", show_default=True, help="Path to .env file to import.")
+def secrets_migrate(env_file):
+    """Import all KEY=VALUE pairs from a .env file into the DB."""
+    from pathlib import Path
+    from src.secrets import migrate_from_env
+    path = Path(env_file)
+    migrated = migrate_from_env(path)
+    if not migrated:
+        console.print(f"[yellow]Nothing imported — '{env_file}' not found or empty.[/yellow]")
+        return
+    console.print(f"[green]Migrated {len(migrated)} secrets from {env_file}:[/green]")
+    for k in migrated:
+        console.print(f"  {k}")
+    console.print("\n[dim]You can now delete your .env file — secrets live in the DB.[/dim]")
+
+
 # ── models ───────────────────────────────────────────────────────────────────
 
 @cli.command()
@@ -441,8 +508,8 @@ def models():
                 marker = " [cyan]<-- active[/cyan]" if LOCAL_MODEL and m == LOCAL_MODEL else ""
                 console.print(f"    {m}{marker}")
             if not LOCAL_MODEL:
-                console.print(f"\n  [yellow]LOCAL_MODEL not set in .env — will auto-use: {found[0]}[/yellow]")
-                console.print(f"  [dim]Add LOCAL_MODEL={found[0]} to your .env to pin it.[/dim]")
+                console.print(f"\n  [yellow]LOCAL_MODEL not set — will auto-use: {found[0]}[/yellow]")
+                console.print(f"  [dim]Run: xochitl secrets set LOCAL_MODEL {found[0]}[/dim]")
         else:
             console.print("  [yellow]No models found. Load a model in LM Studio first.[/yellow]")
 

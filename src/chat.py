@@ -317,7 +317,8 @@ class XochitlChat:
             from src.skills.code_skill import CodeSkill
             from src.skills.notion_skill import NotionSkill
             from src.skills.orchestrator_skill import OrchestratorSkill
-            self._builtin_skills = [BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill()]
+            from src.skills.web_lookup_skill import WebLookupSkill
+            self._builtin_skills = [BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill(), WebLookupSkill()]
 
         from src.skills.dynamic_skill import load_dynamic_skills
         return (self._builtin_skills or []) + load_dynamic_skills(self.current_project)

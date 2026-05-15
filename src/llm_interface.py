@@ -1,35 +1,30 @@
 """Local Ollama + cloud Gemini/Anthropic LLM calls with tiered routing and fallback."""
 # Implements NFR-SEC-001 (Local execution only for Tiers 0–3 — Ollama runs on-device; cloud only for Tier 4+)
 
-import os
 import time
 import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Generator
 
-try:
-    from dotenv import load_dotenv
-except ModuleNotFoundError:
-    def load_dotenv() -> None:
-        return None
+from src.secrets import get_secret
 
-load_dotenv()
+# ── Config (DB-backed secrets, env var fallback) ──────────────────────────────
 
-# ── Config from .env ──────────────────────────────────────────────────────────
+LOCAL_MODEL          = get_secret("LOCAL_MODEL", "gemma4-e4b")
+LOCAL_THINKING_MODEL = get_secret("LOCAL_THINKING_MODEL", "gemma-4-26B-A4B-it-GGUF:UD-IQ4_X")
+LOCAL_CODING_MODEL   = get_secret("LOCAL_CODING_MODEL", "qwen2.5-coder:7b-instruct-q8_0")
+ROUTER_MODEL         = get_secret("ROUTER_MODEL", "gemma2:2b")
+OLLAMA_URL           = get_secret("OLLAMA_URL", "http://localhost:11434")
+LOCAL_PROVIDER       = get_secret("LOCAL_PROVIDER", "ollama")
+LM_STUDIO_URL        = get_secret("LM_STUDIO_URL", "http://localhost:1234/v1")
 
-LOCAL_MODEL     = os.getenv("LOCAL_MODEL", "gemma4-e4b")
-LOCAL_THINKING_MODEL = os.getenv("LOCAL_THINKING_MODEL", "gemma-4-26B-A4B-it-GGUF:UD-IQ4_X")
-LOCAL_CODING_MODEL   = os.getenv("LOCAL_CODING_MODEL", "qwen2.5-coder:7b-instruct-q8_0")
-ROUTER_MODEL    = os.getenv("ROUTER_MODEL", "gemma2:2b")
-OLLAMA_URL      = os.getenv("OLLAMA_URL", "http://localhost:11434")
-
-CLOUD_PROVIDER  = os.getenv("CLOUD_PROVIDER", "gemini")         # "gemini" or "anthropic"
-CLOUD_MODEL     = os.getenv("CLOUD_MODEL", "gemini-1.5-pro")
-CLOUD_MODEL_PRO = os.getenv("CLOUD_MODEL_PRO", "gemini-1.5-pro")
-CLOUD_MODEL_FLASH = os.getenv("CLOUD_MODEL_FLASH", "gemini-2.0-flash")
-GEMINI_API_KEY  = os.getenv("GEMINI_API_KEY", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+CLOUD_PROVIDER    = get_secret("CLOUD_PROVIDER", "gemini")
+CLOUD_MODEL       = get_secret("CLOUD_MODEL", "gemini-1.5-pro")
+CLOUD_MODEL_PRO   = get_secret("CLOUD_MODEL_PRO", "gemini-1.5-pro")
+CLOUD_MODEL_FLASH = get_secret("CLOUD_MODEL_FLASH", "gemini-2.0-flash")
+GEMINI_API_KEY    = get_secret("GEMINI_API_KEY", "")
+ANTHROPIC_API_KEY = get_secret("ANTHROPIC_API_KEY", "")
 
 
 
@@ -77,6 +72,7 @@ def call_ollama(
     system: str = "",
     model: str = LOCAL_MODEL,
     tools: list[dict] = None,
+    temperature: float = 0.7,
 ) -> LLMResponse:
     try:
         import ollama
@@ -84,6 +80,7 @@ def call_ollama(
         kwargs = {
             "model": model,
             "messages": [{"role": "system", "content": system}, *messages] if system else messages,
+            "options": {"temperature": temperature},
         }
         if tools:
             kwargs["tools"] = tools
@@ -160,10 +157,11 @@ def call_local(
     system: str = "",
     model: str = "",
     tools: list[dict] = None,
+    temperature: float = 0.7,
 ) -> LLMResponse:
     ensure_ollama_running()
     m = model or LOCAL_MODEL
-    return call_ollama(messages, system=system, model=m, tools=tools)
+    return call_ollama(messages, system=system, model=m, tools=tools, temperature=temperature)
 
 
 def ping_local() -> bool:
@@ -186,6 +184,7 @@ def call_gemini(
     model: str = CLOUD_MODEL,
     max_tokens: int = 4000,
     tools: list[dict] = None,
+    temperature: float = 0.7,
 ) -> LLMResponse:
     if not GEMINI_API_KEY:
         return LLMResponse(content="", route=RouteType.CLOUD, error="GEMINI_API_KEY not set")
@@ -202,7 +201,7 @@ def call_gemini(
             full_messages.append({"role": "system", "content": system})
         full_messages.extend(messages)
 
-        kwargs = {"model": model, "messages": full_messages, "max_tokens": max_tokens}
+        kwargs = {"model": model, "messages": full_messages, "max_tokens": max_tokens, "temperature": temperature}
         if tools:
             kwargs["tools"] = tools
 
@@ -240,6 +239,7 @@ def call_anthropic(
     model: str = "claude-sonnet-4-20250514",
     max_tokens: int = 4000,
     tools: list[dict] = None,
+    temperature: float = 0.7,
 ) -> LLMResponse:
     if not ANTHROPIC_API_KEY:
         return LLMResponse(content="", route=RouteType.CLOUD, error="ANTHROPIC_API_KEY not set")
@@ -247,7 +247,7 @@ def call_anthropic(
     try:
         import anthropic
         client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-        kwargs = {"model": model, "max_tokens": max_tokens, "messages": messages}
+        kwargs = {"model": model, "max_tokens": max_tokens, "messages": messages, "temperature": temperature}
         if system:
             kwargs["system"] = system
         if tools:
@@ -282,11 +282,12 @@ def call_cloud(
     model: str = "",
     max_tokens: int = 4000,
     tools: list[dict] = None,
+    temperature: float = 0.7,
 ) -> LLMResponse:
     m = model or CLOUD_MODEL
     if CLOUD_PROVIDER == "anthropic":
-        return call_anthropic(messages, system=system, model=m, max_tokens=max_tokens, tools=tools)
-    return call_gemini(messages, system=system, model=m, max_tokens=max_tokens, tools=tools)
+        return call_anthropic(messages, system=system, model=m, max_tokens=max_tokens, tools=tools, temperature=temperature)
+    return call_gemini(messages, system=system, model=m, max_tokens=max_tokens, tools=tools, temperature=temperature)
 
 
 # ── Retry with exponential backoff ────────────────────────────────────────────

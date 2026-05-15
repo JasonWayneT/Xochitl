@@ -14,6 +14,7 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `NFR-CORE-002` | `BMAD-SRC-001` | TBD | `AC-CORE-006` | TBD | `src/database.py`, `src/task_manager.py` | `TEST-CORE-006` | accepted |
 | `FR-API-001` | `BMAD-SRC-001` | TBD | `AC-API-001` | TBD | `src/cli.py`, `src/notion_sync.py` | `TEST-API-001` | accepted |
 | `FR-API-002` | `BMAD-SRC-001` | TBD | `AC-API-002` | TBD | `src/cli.py`, `src/notion_sync.py` | `TEST-API-002` | accepted |
+| `FR-API-003` | `CR-006` | `CR-006` | `AC-CR006-001`, `AC-CR006-002` | `TASK-API-006`, `TASK-ORCH-006` | `src/skills/web_lookup_skill.py`, `src/chat.py` | manual | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |

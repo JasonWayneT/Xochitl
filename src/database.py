@@ -116,6 +116,13 @@ def init_db() -> None:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_used_at TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS secrets (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
         """)
 
 
@@ -475,3 +482,27 @@ def audit(conn: sqlite3.Connection, operation: str, path: str = None, details: s
         "INSERT INTO audit_log (operation, path, details) VALUES (?,?,?)",
         (operation, path, details)
     )
+
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+
+def get_secret_db(conn: sqlite3.Connection, key: str) -> Optional[str]:
+    row = conn.execute("SELECT value FROM secrets WHERE key=?", (key,)).fetchone()
+    return row[0] if row else None
+
+
+def set_secret_db(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute("""
+        INSERT INTO secrets (key, value)
+        VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=CURRENT_TIMESTAMP
+    """, (key, value))
+
+
+def delete_secret_db(conn: sqlite3.Connection, key: str) -> bool:
+    cursor = conn.execute("DELETE FROM secrets WHERE key=?", (key,))
+    return cursor.rowcount > 0
+
+
+def list_secrets_db(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute("SELECT key, updated_at FROM secrets ORDER BY key").fetchall()
