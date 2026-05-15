@@ -60,6 +60,7 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `FR-API-001` | functional | P1 | accepted | `xochitl sync` pushes completed tasks to Notion using PARA methodology | `AC-API-001` | `BMAD-SRC-001` | |
 | `FR-API-002` | functional | P1 | accepted | `xochitl pull` fetches the latest tasks from Notion and updates the local queue | `AC-API-002` | `BMAD-SRC-001` | |
 | `FR-API-003` | functional | P1 | implemented | Xochitl can perform internet lookup through a web-search skill for live external information requests (for example weather), without requiring a dedicated weather API | `AC-CR006-001`, `AC-CR006-002` | `CR-006` | WebLookupSkill |
+| `FR-API-004` | functional | P1 | implemented | Xochitl can answer weather requests through a no-key structured weather provider before falling back to generic web lookup | `AC-CR007-001`, `AC-CR007-002`, `AC-CR007-003` | `CR-007` | WeatherSkill / Open-Meteo |
 | `INT-API-001` | integration | P0 | accepted | All Notion calls go through `src/notion_sync.py` using the `notion-client` library | `AC-API-003` | `BMAD-SRC-001` | |
 
 ### Data — SQLite and ChromaDB
@@ -164,6 +165,11 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR005-003` | `FR-UI-004` | Markdown safety | Assistant returns markdown-heavy content | Xochitl prints the response | Renderer falls back to full markdown print so formatting stays intact | implemented |
 | `AC-CR006-001` | `FR-API-003` | Weather via internet | User asks for weather in a city | Xochitl routes to web lookup skill | Xochitl returns a summary from public web results without using a dedicated weather API | implemented |
 | `AC-CR006-002` | `FR-API-003` | General live lookup | User asks for current online info | Skill runs | Xochitl returns concise source-backed snippets from fetched pages | implemented |
+| `AC-BUG-API-001` | `FR-API-003` | Weather result redirect regression | DuckDuckGo returns weather links as HTML-escaped redirect URLs | WebLookupSkill parses and fetches results | Xochitl normalizes to real destination URLs and returns fetched text or search snippets instead of the "found links" failure | implemented |
+| `AC-CR007-001` | `FR-API-004` | Current weather | User asks for weather in a city | Xochitl routes to WeatherSkill | Xochitl returns current conditions, feels-like temperature, wind, humidity, precipitation, and today's high/low from Open-Meteo | implemented |
+| `AC-CR007-002` | `FR-API-004` | Location geocoding | User provides a city/state or city/country location | WeatherSkill runs | The skill resolves the location through Open-Meteo geocoding and uses latitude/longitude for forecast lookup | implemented |
+| `AC-CR007-003` | `FR-API-004` | No API key required | Xochitl is run without weather API secrets | User asks for weather | Weather lookup succeeds without reading environment API keys | implemented |
+| `AC-CR007-004` | `FR-API-004`, `DATA-DATA-004` | Default weather location | User asks for weather without a specific location and a global weather-location preference exists | WeatherSkill runs | Xochitl uses the stored default geographic context before asking for clarification | implemented |
 
 | `AC-CR004-001` | `FR-ORCH-010` | Intent classification | A user sends a chat message | Xochitl processes the turn | The turn has a structured intent used by routing and tool selection | implemented |
 | `AC-CR004-002` | `FR-ORCH-011` | Read-only chain | User asks "help me understand this project" | Xochitl can inspect files | It performs bounded read-only exploration without asking for each read | implemented |

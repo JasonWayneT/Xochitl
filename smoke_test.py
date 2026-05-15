@@ -389,6 +389,145 @@ def t_bmad_scoring():
 test("BMADSkill.can_handle: build=high, plan-in-context=high, unrelated=0", t_bmad_scoring)
 
 
+# -- 25. WebLookupSkill DuckDuckGo redirect/snippet regression --
+def t_web_lookup_redirect_snippet():
+    from src.skills import web_lookup_skill as mod
+    from src.skills.web_lookup_skill import WebLookupSkill
+
+    html = """
+    <div class="result">
+      <div class="result__body">
+        <a class="result__a" href="/l/?uddg=https%3A%2F%2Fforecast.weather.gov%2FMapClick.php%3Fsite%3DSGX%26textField1%3D33.1192%26textField2%3D-117.086&amp;rut=abc">Escondido Weather</a>
+        <div class="result__snippet">Sunny, high near 72. West wind around 10 mph.</div>
+      </div>
+    </div>
+    """
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self, *args):
+            return html.encode("utf-8")
+
+    original_urlopen = mod.urlopen
+    try:
+        mod.urlopen = lambda *args, **kwargs: FakeResponse()
+        links = WebLookupSkill()._search("weather today in Escondido, CA")
+    finally:
+        mod.urlopen = original_urlopen
+
+    assert links, "Expected parsed search result"
+    title, url, snippet = links[0]
+    assert title == "Escondido Weather"
+    assert url.startswith("https://forecast.weather.gov/MapClick.php?site=SGX"), url
+    assert "Sunny, high near 72" in snippet
+test("WebLookupSkill: normalizes DDG redirects and keeps snippets", t_web_lookup_redirect_snippet)
+
+
+# -- 26. WeatherSkill Open-Meteo geocode + forecast regression --
+def t_weather_skill_open_meteo():
+    from src.skills import weather_skill as mod
+    from src.skills.weather_skill import WeatherSkill
+
+    geocode = {
+        "results": [{
+            "name": "Escondido",
+            "admin1": "California",
+            "country": "United States",
+            "latitude": 33.1192,
+            "longitude": -117.0864,
+        }]
+    }
+    forecast = {
+        "current": {
+            "temperature_2m": 72.4,
+            "relative_humidity_2m": 45,
+            "apparent_temperature": 71.9,
+            "precipitation": 0.0,
+            "weather_code": 1,
+            "cloud_cover": 12,
+            "wind_speed_10m": 6.2,
+            "wind_direction_10m": 250,
+            "wind_gusts_10m": 14.1,
+        },
+        "current_units": {
+            "temperature_2m": "F",
+            "apparent_temperature": "F",
+            "precipitation": "inch",
+            "wind_speed_10m": "mph",
+        },
+        "daily": {
+            "weather_code": [1],
+            "temperature_2m_max": [78.2],
+            "temperature_2m_min": [54.7],
+            "precipitation_probability_max": [5],
+        },
+        "daily_units": {
+            "temperature_2m_max": "F",
+            "temperature_2m_min": "F",
+        },
+    }
+
+    class FakeResponse:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def read(self, *args):
+            return json.dumps(self.payload).encode("utf-8")
+
+    def fake_urlopen(req, timeout=8):
+        url = req.full_url
+        if "geocoding-api.open-meteo.com" in url:
+            if "Escondido%2C+CA" in url:
+                return FakeResponse({"results": []})
+            assert "Escondido+California" in url, url
+            return FakeResponse(geocode)
+        if "api.open-meteo.com" in url:
+            return FakeResponse(forecast)
+        raise AssertionError(f"Unexpected URL: {url}")
+
+    original_urlopen = mod.urlopen
+    try:
+        mod.urlopen = fake_urlopen
+        ctx = {}
+        result = WeatherSkill().execute("what is the weather today in Escondido, CA", ctx, {})
+    finally:
+        mod.urlopen = original_urlopen
+
+    assert ctx["last_skill_success"] is True
+    assert "Weather for Escondido, California, United States" in result
+    assert "72.4F" in result
+    assert "high 78.2F, low 54.7F" in result
+    assert "Source: Open-Meteo" in result
+test("WeatherSkill: Open-Meteo geocode + forecast formatting", t_weather_skill_open_meteo)
+
+
+def t_weather_skill_default_location_preference():
+    from src.skills.weather_skill import WeatherSkill
+
+    original_default = WeatherSkill._default_location_from_preferences
+    try:
+        WeatherSkill._default_location_from_preferences = staticmethod(lambda query: "San Diego County, California")
+        location = WeatherSkill()._extract_location("weather today")
+        assert location == "", f"Expected no explicit location, got {location!r}"
+        resolved = WeatherSkill._default_location_from_preferences("weather today")
+    finally:
+        WeatherSkill._default_location_from_preferences = original_default
+
+    assert resolved == "San Diego County, California"
+test("WeatherSkill: falls back to default location preference", t_weather_skill_default_location_preference)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

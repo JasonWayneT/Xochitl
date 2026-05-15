@@ -46,6 +46,7 @@ desktop.ini
 # Logs
 *.log
 audit.log
+.sdd/logs/web_lookup.log
 
 # Temporary & Research Bloat
 Inspiration/

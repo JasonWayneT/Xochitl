@@ -30,6 +30,7 @@ skill that performs public web search and summarizes fetched results.
 |---|---|---|---|
 | `TASK-API-006` | `FR-API-003` | Add `WebLookupSkill` with web search + fetch + summarize behavior. | Implemented in `src/skills/web_lookup_skill.py`. |
 | `TASK-ORCH-006` | `FR-API-003` | Register web lookup skill in built-in skill manifest. | Implemented in `src/chat.py`. |
+| `TASK-BUG-API-001` | `FR-API-003`, `AC-BUG-API-001` | Fix DuckDuckGo redirect normalization and snippet fallback for weather results. | Implemented in `src/skills/web_lookup_skill.py`. |
 
 ## Verification Results
 
@@ -37,3 +38,12 @@ skill that performs public web search and summarizes fetched results.
 - Skill file and registration updated.
 - Local runtime tests were not executed here because Python launcher is unavailable in this environment.
 
+2026-05-11 regression update:
+- `BUG-API-001` recorded for weather lookup redirect parsing failure.
+- `WebLookupSkill` now unescapes and resolves DuckDuckGo redirect URLs before
+  fetches and keeps search-result snippets as a fallback when weather sites
+  block direct reads.
+- Verification passed: `smoke_test.py` (25 passed, including the new
+  `AC-BUG-API-001` regression), `end_to_end_test.py` (OK), and `py_compile`.
+- Manual live check for `weather today in Escondido, CA` returned public web
+  result snippets instead of the previous "found links" failure.

@@ -15,6 +15,7 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-API-001` | `BMAD-SRC-001` | TBD | `AC-API-001` | TBD | `src/cli.py`, `src/notion_sync.py` | `TEST-API-001` | accepted |
 | `FR-API-002` | `BMAD-SRC-001` | TBD | `AC-API-002` | TBD | `src/cli.py`, `src/notion_sync.py` | `TEST-API-002` | accepted |
 | `FR-API-003` | `CR-006` | `CR-006` | `AC-CR006-001`, `AC-CR006-002` | `TASK-API-006`, `TASK-ORCH-006` | `src/skills/web_lookup_skill.py`, `src/chat.py` | manual | implemented |
+| `FR-API-004` | `CR-007` | `CR-007` | `AC-CR007-001`, `AC-CR007-002`, `AC-CR007-003`, `AC-CR007-004` | `TASK-API-007`, `TASK-ORCH-007`, `TASK-TEST-007`, `TASK-PREF-007` | `src/skills/weather_skill.py`, `src/chat.py`, `smoke_test.py`, `src/database.py` preferences helpers | smoke + e2e + manual live lookup | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |
@@ -38,6 +39,7 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `BUG-CHAT-006` | session | `BUG-CHAT-006.md` | `AC-BUG-CHAT-006` | resolved | `src/context_manager.py` (guard top), `src/router.py` (CWD + regex) | manual | resolved |
 | `BUG-UI-002` | session | `BUG-UI-002.md` | `AC-BUG-UI-002-A`, `AC-BUG-UI-002-B` | resolved | `src/chat.py` (_StatusContext), `src/router.py` (_find_by_name) | manual | resolved |
 | `BUG-ORCH-007` | session | `BUG-ORCH-007.md` | `AC-BUG-ORCH-007` | resolved | `src/router.py` (_FORCE_LOCAL_CATEGORIES) | manual | resolved |
+| `BUG-API-001` | session | `BUG-API-001.md` | `AC-BUG-API-001` | `TASK-BUG-API-001` | `src/skills/web_lookup_skill.py` (_normalize_result_url, _search snippets), `smoke_test.py` | smoke + e2e + manual live lookup | resolved |
 | `FR-ORCH-005` | `CR-003` | `CR-003` | `AC-CR003-001`, `AC-CR003-002` | `TASK-CR003-001`, `TASK-CR003-002`, `TASK-CR003-003` | `src/skills/base.py` (tool_definition), all skill files, `src/context_manager.py` (SkillManifestEngine) | manual | implemented |
 | `FR-ORCH-006` | `CR-003` | `CR-003` | `AC-CR003-004` | `TASK-CR003-004` | `src/chat.py` (universal ContextManager in all _handle_* methods) | manual | implemented |
 | `FR-ORCH-007` | `CR-003` | `CR-003` | `AC-CR003-003` | `TASK-CR003-005` | `src/chat.py` (_handle_action_confirmation, _llm_classify_confirm) | manual | implemented |

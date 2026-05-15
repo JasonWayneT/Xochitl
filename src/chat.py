@@ -317,8 +317,9 @@ class XochitlChat:
             from src.skills.code_skill import CodeSkill
             from src.skills.notion_skill import NotionSkill
             from src.skills.orchestrator_skill import OrchestratorSkill
+            from src.skills.weather_skill import WeatherSkill
             from src.skills.web_lookup_skill import WebLookupSkill
-            self._builtin_skills = [BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill(), WebLookupSkill()]
+            self._builtin_skills = [BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill(), WeatherSkill(), WebLookupSkill()]
 
         from src.skills.dynamic_skill import load_dynamic_skills
         return (self._builtin_skills or []) + load_dynamic_skills(self.current_project)
@@ -491,7 +492,11 @@ class XochitlChat:
         if _status:
             _status.update(f"choosing path: {intent['type'].replace('_', ' ')}")
 
-        if intent["type"] == "task_query":
+        if "weather" in user_input.lower() or "forecast" in user_input.lower():
+            if _status:
+                _status.update("checking weather")
+            response = self._handle_weather(user_input)
+        elif intent["type"] == "task_query":
             response = self._handle_task_query(user_input, cm)
         elif intent["type"] == "file_operation":
             if _status:
@@ -516,6 +521,24 @@ class XochitlChat:
 
         response = self._maybe_offer_skill_creation(user_input, response)
         return self._record(response)
+
+    def _handle_web_lookup(self, user_input: str) -> str:
+        """Run read-only web lookup directly without extra confirmation."""
+        from src.skills.web_lookup_skill import WebLookupSkill
+        result = WebLookupSkill().execute(user_input, self.current_context, {"query": user_input})
+        self.current_context["last_skill_name"] = "WebLookupSkill"
+        return result
+
+    def _handle_weather(self, user_input: str) -> str:
+        """Run structured weather first, then generic web lookup if the API fails."""
+        from src.skills.weather_skill import WeatherSkill
+
+        result = WeatherSkill().execute(user_input, self.current_context, {"query": user_input})
+        self.current_context["last_skill_name"] = "WeatherSkill"
+        if self.current_context.get("last_skill_success") is False and self.current_context.get("weather_error_type") == "api":
+            fallback = self._handle_web_lookup(user_input)
+            return f"{result}\n\nI tried a web fallback too:\n{fallback}"
+        return result
 
     # ── Agent loop (FR-ORCH-008) ──────────────────────────────────────────────
 
@@ -651,6 +674,9 @@ class XochitlChat:
             self.current_context,
             pending.get("params", {}),
         )
+        self.current_context["last_skill_name"] = skill_name
+        if "last_skill_success" not in self.current_context:
+            self.current_context["last_skill_success"] = True
         self.session_history.append({
             "role": "tool",
             "skill": skill_name,
@@ -667,6 +693,11 @@ class XochitlChat:
         results in this session. It offers, but never forces, creation.
         """
         if self.current_context.get("skill_creation_offered"):
+            return response
+        if self.current_context.get("last_skill_success") is False:
+            return response
+        if self.current_context.get("last_skill_name"):
+            # A skill already handled this request; do not suggest creating another.
             return response
         if self.current_context.get("pending_action"):
             return response

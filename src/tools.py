@@ -338,6 +338,87 @@ TOOL_DEFINITIONS = [
             "required": ["project_id", "requirement_id"],
         },
     },
+    # ── Zettelkasten ──────────────────────────────────────────────────────────
+    {
+        "name": "enter_zettel_mode",
+        "description": "Enter zettelkasten mode. Scans vault, scaffolds any unformatted permanent notes, reports status.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "exit_zettel_mode",
+        "description": "Exit zettelkasten mode and return to normal Xochitl operation.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "zettel_status",
+        "description": "Show current vault status: fleeting note count, permanent note count, parked questions.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "scaffold_vault",
+        "description": "Create a fresh Zettelkasten vault structure (Fleeting/, Literature/, Permanent/, _System/) in the given directory, including Obsidian graph config.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "path": {"type": "string", "description": "Absolute path to the folder to scaffold. Defaults to VAULT_PATH in .env."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "new_literature_note",
+        "description": "Create a new literature note file for a source (book, article, etc.).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source": {"type": "string", "description": "Full source name, e.g. 'Value Proposition Design — Osterwalder'"},
+            },
+            "required": ["source"],
+        },
+    },
+    {
+        "name": "new_permanent_note",
+        "description": "Create a new scaffolded permanent note from a claim title.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "claim": {"type": "string", "description": "The claim as a full sentence — this becomes the note title and filename."},
+            },
+            "required": ["claim"],
+        },
+    },
+    {
+        "name": "process_note",
+        "description": "Run the full processing pipeline on a permanent note: word count, atomicity check, tag and link suggestions, serendipity.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "Filename in Permanent/ to process. Omit to process the most recently modified note."},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "process_fleeting",
+        "description": "Light triage of all notes in Fleeting/ — keep, discard, or promote to permanent.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "zettel_serendipity",
+        "description": "Scan recent permanent notes for non-obvious cross-domain connections and surface them.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "clarity_check",
+        "description": "Optional coaching pass on a permanent note — suggests 2-3 ways the writing could be sharper.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "filename": {"type": "string", "description": "Filename in Permanent/ to check."},
+            },
+            "required": ["filename"],
+        },
+    },
 ]
 
 
@@ -379,6 +460,17 @@ def dispatch(tool_name: str, tool_input: dict) -> str:
         "implement_requirement": _handle_implement_requirement,
         "fix_issue_code": _handle_fix_issue_code,
         "generate_tests": _handle_generate_tests,
+        # Zettelkasten
+        "enter_zettel_mode": _handle_enter_zettel,
+        "exit_zettel_mode": _handle_exit_zettel,
+        "zettel_status": _handle_zettel_status,
+        "scaffold_vault": _handle_scaffold_vault,
+        "new_literature_note": _handle_new_literature_note,
+        "new_permanent_note": _handle_new_permanent_note,
+        "process_note": _handle_process_note,
+        "process_fleeting": _handle_process_fleeting,
+        "zettel_serendipity": _handle_zettel_serendipity,
+        "clarity_check": _handle_clarity_check,
     }
 
     handler = handlers.get(tool_name)
@@ -653,3 +745,55 @@ def _handle_fix_issue_code(inp: dict) -> str:
 def _handle_generate_tests(inp: dict) -> str:
     from src.skills.code_skill import CodeSkill
     return CodeSkill().generate_tests(inp["project_id"], inp["requirement_id"])
+
+
+# ── Zettelkasten handlers ─────────────────────────────────────────────────────
+
+def _handle_enter_zettel(_: dict) -> str:
+    from src.skills.zettelkasten_skill import enter_mode
+    return enter_mode()
+
+
+def _handle_exit_zettel(_: dict) -> str:
+    from src.skills.zettelkasten_skill import exit_mode
+    return exit_mode()
+
+
+def _handle_zettel_status(_: dict) -> str:
+    from src.skills.zettelkasten_skill import vault_status
+    return vault_status()
+
+
+def _handle_scaffold_vault(inp: dict) -> str:
+    from src.skills.zettelkasten_scaffold import scaffold_vault
+    return scaffold_vault(inp.get("path"))
+
+
+def _handle_new_literature_note(inp: dict) -> str:
+    from src.skills.zettelkasten_skill import new_literature_note
+    return new_literature_note(inp["source"])
+
+
+def _handle_new_permanent_note(inp: dict) -> str:
+    from src.skills.zettelkasten_skill import new_permanent_note
+    return new_permanent_note(inp["claim"])
+
+
+def _handle_process_note(inp: dict) -> str:
+    from src.skills.zettelkasten_process import process_note
+    return process_note(inp.get("filename"))
+
+
+def _handle_process_fleeting(_: dict) -> str:
+    from src.skills.zettelkasten_process import process_fleeting
+    return process_fleeting()
+
+
+def _handle_zettel_serendipity(_: dict) -> str:
+    from src.skills.zettelkasten_process import serendipity_scan
+    return serendipity_scan()
+
+
+def _handle_clarity_check(inp: dict) -> str:
+    from src.skills.zettelkasten_process import clarity_check
+    return clarity_check(inp["filename"])
