@@ -22,6 +22,9 @@ _ENTER_PHRASES = [
     "zettel mode", "open the vault", "work on notes",
     "work on my notes", "let's do some zettles", "lets do some zettles",
     "work on zettelkasten", "open zettelkasten",
+    "initiate a zettle", "initiate zettel", "initiate a zettelkasten",
+    "start a zettel", "start zettel", "create a zettel", "set up a zettel",
+    "set up zettel", "new zettel", "new zettelkasten",
 ]
 _EXIT_PHRASES = [
     "exit zettel", "leave zettel", "done with zettles", "close the vault",
@@ -323,10 +326,28 @@ class ZettelkastenSkill(Skill):
         if "vault status" in q or ("what should i do" in q and _zettel_mode):
             return vault_status()
 
-        # ── Scaffold vault ────────────────────────────────────────────────────
-        if "scaffold vault" in q or "create vault" in q:
-            path_match = re.search(r"(?:scaffold|create) vault(?: (?:at|in|here))?\s*(.*)", q)
-            path = path_match.group(1).strip() if path_match and path_match.group(1).strip() else None
+        # ── Scaffold / initiate vault ─────────────────────────────────────────
+        _scaffold_triggers = (
+            "scaffold vault", "create vault", "initiate a zettle", "initiate zettel",
+            "initiate a zettelkasten", "start a zettel", "start zettel",
+            "create a zettel", "set up a zettel", "set up zettel",
+            "new zettel", "new zettelkasten",
+        )
+        if any(t in q for t in _scaffold_triggers):
+            # Extract a Windows or Unix absolute path from the original user input
+            path_match = re.search(
+                r'([A-Za-z]:[/\\][\w/\\\-. ]+|/(?:home|Users)/[\w/\-. ]+)',
+                user_input,
+            )
+            if not path_match:
+                # Fallback: anything after "at", "in", or "project at"
+                path_match = re.search(
+                    r'(?:scaffold|create|initiate|start|set up|new)'
+                    r'.*?(?:vault|zettel(?:kasten)?)'
+                    r'(?:\s+(?:at|in|project at|project in|here))?\s+([\w/\\\-. :]+)',
+                    user_input, re.IGNORECASE,
+                )
+            path = path_match.group(1).strip() if path_match else None
             return scaffold_vault(path)
 
         # ── New permanent note ────────────────────────────────────────────────
@@ -395,7 +416,9 @@ class ZettelkastenSkill(Skill):
             "name": "ZettelkastenSkill",
             "description": "Manages a Zettelkasten vault — mode switching, note creation, processing, and serendipity.",
             "when": (
-                "User says 'let's work on zettles', 'zettel mode', 'open the vault', "
+                "User mentions zettelkasten, zettel, or vault in any form — including "
+                "'initiate a zettle project', 'set up a zettelkasten', 'create a zettel vault', "
+                "'let's work on zettles', 'zettel mode', 'open the vault', "
                 "'new note', 'process my notes', 'what's connecting', or any vault/note command. "
                 "Also handles 'inbox' and 'what should I do' when in zettel mode."
             ),
