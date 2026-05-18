@@ -44,9 +44,10 @@ _DEFAULT: dict[str, Any] = {
         "research_time_limit_minutes": 5,
     },
     "models": {
-        "router_model": "gemma-4-e2b",
-        "reasoning_model": "gemma-4-26b",
-        "reranker_model": "qwen3-reranker-0.6b",
+        "router_model":    "gemma2:2b",
+        "reasoning_model": "phi4:14b-q4_K_M",
+        "coding_model":    "qwen2.5-coder:14b-instruct-q4_K_M",
+        "reranker_model":  "qwen3-reranker-0.6b",
         "embedding_model": "nomic-embed-text",
     },
     "authorized_directories": {

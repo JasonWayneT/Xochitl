@@ -11,17 +11,20 @@ from src.secrets import get_secret
 
 # ── Config (DB-backed secrets, env var fallback) ──────────────────────────────
 
-LOCAL_MODEL          = get_secret("LOCAL_MODEL", "gemma4-e4b")
-LOCAL_THINKING_MODEL = get_secret("LOCAL_THINKING_MODEL", "gemma-4-26B-A4B-it-GGUF:UD-IQ4_X")
-LOCAL_CODING_MODEL   = get_secret("LOCAL_CODING_MODEL", "qwen2.5-coder:7b-instruct-q8_0")
+# Defaults reflect the high-VRAM tier — model_manager.select_model() overrides these
+# dynamically at call time based on actual free VRAM. Change via secrets/env if needed.
+LOCAL_MODEL          = get_secret("LOCAL_MODEL",          "phi3.5:3.8b-mini-instruct-q8_0")
+LOCAL_THINKING_MODEL = get_secret("LOCAL_THINKING_MODEL", "phi4:14b-q4_K_M")
+LOCAL_CODING_MODEL   = get_secret("LOCAL_CODING_MODEL",   "qwen2.5-coder:14b-instruct-q4_K_M")
 ROUTER_MODEL         = get_secret("ROUTER_MODEL", "gemma2:2b")
 OLLAMA_URL           = get_secret("OLLAMA_URL", "http://localhost:11434")
 LOCAL_PROVIDER       = get_secret("LOCAL_PROVIDER", "ollama")
 LM_STUDIO_URL        = get_secret("LM_STUDIO_URL", "http://localhost:1234/v1")
 
 CLOUD_PROVIDER    = get_secret("CLOUD_PROVIDER", "gemini")
-CLOUD_MODEL       = get_secret("CLOUD_MODEL", "gemini-1.5-pro")
-CLOUD_MODEL_PRO   = get_secret("CLOUD_MODEL_PRO", "gemini-1.5-pro")
+# gemini-1.5-pro is retired/slower; gemini-2.0-flash matches it on most tasks at lower cost.
+CLOUD_MODEL       = get_secret("CLOUD_MODEL", "gemini-2.0-flash")
+CLOUD_MODEL_PRO   = get_secret("CLOUD_MODEL_PRO", "gemini-2.0-flash")
 CLOUD_MODEL_FLASH = get_secret("CLOUD_MODEL_FLASH", "gemini-2.0-flash")
 GEMINI_API_KEY    = get_secret("GEMINI_API_KEY", "")
 ANTHROPIC_API_KEY = get_secret("ANTHROPIC_API_KEY", "")

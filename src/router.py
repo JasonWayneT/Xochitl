@@ -14,10 +14,10 @@ from typing import Optional
 from src.llm_interface import (
     LLMResponse, RouteType,
     call_local, call_cloud, call_with_retry,
-    estimate_confidence, LOCAL_MODEL, LOCAL_THINKING_MODEL,
-    LOCAL_CODING_MODEL, CLOUD_MODEL,
+    estimate_confidence, CLOUD_MODEL,
     CLOUD_MODEL_PRO, CLOUD_MODEL_FLASH, ROUTER_MODEL
 )
+from src.model_manager import select_model
 from src.context_loader import build_system_prompt, compress_context
 from src.memory import read_memory
 from src.config import get_confidence_threshold
@@ -260,12 +260,14 @@ _LOCAL_CATEGORIES = {
     "memory_recall", "xochitl_help", "bmad_simple",
 }
 
-# Categories that prioritize specialized local models before cloud fallback
+# Categories that use specialized local models before cloud fallback.
+# Values are model_manager roles — select_model() resolves to the right
+# model tag at call time based on available VRAM.
 _LOCAL_SPECIALIZED_CATEGORIES = {
-    "code_generation": LOCAL_CODING_MODEL,
-    "code_review": LOCAL_CODING_MODEL,
-    "architecture_planning": LOCAL_THINKING_MODEL,
-    "bmad_complex": LOCAL_THINKING_MODEL,
+    "code_generation":    "coding",
+    "code_review":        "coding",
+    "architecture_planning": "thinking",
+    "bmad_complex":       "thinking",
 }
 
 _CLOUD_CATEGORIES = {
@@ -470,9 +472,12 @@ class TieredRouter:
                 )
 
         if category in _LOCAL_CATEGORIES:
-            return self._route_local(query, conversation_history, system_prompt, category=category)
+            return self._route_local(
+                query, conversation_history, system_prompt,
+                model=select_model("general"), category=category,
+            )
         elif category in _LOCAL_SPECIALIZED_CATEGORIES:
-            model = _LOCAL_SPECIALIZED_CATEGORIES[category]
+            model = select_model(_LOCAL_SPECIALIZED_CATEGORIES[category])
             return self._route_hybrid(
                 query, conversation_history, system_prompt,
                 category=category, current_task=current_task,
