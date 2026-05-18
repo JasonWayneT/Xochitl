@@ -32,13 +32,107 @@ _EXIT_PHRASES = [
 ]
 
 
+_VAULT_CONFIG = Path.home() / ".xochitl" / "vault_config.json"
+
+# Folders that signal a zettelkasten vault structure
+_VAULT_MARKERS = {"Fleeting", "Permanent", "Literature", "_System", ".obsidian"}
+
+# Well-known roots to scan for vaults (most specific first)
+_SCAN_ROOTS = [
+    Path.home() / "Desktop" / "Jason" / "Resource" / "Vaults",
+    Path.home() / "Documents" / "Vaults",
+    Path.home() / "Documents",
+    Path.home() / "Desktop",
+    Path.home(),
+]
+
+
+def _looks_like_vault(path: Path) -> bool:
+    """Return True if the folder contains at least 2 zettelkasten marker subdirs."""
+    if not path.is_dir():
+        return False
+    try:
+        children = {p.name for p in path.iterdir()}
+    except PermissionError:
+        return False
+    return len(_VAULT_MARKERS & children) >= 2
+
+
+def _scan_for_vaults(root: Path) -> list[Path]:
+    """Return immediate children of root that look like vaults."""
+    if not root.exists():
+        return []
+    try:
+        return [p for p in root.iterdir() if _looks_like_vault(p)]
+    except PermissionError:
+        return []
+
+
+def _load_saved_vault() -> Optional[Path]:
+    """Return the last vault path saved by Xochitl, if it still exists."""
+    try:
+        if _VAULT_CONFIG.exists():
+            data = json.loads(_VAULT_CONFIG.read_text(encoding="utf-8"))
+            p = Path(data.get("last_vault", ""))
+            if p and p.exists():
+                return p
+    except Exception:
+        pass
+    return None
+
+
+def _save_vault(path: Path) -> None:
+    """Persist vault path so Xochitl remembers it across sessions."""
+    try:
+        _VAULT_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+        existing: dict = {}
+        if _VAULT_CONFIG.exists():
+            existing = json.loads(_VAULT_CONFIG.read_text(encoding="utf-8"))
+        existing["last_vault"] = str(path)
+        # Keep a short history (most recent 5)
+        history: list[str] = existing.get("history", [])
+        if str(path) not in history:
+            history.insert(0, str(path))
+        existing["history"] = history[:5]
+        _VAULT_CONFIG.write_text(json.dumps(existing, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
 def _get_vault() -> Optional[Path]:
+    """Resolve vault path using a priority chain:
+
+    1. Already set this session (module-level _vault_path)
+    2. VAULT_PATH env var
+    3. Last vault saved by Xochitl (~/.xochitl/vault_config.json)
+    4. Auto-scan of well-known locations for vault-like folder structures
+    """
     global _vault_path
-    if _vault_path is None:
-        raw = os.environ.get("VAULT_PATH", "")
-        if raw:
-            _vault_path = Path(raw)
-    return _vault_path
+    if _vault_path is not None:
+        return _vault_path
+
+    # 1. Env var
+    raw = os.environ.get("VAULT_PATH", "").strip()
+    if raw:
+        _vault_path = Path(raw)
+        return _vault_path
+
+    # 2. Remembered from last session
+    saved = _load_saved_vault()
+    if saved:
+        _vault_path = saved
+        return _vault_path
+
+    # 3. Auto-scan known locations
+    for root in _SCAN_ROOTS:
+        found = _scan_for_vaults(root)
+        if found:
+            # Prefer the most recently modified vault
+            found.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            _vault_path = found[0]
+            return _vault_path
+
+    return None
 
 
 def is_zettel_mode() -> bool:
@@ -140,25 +234,40 @@ def _session_status(vault: Path) -> str:
 
 # ── Mode entry / exit ─────────────────────────────────────────────────────────
 
-def enter_mode() -> str:
-    global _zettel_mode, _session_start, _literature_touched, _notes_processed
+def enter_mode(path: Optional[str] = None) -> str:
+    global _zettel_mode, _vault_path, _session_start, _literature_touched, _notes_processed
     _zettel_mode = True
     _session_start = datetime.now(timezone.utc)
     _literature_touched = []
     _notes_processed = []
 
+    # Explicit path overrides everything — resolve and save it
+    if path:
+        _vault_path = Path(path).resolve()
+        _save_vault(_vault_path)
+
     vault = _get_vault()
     if vault is None:
+        # Offer to scaffold in cwd
+        cwd = Path.cwd()
         return (
             "[ZETTEL MODE ON]\n"
-            "No vault found. Set VAULT_PATH in .env or say 'scaffold vault here' "
-            "to create one in the current directory."
+            f"No vault found. I checked your known Vaults folders and didn't find "
+            f"a zettelkasten structure.\n\n"
+            f"Options:\n"
+            f"  • Say 'scaffold vault here' → create one in {cwd}\n"
+            f"  • Say 'scaffold vault at [path]' → create one at a specific location\n"
+            f"  • Set VAULT_PATH in .env to always point here"
         )
+
+    # Save so next session finds it automatically
+    _save_vault(vault)
 
     scaffolded = _scan_and_scaffold(vault)
     status = _session_status(vault)
     scaffold_note = f" Scaffolded {scaffolded} unformatted note{'s' if scaffolded != 1 else ''}." if scaffolded else ""
-    return f"[ZETTEL MODE]{scaffold_note} {status}"
+    discovered = "" if os.environ.get("VAULT_PATH") else f" (auto-discovered: {vault})"
+    return f"[ZETTEL MODE]{scaffold_note}{discovered}\n{status}"
 
 
 def exit_mode() -> str:
@@ -268,6 +377,60 @@ status: seedling
     return f"Created Permanent/{note_file.name} — open it in Obsidian and write the body."
 
 
+def _extract_path_hint(user_input: str) -> Optional[str]:
+    """Pull a vault path from a natural-language message.
+
+    Handles:
+      - Absolute Windows/Unix paths   → "at C:\\Vaults\\Vault-001"
+      - "in this folder" / "here"     → cwd
+      - "in [folder name]"            → scan known roots for that name
+      - Named vault in history        → matched by partial name
+    Returns None if nothing useful found (caller uses auto-detect).
+    """
+    # 1. Explicit absolute path in the message
+    m = re.search(r'([A-Za-z]:[/\\][\w/\\\-. ]+|/(?:home|Users)/[\w/\-. ]+)', user_input)
+    if m:
+        return m.group(1).strip()
+
+    q = user_input.lower()
+
+    # 2. "here" / "this folder" / "current folder" → cwd
+    if re.search(r'\b(here|this folder|this directory|current folder|current directory)\b', q):
+        return str(Path.cwd())
+
+    # 3. "in [name]" / "at [name]" — try to find a matching vault in known roots
+    m = re.search(r'\b(?:in|at|inside|from)\s+(?:my\s+)?(["\']?)(\w[\w\- ]{1,40})\1', q)
+    if m:
+        hint = m.group(2).strip()
+        for root in _SCAN_ROOTS:
+            if not root.exists():
+                continue
+            try:
+                for child in root.iterdir():
+                    if hint in child.name.lower() and _looks_like_vault(child):
+                        return str(child)
+                    # Match even if not yet scaffolded — user may mean a bare folder
+                    if hint in child.name.lower() and child.is_dir():
+                        return str(child)
+            except PermissionError:
+                continue
+
+    # 4. Check vault history for a name match
+    try:
+        if _VAULT_CONFIG.exists():
+            data = json.loads(_VAULT_CONFIG.read_text(encoding="utf-8"))
+            for saved in data.get("history", []):
+                p = Path(saved)
+                if hint_in_history := re.search(r'\b(?:in|at|inside|from)\s+(?:my\s+)?(["\']?)(\w[\w\- ]{1,40})\1', q):
+                    hint = hint_in_history.group(2).strip()
+                    if hint in p.name.lower() and p.exists():
+                        return str(p)
+    except Exception:
+        pass
+
+    return None
+
+
 # ── Skill class ───────────────────────────────────────────────────────────────
 
 class ZettelkastenSkill(Skill):
@@ -313,7 +476,8 @@ class ZettelkastenSkill(Skill):
 
         # ── Mode switching ────────────────────────────────────────────────────
         if any(p in q for p in _ENTER_PHRASES):
-            return enter_mode()
+            path = _extract_path_hint(user_input)
+            return enter_mode(path)
         if any(p in q for p in _EXIT_PHRASES):
             return exit_mode()
 
