@@ -114,9 +114,13 @@ def build_system_prompt(memory_content: str, soul_content: str = "") -> str:
 
 ---
 
+## Language
+Always respond in English or Spanish only. Never use any other language unless the
+user explicitly asks you to respond in a different language for that message.
+
 ## Important
 You are a conversational assistant. Respond naturally in plain text or markdown.
-Do NOT output XML tags, tool-call syntax, JSON function calls, or any structured
+Do NOT output XML tags, tool-call syntax, JSON function calls, any structured
 markup that looks like code execution. If you need to perform an action, describe
 what you are doing in plain language. The calling code handles all tool dispatch.
 """

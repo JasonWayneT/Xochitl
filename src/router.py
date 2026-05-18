@@ -5,6 +5,7 @@
 # Implements NFR-PERF-005 (Rolling latency tracking per provider)
 
 import os
+import re
 import json
 import time
 from dataclasses import dataclass, field
@@ -268,6 +269,7 @@ _LOCAL_SPECIALIZED_CATEGORIES = {
     "code_review":        "coding",
     "architecture_planning": "thinking",
     "bmad_complex":       "thinking",
+    "zettelkasten_mode":  "thinking",
 }
 
 _CLOUD_CATEGORIES = {
@@ -278,7 +280,7 @@ _CLOUD_CATEGORIES = {
 # BUG-ORCH-007: bmad_simple added — file+BMAD combined requests were hitting cloud quota (429)
 _FORCE_LOCAL_CATEGORIES = {
     "file_operations", "task_management", "xochitl_help",
-    "memory_recall", "simple_qa", "bmad_simple",
+    "memory_recall", "simple_qa", "bmad_simple", "zettelkasten_mode",
 }
 
 _CLASSIFICATION_PROMPT = """Classify the user query into EXACTLY ONE category from this list:
@@ -296,6 +298,7 @@ bmad_simple        - bmad-help, bug fix planning, simple BMAD tasks
 bmad_complex       - BMAD architecture, PRD creation, sprint planning
 bmad_party_mode    - Start party mode, multi-agent BMAD session
 code_review        - Review code, check for bugs
+zettelkasten_mode  - Initiate, scaffold, or work with a Zettelkasten vault or notes
 
 Query: {query}
 
@@ -342,12 +345,28 @@ _KEYWORD_MAP = {
     "memory_recall":    ["remember", "recall", "what did we", "earlier", "last time"],
     "code_generation":  ["write code", "implement", "create a script", "function that"],
     "code_review":      ["review", "check this code", "bug in"],
+    "zettelkasten_mode": [
+        "zettelkasten", "zettel", "zettle", "zettl", "vault", "fleeting note",
+        "permanent note", "literature note", "scaffold vault", "initiate a zettle",
+        "initiate zettel", "open zettelkasten", "zettle project", "zettle vault",
+        "zettelkasten project", "zettelkasten vault",
+    ],
 }
+
+_ZETTEL_RE = re.compile(
+    r'\bzettel(?:kasten)?\b|\bzettle\b|\bzettl\b|'
+    r'\bfleeting note\b|\bpermanent note\b|\bliterature note\b|'
+    r'\bscaffold vault\b|\bzettle (?:project|vault)\b|\bzettelkasten (?:project|vault)\b',
+    re.IGNORECASE,
+)
+
 
 def _fast_classify(query: str) -> Optional[tuple[str, float]]:
     """Keyword-based classification — always returns confidence 1.0 on match."""
-    import re
     q = query.lower()
+    # Zettelkasten check first — a path like C:\Vaults\... must not override zettel intent
+    if _ZETTEL_RE.search(query):
+        return "zettelkasten_mode", 1.0
     # Bare absolute path (Windows or Unix) → file operation
     if re.search(r'^[a-z]:[/\\]|^/(?:home|users|tmp|var|etc)/', q.strip()):
         return "file_operations", 1.0

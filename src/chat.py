@@ -158,14 +158,14 @@ class _StatusContext:
         while not self._stop_event.is_set():
             if self._live:
                 self._live.update(self._render())
-            time.sleep(0.12)
+            time.sleep(0.06)
 
     def __enter__(self) -> "_StatusContext":
         if not _TERM_DUMB:
             self._live = Live(
                 self._render(),
                 console=console,
-                refresh_per_second=4,
+                refresh_per_second=10,
                 transient=True,
             )
             self._live.__enter__()

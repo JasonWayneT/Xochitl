@@ -92,10 +92,9 @@ def select_model(role: str) -> str:
 
 
 def _log(tier: str, role: str, model: str) -> None:
-    """Append one line to logs/model_manager.log and echo to stderr."""
+    """Append one line to logs/model_manager.log."""
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     line = f"[{ts}] tier={tier} role={role} → {model}"
-    print(f"  [Model Manager] {line}", file=sys.stderr)
     try:
         _LOG_PATH.parent.mkdir(exist_ok=True)
         with open(_LOG_PATH, "a", encoding="utf-8") as f:
