@@ -263,11 +263,19 @@ def enter_mode(path: Optional[str] = None) -> str:
     # Save so next session finds it automatically
     _save_vault(vault)
 
+    # Auto-scaffold if the vault folder structure doesn't exist yet
+    init_note = ""
+    needs_scaffold = not all((vault / d).exists() for d in ("Fleeting", "Permanent", "Literature"))
+    if needs_scaffold:
+        from src.skills.zettelkasten_scaffold import scaffold_vault
+        scaffold_result = scaffold_vault(str(vault))
+        init_note = f" Created vault structure.\n{scaffold_result}\n\n"
+
     scaffolded = _scan_and_scaffold(vault)
     status = _session_status(vault)
     scaffold_note = f" Scaffolded {scaffolded} unformatted note{'s' if scaffolded != 1 else ''}." if scaffolded else ""
     discovered = "" if os.environ.get("VAULT_PATH") else f" (auto-discovered: {vault})"
-    return f"[ZETTEL MODE]{scaffold_note}{discovered}\n{status}"
+    return f"[ZETTEL MODE]{scaffold_note}{discovered}\n{init_note}{status}"
 
 
 def exit_mode() -> str:
