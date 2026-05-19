@@ -73,16 +73,114 @@ def _write_frontmatter(note_file: Path, fm: dict, body: str) -> None:
 
 
 def _read_taxonomy(vault: Path) -> list[str]:
-    """Read vault-taxonomy.md (new) or Master Tag List.md (legacy)."""
+    """Return active tags only — the safe, promoted vocabulary."""
+    return _read_active_tags(vault)
+
+
+def _read_active_tags(vault: Path) -> list[str]:
+    """Parse the ## Active Tags section of vault-taxonomy.md."""
     taxonomy_file = vault / "_System" / "vault-taxonomy.md"
     if taxonomy_file.exists():
         content = taxonomy_file.read_text(encoding="utf-8")
+        active_section = re.search(r"## Active Tags\n(.*?)(?=\n##|\Z)", content, re.DOTALL)
+        if active_section:
+            return re.findall(r"(#[\w-]+)", active_section.group(1))
+        # Legacy flat file — no sections yet
         return re.findall(r"(#[\w-]+)", content)
     legacy = vault / "_System" / "Master Tag List.md"
     if legacy.exists():
-        content = legacy.read_text(encoding="utf-8")
-        return re.findall(r"\| (#[\w-]+)", content)
+        return re.findall(r"\| (#[\w-]+)", legacy.read_text(encoding="utf-8"))
     return []
+
+
+def _read_proposed_tags(vault: Path) -> dict[str, int]:
+    """Return {tag: use_count} from the ## Proposed Tags section."""
+    taxonomy_file = vault / "_System" / "vault-taxonomy.md"
+    if not taxonomy_file.exists():
+        return {}
+    content = taxonomy_file.read_text(encoding="utf-8")
+    proposed_section = re.search(r"## Proposed Tags\n(.*?)(?=\n##|\Z)", content, re.DOTALL)
+    if not proposed_section:
+        return {}
+    result: dict[str, int] = {}
+    for line in proposed_section.group(1).splitlines():
+        m = re.match(r"(#[\w-]+)\|(\d+)", line.strip())
+        if m:
+            result[m.group(1)] = int(m.group(2))
+    return result
+
+
+def _write_taxonomy(vault: Path, active: list[str], proposed: dict[str, int]) -> None:
+    """Rewrite vault-taxonomy.md with updated active + proposed sections."""
+    taxonomy_file = vault / "_System" / "vault-taxonomy.md"
+    # Preserve any preamble before the first ## heading
+    existing = taxonomy_file.read_text(encoding="utf-8") if taxonomy_file.exists() else ""
+    preamble_match = re.match(r"(.*?)(?=\n## |\Z)", existing, re.DOTALL)
+    preamble = preamble_match.group(1).rstrip() if preamble_match else "# Vault Taxonomy"
+    if not preamble:
+        preamble = "# Vault Taxonomy"
+
+    active_block = "## Active Tags\n" + "\n".join(sorted(active))
+    proposed_block = "## Proposed Tags\n" + "\n".join(
+        f"{tag}|{count}" for tag, count in sorted(proposed.items())
+    )
+    taxonomy_file.write_text(
+        f"{preamble}\n\n{active_block}\n\n{proposed_block}\n",
+        encoding="utf-8",
+    )
+
+
+def _similarity_ratio(a: str, b: str) -> float:
+    """Token overlap ratio between two tag strings (ignoring # prefix and hyphens)."""
+    def tokens(tag: str) -> set[str]:
+        return set(re.split(r"[-_]", tag.lstrip("#").lower()))
+    ta, tb = tokens(a), tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+def _find_similar_tag(new_tag: str, active_tags: list[str], threshold: float = 0.6) -> Optional[str]:
+    """Return the most similar active tag if similarity exceeds threshold, else None."""
+    best_tag, best_score = None, 0.0
+    for tag in active_tags:
+        score = _similarity_ratio(new_tag, tag)
+        if score > best_score:
+            best_score, best_tag = score, tag
+    return best_tag if best_score >= threshold else None
+
+
+def _propose_tag(vault: Path, tag: str) -> None:
+    """Add tag to ## Proposed with count=1, or increment if already there."""
+    active = _read_active_tags(vault)
+    proposed = _read_proposed_tags(vault)
+    if tag in active:
+        return  # Already promoted — nothing to do
+    proposed[tag] = proposed.get(tag, 0) + 1
+    _write_taxonomy(vault, active, proposed)
+
+
+def _record_tag_usage(vault: Path, tags: list[str]) -> list[str]:
+    """Increment use counts for proposed tags; promote any that reach 3 uses.
+
+    Returns list of tags that were promoted this call.
+    """
+    active = _read_active_tags(vault)
+    proposed = _read_proposed_tags(vault)
+    promoted: list[str] = []
+
+    for tag in tags:
+        if tag in active:
+            continue  # Already active — no tracking needed
+        if tag in proposed:
+            proposed[tag] += 1
+            if proposed[tag] >= 3:
+                active.append(tag)
+                del proposed[tag]
+                promoted.append(tag)
+
+    _write_taxonomy(vault, active, proposed)
+    return promoted
 
 
 def _append_to_index(vault: Path, note_id: str, title: str, tags: list[str], summary: str) -> None:
@@ -195,29 +293,91 @@ def _check_context_collapse(body: str) -> Optional[str]:
 
 # ── Step 4: Tag suggestion ────────────────────────────────────────────────────
 
+_TAG_BUDGET = 4   # Max tags per note
+_PROMOTE_AT  = 3  # Uses before a proposed tag becomes active
+
+
 def _suggest_tags_heuristic(body: str, existing_tags: list[str], vault: Path) -> list[str]:
-    known_tags = _read_taxonomy(vault)
+    active_tags = _read_active_tags(vault)
+    proposed_tags = _read_proposed_tags(vault)
     body_lower = body.lower()
-    suggestions = []
-    for tag in known_tags:
+    suggestions: list[str] = []
+
+    # Active tags first — highest priority
+    for tag in active_tags:
+        if len(suggestions) >= _TAG_BUDGET:
+            break
         keyword = tag.lstrip("#").replace("-", " ")
         if keyword in body_lower and tag not in existing_tags:
             suggestions.append(tag)
-    return suggestions[:3]
+
+    # Fill remaining slots from proposed tags (already vetted once)
+    for tag in proposed_tags:
+        if len(suggestions) >= _TAG_BUDGET:
+            break
+        keyword = tag.lstrip("#").replace("-", " ")
+        if keyword in body_lower and tag not in existing_tags and tag not in suggestions:
+            suggestions.append(tag)
+
+    return suggestions
 
 
 def _suggest_tags(title: str, body: str, existing_tags: list[str], vault: Path, loader) -> list[str]:
-    """Contract-based tag suggestion grounded to vault-taxonomy.md, with keyword fallback."""
-    if loader is not None:
-        taxonomy_tags = _read_taxonomy(vault)
-        if taxonomy_tags:
-            taxonomy_str = ", ".join(taxonomy_tags)
-            result = loader.call("tag-suggestion-v1", title=title, body=body, taxonomy=taxonomy_str)
-            if result:
-                # Strip leading # for comparison, keep for display
-                return [t if t.startswith("#") else f"#{t}" for t in result
-                        if t.lstrip("#") not in [e.lstrip("#") for e in existing_tags]]
-    return _suggest_tags_heuristic(body, existing_tags, vault)
+    """Tag suggestion with three guardrails:
+
+    1. Budget  — max _TAG_BUDGET tags per note
+    2. Similarity gate — new tags too close to an active tag are redirected
+    3. Quarantine — genuinely new tags enter ## Proposed, not ## Active
+    """
+    active_tags = _read_active_tags(vault)
+    existing_norm = {t.lstrip("#") for t in existing_tags}
+    suggestions: list[str] = []
+    new_proposals: list[str] = []  # Tags that need quarantining
+
+    # ── Contract-based suggestion ────────────────────────────────────────────
+    raw: list[str] = []
+    if loader is not None and active_tags:
+        taxonomy_str = ", ".join(active_tags)
+        raw = loader.call("tag-suggestion-v1", title=title, body=body, taxonomy=taxonomy_str) or []
+        raw = [t if t.startswith("#") else f"#{t}" for t in raw]
+
+    if not raw:
+        return _suggest_tags_heuristic(body, existing_tags, vault)
+
+    # ── Apply guardrails ─────────────────────────────────────────────────────
+    for tag in raw:
+        if len(suggestions) >= _TAG_BUDGET:
+            break
+        if tag.lstrip("#") in existing_norm:
+            continue  # Already on this note
+
+        if tag in active_tags:
+            # Known good tag — accept directly
+            suggestions.append(tag)
+        else:
+            # Unknown tag — run similarity gate
+            similar = _find_similar_tag(tag, active_tags)
+            if similar:
+                # Redirect to the existing tag instead
+                if similar not in suggestions and similar.lstrip("#") not in existing_norm:
+                    suggestions.append(similar)
+            else:
+                # Genuinely new concept — queue for quarantine
+                new_proposals.append(tag)
+
+    # Fill remaining budget from proposed pool (already vetted)
+    if len(suggestions) < _TAG_BUDGET:
+        heuristic = _suggest_tags_heuristic(body, existing_tags, vault)
+        for tag in heuristic:
+            if tag not in suggestions and len(suggestions) < _TAG_BUDGET:
+                suggestions.append(tag)
+
+    # ── Quarantine new tags ──────────────────────────────────────────────────
+    for tag in new_proposals[:max(0, _TAG_BUDGET - len(suggestions))]:
+        _propose_tag(vault, tag)
+        suggestions.append(tag)  # Include in this note's suggestions too
+
+    return suggestions[:_TAG_BUDGET]
 
 
 # ── Step 5–7: Link suggestion + tension confirmation ─────────────────────────
@@ -399,6 +559,9 @@ def apply_pending(edits: Optional[str] = None) -> str:
     _append_to_index(vault, note_id, title, tags, first_sentence)
     _log_action(vault, note_file, "process_note confirmed", f"tags={tags} links={[l for l,_ in links]}")
 
+    # ── Tag guardrail: record usage, auto-promote proposed tags that hit threshold
+    promoted = _record_tag_usage(vault, tags)
+
     try:
         from src.skills.zettelkasten_skill import record_note_processed
         record_note_processed(note_file.name)
@@ -409,7 +572,10 @@ def apply_pending(edits: Optional[str] = None) -> str:
 
     # Passive serendipity after confirmation
     serendipity_line = _passive_serendipity(title, body, vault)
-    result = f"Done."
+    result = "Done."
+    if promoted:
+        promoted_str = ", ".join(promoted)
+        result += f"\n\n✿ Promoted to active vocabulary: {promoted_str}"
     if serendipity_line:
         result += f"\n\n{serendipity_line}"
     result += "\n\n→ Clarity check? (optional)"

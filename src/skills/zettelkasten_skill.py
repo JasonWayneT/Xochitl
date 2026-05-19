@@ -326,7 +326,22 @@ def vault_status() -> str:
         return "No vault configured. Set VAULT_PATH in .env."
     if not vault.exists():
         return f"Vault path not found: {vault}"
-    return _session_status(vault)
+    status = _session_status(vault)
+
+    # Show proposed tags and how close they are to promotion
+    try:
+        from src.skills.zettelkasten_process import _read_proposed_tags, _PROMOTE_AT
+        proposed = _read_proposed_tags(vault)
+        if proposed:
+            lines = ["\n\n**Proposed tags** (in quarantine):"]
+            for tag, count in sorted(proposed.items(), key=lambda x: -x[1]):
+                bar = "█" * count + "░" * (_PROMOTE_AT - count)
+                lines.append(f"  {tag}  {bar}  {count}/{_PROMOTE_AT}")
+            status += "\n".join(lines)
+    except Exception:
+        pass
+
+    return status
 
 
 # ── Note creation ─────────────────────────────────────────────────────────────

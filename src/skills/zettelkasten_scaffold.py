@@ -162,22 +162,37 @@ def _copy_prompt_library(vault: Path) -> None:
 
 
 def _copy_vault_taxonomy(vault: Path) -> None:
-    """Copy vault-taxonomy.md seed from ZettleLib _System/ if available."""
+    """Copy vault-taxonomy.md seed from ZettleLib _System/ if available.
+
+    Ensures the file always has both ## Active Tags and ## Proposed Tags sections
+    so the guardrail system can read and write them from day one.
+    """
     candidates = [
         Path.home() / "Desktop" / "Jason" / "Resource" / "CodeProjects" / "ZettleLib" / "beta-vault" / "_System" / "vault-taxonomy.md",
         Path(__file__).parent.parent.parent.parent / "ZettleLib" / "beta-vault" / "_System" / "vault-taxonomy.md",
     ]
     dest = vault / "_System" / "vault-taxonomy.md"
     if dest.exists():
+        _ensure_proposed_section(dest)
         return
     for source in candidates:
         if source.exists():
             dest.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+            _ensure_proposed_section(dest)
             return
     # Write a minimal seed if no source found
     dest.write_text(
-        "# Vault Taxonomy\n\nOne approved tag per line.\n\n## Active Tags\n\n"
+        "# Vault Taxonomy\n\n"
+        "## Active Tags\n"
         "#strategy\n#systems-thinking\n#design-thinking\n#learning\n#communication\n"
-        "#first-principles\n#mental-models\n#knowledge-management\n#writing\n#philosophy\n",
+        "#first-principles\n#mental-models\n#knowledge-management\n#writing\n#philosophy\n\n"
+        "## Proposed Tags\n",
         encoding="utf-8",
     )
+
+
+def _ensure_proposed_section(dest: Path) -> None:
+    """Add ## Proposed Tags section if the file doesn't already have one."""
+    content = dest.read_text(encoding="utf-8")
+    if "## Proposed Tags" not in content:
+        dest.write_text(content.rstrip() + "\n\n## Proposed Tags\n", encoding="utf-8")
