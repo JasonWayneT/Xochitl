@@ -588,45 +588,57 @@ class ContextManager:
         """Build the full system prompt with token budget enforcement.
 
         Priority order (highest → lowest priority when compacting):
-          1. Identity Guard — always first, never removed
+          1. Identity Guard + SOUL.md — always first, NEVER removed or compacted.
+             SOUL.md is folded into the Identity Guard so the persona is load-bearing.
           2. Facts block    — never removed
-          3. Soul           — compacted but preserved
+          3. Conversation config — compacted but preserved
           4. Memory         — compacted first
           5. File context   — compacted last
+
+        Skills are NOT included in the global prompt (Phase 2 injects them per-turn
+        via can_handle() scoring when a skill scores above threshold).
         """
-        guard_text = (
+        # ── Soul merged into Identity Guard — load-bearing, never evicted ─────
+        soul_text = self.soul.assemble()
+        base_guard = (
             "## Identity Guard\n"
             "1. You are Xochitl, a TERMINAL-NATIVE AI Chief of Staff.\n"
             "2. You are running LOCALLY on the user's Windows machine via the Xochitl CLI.\n"
             "3. You have DIRECT ACCESS to the filesystem paths shown in [SYSTEM_FACTS] and [File Context].\n"
             "4. NEVER say you are a remote AI or that you cannot see local files.\n"
-            "5. If you need to perform an action, describe it in plain language.\n\n"
+            "5. Describe actions in plain language before taking them.\n\n"
             "## Language\n"
             "Always respond in English or Spanish only. "
             "Never use any other language unless the user explicitly asks for it in that message."
         )
+        # Soul comes first so the persona frames everything that follows.
+        guard_text = f"{soul_text}\n\n---\n\n{base_guard}" if soul_text else base_guard
 
-        facts_text   = self.facts.assemble()
-        soul_text    = self.soul.assemble()
-        behavior_text = self.behavior.assemble()
-        preferences_text = self.preferences.assemble()
-        memory_text  = self.memory.assemble()
-        files_text   = self.files.assemble()
-        skills_text  = self.skills.assemble()   # FR-ORCH-005
-        persona_text = _render_system_prompt_template(
-            identity_guard=guard_text,
-            soul=soul_text,
-            conversation_config=behavior_text,
+        facts_text        = self.facts.assemble()
+        behavior_text     = self.behavior.assemble()
+        preferences_text  = self.preferences.assemble()
+        memory_text       = self.memory.assemble()
+        files_text        = self.files.assemble()
+
+        # Minimal skills hint — full manifest is injected per-turn in Phase 2.
+        skills_hint = (
+            "## Skills\n"
+            "Skills are available for task management, BMAD, code generation, Notion, "
+            "and more. They will be provided when relevant to your request."
         )
 
-        total = self._total_tokens(persona_text, facts_text, preferences_text, memory_text, files_text, skills_text)
+        total = self._total_tokens(
+            guard_text, facts_text, behavior_text,
+            preferences_text, memory_text, files_text,
+        )
         budget_remaining = self._budget
 
-        # If under budget, assemble without compaction
+        # ── Under budget: assemble without compaction ─────────────────────────
         if total <= budget_remaining:
-            parts = [persona_text, facts_text]
-            if skills_text:
-                parts.append(skills_text)
+            parts = [guard_text, facts_text]
+            if behavior_text:
+                parts.append(behavior_text)
+            parts.append(skills_hint)
             if preferences_text:
                 parts.append(preferences_text)
             if memory_text:
@@ -635,39 +647,32 @@ class ContextManager:
                 parts.append(files_text)
             return "\n\n---\n\n".join(parts)
 
-        # Over budget: compact in reverse priority order
-        # Reserve minimum allocations
-        facts_budget  = min(_estimate_tokens(facts_text), 200)
-        soul_budget   = min(_estimate_tokens(soul_text), 1_200)
-        behavior_budget = min(_estimate_tokens(behavior_text), 500)
-        skills_budget = min(_estimate_tokens(skills_text), 400)
+        # ── Over budget: compact in reverse priority order ────────────────────
+        # guard_text (soul + identity) is NEVER compacted — it is load-bearing.
+        facts_budget       = min(_estimate_tokens(facts_text), 200)
+        behavior_budget    = min(_estimate_tokens(behavior_text), 500)
         preferences_budget = min(_estimate_tokens(preferences_text), 400)
-        memory_budget = min(_estimate_tokens(memory_text), 600)
-        files_budget  = (
+        memory_budget      = min(_estimate_tokens(memory_text), 600)
+        files_budget       = (
             budget_remaining
             - _estimate_tokens(guard_text)
-            - facts_budget - soul_budget - behavior_budget - skills_budget
-            - preferences_budget - memory_budget
+            - facts_budget
+            - behavior_budget
+            - preferences_budget
+            - memory_budget
+            - _estimate_tokens(skills_hint)
         )
 
-        compact_persona = _render_system_prompt_template(
-            identity_guard=guard_text,
-            soul=self.soul.compact(soul_budget) if soul_text else "",
-            conversation_config=self.behavior.compact(behavior_budget) if behavior_text else "",
-        )
-        parts = [compact_persona, self.facts.compact(facts_budget)]
-        if skills_text:
-            parts.append(self.skills.compact(skills_budget))
+        parts = [guard_text, self.facts.compact(facts_budget)]
+        if behavior_text:
+            parts.append(self.behavior.compact(behavior_budget))
+        parts.append(skills_hint)
         if preferences_text:
             parts.append(self.preferences.compact(preferences_budget))
         if memory_text:
-            mem_compact = self.memory.compact(max(memory_budget, 100))
-            if mem_compact:
-                parts.append(mem_compact)
+            parts.append(self.memory.compact(max(memory_budget, 100)))
         if files_text and files_budget > 100:
-            files_compact = self.files.compact(files_budget)
-            if files_compact:
-                parts.append(files_compact)
+            parts.append(self.files.compact(files_budget))
         else:
             parts.append("[File context omitted — token budget exhausted]")
 
@@ -723,12 +728,11 @@ class ContextManager:
         if not self._ingested:
             return 0.0
         total = self._total_tokens(
+            self.soul.assemble(),   # soul is now part of the guard block
             self.facts.assemble(),
-            self.soul.assemble(),
             self.behavior.assemble(),
             self.preferences.assemble(),
             self.memory.assemble(),
             self.files.assemble(),
-            self.skills.assemble(),
         )
         return total / self._token_limit

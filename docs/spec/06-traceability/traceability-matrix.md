@@ -70,6 +70,12 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `NFR-UI-005` | `CR-008` | `CR-008` | `AC-CR008-012` | `TASK-CR008-015` | `src/context_loader.py` (`build_system_prompt` — language rule) | manual | implemented |
 | `NFR-UI-006` | `CR-008` | `CR-008` | — | `TASK-CR008-016` | `src/chat.py` (`_StatusContext` — `refresh_per_second=10`, `sleep(0.06)`) | manual | implemented |
 
+| `FR-ORCH-016` | `CR-009` | `CR-009` | `AC-CR009-001` | `TASK-CR009-001`, `TASK-CR009-002` | `src/context_manager.py` (`assemble_system_prompt` — `guard_text` soul merge, never-compact path) | smoke_test + manual long-session | implemented |
+| `FR-ORCH-017` | `CR-009` | `CR-009` | `AC-CR009-002` | `TASK-CR009-007`, `TASK-CR009-008` | `src/chat.py` (`_SKILL_INJECT_THRESHOLD`, `_format_active_skill_block`, `_agent_loop` skill scoring loop) | smoke_test + manual | implemented |
+| `FR-ORCH-018` | `CR-009` | `CR-009` | `AC-CR009-003`, `AC-CR009-004` | `TASK-CR009-009`, `TASK-CR009-010`, `TASK-CR009-011` | `src/background_review.py` (`BackgroundReview`, `_TurnData`, `_extract`, `_write`), `src/chat.py` (`queue_turn`, `shutdown`) | smoke_test + manual KB inspection | implemented |
+| `FR-ORCH-019` | `CR-009` | `CR-009` | `AC-CR009-005` | `TASK-CR009-003`, `TASK-CR009-004` | `src/router.py` (`route` — single `_classify()` call, removed `_fast_classify`, removed duplicate preflight/file context) | smoke_test + manual | implemented |
+| `NFR-PERF-008` | `CR-009` | `CR-009` | `AC-CR009-004` | `TASK-CR009-009` | `src/background_review.py` (`Queue(maxsize=20)`, `_MIN_WRITE_INTERVAL_SECS = 30`, `put_nowait` silent drop) | smoke_test | implemented |
+
 ## Coverage checklist
 
 - [ ] Every P0 requirement has acceptance criteria.

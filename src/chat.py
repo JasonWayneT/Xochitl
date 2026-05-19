@@ -80,8 +80,8 @@ except ModuleNotFoundError:
 from src.router import get_router, _live_db_context, _resolve_file_context
 from src.context_loader import build_system_prompt
 from src.context_manager import ContextManager
-from src.intent import classify_conversation_intent
 from src.memory import read_memory
+from src.background_review import BackgroundReview
 from src import database as db
 from src.file_tools import FileTools
 from src.skills.base import Skill
@@ -274,6 +274,47 @@ _MUTATING_SKILL_ACTIONS = {
     "CodeSkill": {"scaffold", "implement", "fix", "tests", "test"},
 }
 
+# Phase 2: minimum can_handle() score to inject a skill into the system prompt.
+# Matches the 0.6 suggestion threshold from Skill base docstring with a small buffer.
+_SKILL_INJECT_THRESHOLD = 0.65
+
+
+def _format_active_skill_block(defn: dict) -> str:
+    """Format one skill's tool_definition() as a focused per-turn system prompt block.
+
+    Injected only when can_handle() scores above _SKILL_INJECT_THRESHOLD.
+    The model sees the full invocation schema for the one relevant skill
+    without the noise of the full manifest — fixes the hallucinated-XML problem
+    by showing the exact <skill_call> format only when a skill is actually needed.
+    """
+    name        = defn.get("name", "")
+    description = defn.get("description", "")
+    when        = defn.get("when", "")
+    params      = defn.get("params", {})
+
+    lines = [
+        "## Active Skill",
+        f"The following skill is relevant to this request: **{name}**",
+        f"Does: {description}",
+        f"Use when: {when}",
+        "",
+        "To invoke it, output this EXACT format anywhere in your response:",
+        "",
+        f'  <skill_call name="{name}">{{"param": "value"}}</skill_call>',
+        "",
+        "Read-only skills execute immediately. "
+        "Mutating skills are staged for user approval first.",
+        "Only invoke if the user clearly wants that action — "
+        "not for planning or open-ended discussion.",
+    ]
+    if params:
+        lines.append("")
+        lines.append(f"Parameters for {name}:")
+        for k, v in params.items():
+            lines.append(f"  `{k}`: {v}")
+
+    return "\n".join(lines)
+
 
 class XochitlChat:
     """
@@ -310,6 +351,10 @@ class XochitlChat:
         self._staged_message: Optional[str] = None
         # FR-UI-006: Last cancelled message — resendable via /retry
         self._last_cancelled: Optional[str] = None
+
+        # Phase 3: passive learning daemon — starts immediately, runs for session lifetime
+        self._background_review = BackgroundReview()
+        self._background_review.start()
 
     @property
     def skills(self) -> list[Skill]:
@@ -433,6 +478,7 @@ class XochitlChat:
 
                 if user_input.strip().lower() in ("quit", "exit", "q", "bye"):
                     console.print("\n[dim]Hasta luego 👋[/dim]\n")
+                    self._background_review.shutdown()
                     break
 
                 if user_input.strip().lower() == "help":
@@ -555,45 +601,52 @@ class XochitlChat:
             local_mode=(route == "local"),
         )
 
-        # ── 5. Classify intent (fast keyword path for unambiguous cases) ──────
+        # ── 5. Dispatch: one keyword pass, then agent loop ────────────────────
+        # The old triple-classification system (intent.py → _classify_intent →
+        # router._fast_classify → router._classify) caused routing conflicts
+        # because each layer could disagree. Now: fast keyword check for the
+        # two cases that need dedicated handlers (file I/O with security gates,
+        # task queue display), everything else goes directly to _agent_loop
+        # where the single LLM classifier in router._classify() makes the call.
         if _status:
-            _status.update("classifying request")
-        intent = self._classify_intent(user_input)
-        self.current_context["last_intent"] = intent
+            _status.update("choosing path")
 
-        # ── 6. Route: special handlers for file/task/research; agent loop for rest ──
-        if _status:
-            _status.update(f"choosing path: {intent['type'].replace('_', ' ')}")
+        q_lower = user_input.lower()
 
-        if "weather" in user_input.lower() or "forecast" in user_input.lower():
+        if "weather" in q_lower or "forecast" in q_lower:
             if _status:
                 _status.update("checking weather")
             response = self._handle_weather(user_input)
-        elif intent["type"] == "task_query":
+        elif any(kw in q_lower for kw in _TASK_KEYWORDS):
             response = self._handle_task_query(user_input, cm)
-        elif intent["type"] == "file_operation":
+        elif (
+            any(ext in user_input for ext in _FILE_EXTENSIONS)
+            and any(kw in q_lower for kw in _FILE_READ_KW + _FILE_WRITE_KW + _FILE_DELETE_KW)
+        ):
             if _status:
                 _status.update("resolving file context")
-            response = self._handle_file_operation(user_input, intent, cm)
-        elif intent["type"] == "research":
-            if _status:
-                _status.update("gathering references")
-            response = self._handle_research(user_input, intent)
-        elif intent.get("intent_type") == "exploration" and intent.get("context_scope") == "active_project":
-            if _status:
-                _status.update("exploring project")
-            response = self._handle_repo_exploration(user_input, cm)
+            response = self._handle_file_operation(user_input, {}, cm)
         else:
-            # ── Agent loop: LLM controls routing and skill dispatch ────────────
-            # Implements FR-ORCH-008 — covers general, simple_question,
-            # bmad_workflow, new_project, sdd_workflow, issue_tracking,
-            # code_generation_intent, orchestrator_query, action_request.
+            # ── Agent loop: LLM owns routing and skill dispatch ───────────────
+            # Implements FR-ORCH-008 — single classification path through
+            # router._classify(), covers general, bmad, code, orchestrator,
+            # research, sdd, new_project, and all other intents.
             if _status:
                 _status.update("drafting response")
             response = self._agent_loop(user_input, cm, _status)
 
         response = self._maybe_offer_skill_creation(user_input, response)
-        return self._record(response)
+        final = self._record(response)
+
+        # Phase 3: queue this turn for passive background learning.
+        # Fires in a daemon thread — never blocks the response to the user.
+        self._background_review.queue_turn(
+            user_input,
+            final,
+            project=self.current_project,
+        )
+
+        return final
 
     def _handle_web_lookup(self, user_input: str) -> str:
         """Run read-only web lookup directly without extra confirmation."""
@@ -621,16 +674,43 @@ class XochitlChat:
         cm: ContextManager,
         _status: Optional[_StatusContext] = None,
     ) -> str:
-        """LLM-controlled turn: model sees skill manifest and may invoke a skill.
+        """LLM-controlled turn: deterministic skill scoring + LLM response.
 
         Implements FR-ORCH-008. Flow:
-          1. Route to LLM with full context + skill manifest
-          2. Parse response for <skill_call name="X">{...}</skill_call>
-          3. If found: execute skill, record in history, append result to response
-          4. Strip any stray <skill_call> tags from visible output
+          1. Score every skill via can_handle() — O(N) keyword/heuristic, <5ms
+          2. Top scorer above threshold gets its tool_definition() injected into
+             the system prompt for THIS TURN ONLY (not stored, not global)
+          3. Route to LLM — model now has the exact <skill_call> schema in front
+             of it for the one relevant skill, so it can invoke correctly
+          4. Parse response for <skill_call name="X">{...}</skill_call>
+          5. If found: execute skill, record in history, append result to response
+          6. Strip any stray <skill_call> tags from visible output
         """
         system_prompt = cm.assemble_system_prompt()
         messages = cm.assemble_messages(self._clean_history(), user_input, tag_provenance=True)
+
+        # ── Phase 2: deterministic skill scoring pre-turn ─────────────────────
+        # Score every loaded skill against the user's message BEFORE the LLM
+        # call. The top scorer above threshold gets its full schema injected into
+        # the system prompt so the model has the invocation format in front of it.
+        # This is deterministic (no LLM call) and replaces the old approach where
+        # the model had to guess the <skill_call> format from the global manifest.
+        top_skill = None
+        top_score = 0.0
+        for skill in self.skills:
+            try:
+                score = skill.can_handle(user_input, self.current_context)
+            except Exception:
+                score = 0.0
+            if score > top_score:
+                top_score = score
+                top_skill = skill
+
+        if top_skill is not None and top_score >= _SKILL_INJECT_THRESHOLD:
+            defn = top_skill.tool_definition()
+            system_prompt = system_prompt + "\n\n---\n\n" + _format_active_skill_block(defn)
+            if _status:
+                _status.update(f"skill ready: {defn.get('name', type(top_skill).__name__)}")
 
         force = "code_generation" if self.force_cloud else None
         result = self.router.route(
@@ -870,8 +950,11 @@ class XochitlChat:
         return f"{category}:{slug}"
 
     def _classify_intent(self, user_input: str) -> dict:
-        # Implements FR-ORCH-010: structured intent, while preserving the
-        # legacy `type` field used by existing handlers.
+        # Legacy method — no longer called from process_message() (Phase 1 refactor
+        # replaced the triple-classification system with direct keyword dispatch).
+        # Retained for test compatibility. Uses a local import to avoid a top-level
+        # dependency on intent.py from the main chat flow.
+        from src.intent import classify_conversation_intent
         return classify_conversation_intent(
             user_input,
             current_project=self.current_project,

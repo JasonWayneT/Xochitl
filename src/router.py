@@ -454,8 +454,12 @@ class TieredRouter:
         if force_route:
             category, confidence = force_route, 1.0
         else:
-            fast = _fast_classify(query)
-            category, confidence = fast if fast is not None else self._classify(query)
+            # Single LLM-based classification — eliminates the keyword/LLM conflict
+            # that occurred when _fast_classify (confidence always 1.0) overrode
+            # the LLM classifier's result. ContextManager already injects SYSTEM_FACTS
+            # and file context via FactsEngine / FileContextEngine, so we do not
+            # duplicate those injections here.
+            category, confidence = self._classify(query)
 
         threshold = get_confidence_threshold()
         if confidence < threshold:
@@ -469,26 +473,10 @@ class TieredRouter:
                 route=RouteType.LOCAL,
             )
 
-        # Inject live DB snapshot for any query that needs real task/project data
+        # Inject live DB snapshot for task/project-data queries.
+        # (SYSTEM_FACTS and file context are already in system_prompt via ContextManager.)
         if category in {"task_management", "simple_qa", "memory_recall"}:
             system_prompt = system_prompt + "\n\n" + _live_db_context()
-
-        # FR-ORCH-003: Prepend SYSTEM_FACTS block to ground the LLM in reality
-        facts_block = _build_preflight_facts()
-        system_prompt = facts_block + "\n\n" + system_prompt
-
-        # Inject file context for relevant categories (BUG-ORCH-001)
-        if category in {"file_operations", "general", "simple_qa", "bmad_complex", "code_generation"}:
-            file_ctx = _resolve_file_context(query, conversation_history)
-            if file_ctx:
-                system_prompt = system_prompt + "\n\n" + file_ctx
-            elif category == "file_operations":
-                system_prompt = (
-                    system_prompt
-                    + "\n\nThe user is asking about a file or directory. "
-                    "No matching file was found on the filesystem. "
-                    "Tell them clearly and ask for the full path."
-                )
 
         if category in _LOCAL_CATEGORIES:
             return self._route_local(

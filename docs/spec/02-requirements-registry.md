@@ -143,6 +143,16 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `NFR-UI-005` | non-functional | P1 | implemented | Xochitl responds in English or Spanish only unless the user explicitly requests another language for that message | `AC-CR008-012` | `CR-008` | System prompt language rule |
 | `NFR-UI-006` | non-functional | P2 | implemented | Flower thinking animation runs at ≥10 fps (tick interval ≤0.1s, `refresh_per_second` ≥10) | — | `CR-008` | `_StatusContext` |
 
+### Orchestration — Conversational Intelligence Refactor (CR-009)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-016` | functional | P0 | implemented | SOUL.md content is merged into the Identity Guard block and is never evicted or compacted regardless of token budget pressure | `AC-CR009-001` | `CR-009` | `context_manager.py` guard_text |
+| `FR-ORCH-017` | functional | P0 | implemented | Every `_agent_loop()` call scores all loaded skills via `can_handle()` before the LLM call; the highest-scoring skill above 0.65 has its schema injected into the system prompt for that turn only | `AC-CR009-002` | `CR-009` | `_SKILL_INJECT_THRESHOLD = 0.65` |
+| `FR-ORCH-018` | functional | P1 | implemented | A daemon thread runs after every completed turn, extracts a single passive observation about the user from the exchange, and writes it to KnowledgeBase Tier 2 without blocking the main thread | `AC-CR009-003`, `AC-CR009-004` | `CR-009` | `src/background_review.py` |
+| `FR-ORCH-019` | functional | P0 | implemented | `router.route()` uses a single `_classify()` call for intent; `_fast_classify()` is no longer invoked in the routing path, eliminating dual-classifier disagreement | `AC-CR009-005` | `CR-009` | `src/router.py` |
+| `NFR-PERF-008` | non-functional | P1 | implemented | The background review daemon uses a bounded queue (maxsize=20), drops silently when full, and writes at most once per 30 seconds to prevent KB noise | `AC-CR009-004` | `CR-009` | `BackgroundReview._queue` |
+
 ### ZTK — Zettelkasten Vault and Note Management (CR-008)
 
 | ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
@@ -212,6 +222,13 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR004-010` | `FR-SDD-005` | Project init | User asks to initialize a project | BMADSkill runs | The project includes BMAD files, SDD scaffolding, and project-local agent instructions | implemented |
 | `AC-CR004-011` | `NFR-PERF-007` | Token discipline | The active project has large docs | Xochitl handles a normal productivity chat | It does not inject unrelated BMAD/SDD context unless project workflow intent is detected | proposed |
 | `AC-CR004-012` | `ARCH-SDD-002` | Routing preservation | The conversational layer needs an LLM response | It calls a model | The call goes through `TieredRouter` | proposed |
+
+| `AC-CR009-001` | `FR-ORCH-016` | Soul guard | Xochitl is in a long session with many large file injections | Token budget is exceeded | SOUL.md content and Identity Guard text remain in every system prompt; compaction touches only behavior/preferences/memory/files | implemented |
+| `AC-CR009-002` | `FR-ORCH-017` | Skill injection | A skill scores ≥0.65 for the user's message | `_agent_loop()` runs | The system prompt includes an `## Active Skill` block with that skill's schema and no other skill schemas | implemented |
+| `AC-CR009-003` | `FR-ORCH-018` | Passive observation write | User corrects Xochitl or expresses a clear preference | The turn completes | A `passive_learning_YYYY-MM-DD.md` entry appears in `~/.xochitl/kb/` within 60 seconds | implemented |
+| `AC-CR009-004` | `FR-ORCH-018`, `NFR-PERF-008` | Daemon non-blocking | Background review raises an exception or the KB write fails | `BackgroundReview._process()` runs | The main thread is unaffected; the exception is swallowed and logged at DEBUG level | implemented |
+| `AC-CR009-005` | `FR-ORCH-019` | Single classifier | Any chat message triggers routing | `router.route()` runs | Exactly one `_classify()` call is made; no `_fast_classify()` call appears in the routing path | implemented |
+| `AC-CR009-006` | All CR-009 | Smoke test regression | All changes are applied | `smoke_test.py` executes | 27 tests pass, 0 failures | implemented |
 
 ## Requirement lifecycle notes
 
