@@ -22,9 +22,20 @@ _ENTER_PHRASES = [
     "zettel mode", "open the vault", "work on notes",
     "work on my notes", "let's do some zettles", "lets do some zettles",
     "work on zettelkasten", "open zettelkasten",
-    "initiate a zettle", "initiate zettel", "initiate a zettelkasten",
+    # Initiate / setup variants (note: "zettle" kept for typo tolerance)
+    "initiate a zettel", "initiate a zettle", "initiate zettel", "initiate a zettelkasten",
+    "initiate zettelkasten",
     "start a zettel", "start zettel", "create a zettel", "set up a zettel",
     "set up zettel", "new zettel", "new zettelkasten",
+    "zettel project", "zettelkasten project",
+    "scaffold a zettel", "scaffold zettel",
+]
+
+# Action verbs that, when combined with "zettel" anywhere in the query,
+# signal vault intent even if no exact phrase matches.
+_ZETTEL_ACTION_VERBS = [
+    "initiate", "create", "set up", "setup", "start", "open", "scaffold",
+    "build", "initialize", "init", "make", "establish",
 ]
 _EXIT_PHRASES = [
     "exit zettel", "leave zettel", "done with zettles", "close the vault",
@@ -466,6 +477,12 @@ class ZettelkastenSkill(Skill):
             return 0.95
         if any(p in q for p in _EXIT_PHRASES):
             return 0.95 if _zettel_mode else 0.0
+
+        # Broad keyword fallback: "zettel*" + any action verb → strong signal
+        # Catches "initiate a zettel project", "create zettelkasten at ...", etc.
+        has_zettel = "zettel" in q
+        if has_zettel and any(v in q for v in _ZETTEL_ACTION_VERBS):
+            return 0.85
 
         # Already in zettel mode — handle note/vault commands
         if _zettel_mode:
