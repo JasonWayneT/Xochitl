@@ -306,6 +306,11 @@ class XochitlChat:
         self._last_interrupt: float = 0.0
         self._active_status: Optional[_StatusContext] = None
 
+        # FR-UI-007: Staged message — queued via /next, runs after current response
+        self._staged_message: Optional[str] = None
+        # FR-UI-006: Last cancelled message — resendable via /retry
+        self._last_cancelled: Optional[str] = None
+
     @property
     def skills(self) -> list[Skill]:
         if getattr(self, "_skills", None) is not None:
@@ -327,6 +332,48 @@ class XochitlChat:
 
     # ── Public interface ──────────────────────────────────────────────────────
 
+    def _run_with_cancel(
+        self,
+        user_input: str,
+        status_ctx: "_StatusContext",
+    ) -> tuple[Optional[str], bool]:
+        """Run process_message in a daemon thread so Ctrl-C can cancel cleanly.
+
+        Implements FR-UI-006. Returns (response, was_cancelled).
+        The LLM call runs in a daemon thread; the main thread polls with a short
+        timeout so KeyboardInterrupt is caught here rather than killing the session.
+        The thread is abandoned on cancel — it finishes in the background and is
+        discarded when the session exits.
+        """
+        import queue as _queue
+        result_q: _queue.Queue = _queue.Queue()
+
+        def _worker() -> None:
+            try:
+                resp = self.process_message(user_input, _status=status_ctx)
+                result_q.put(("ok", resp))
+            except Exception as exc:  # noqa: BLE001
+                result_q.put(("err", str(exc)))
+
+        worker_thread = threading.Thread(target=_worker, daemon=True)
+        worker_thread.start()
+
+        try:
+            while worker_thread.is_alive():
+                worker_thread.join(timeout=0.15)
+        except KeyboardInterrupt:
+            console.print("\n[dim]Cancelled.[/dim]")
+            return None, True
+
+        try:
+            status, value = result_q.get_nowait()
+        except _queue.Empty:
+            return None, True
+
+        if status == "err":
+            return f"{_ERR} — {value}", False
+        return value, False  # type: ignore[return-value]
+
     def start(self) -> None:
         """Launch the interactive chat loop."""
         from src.stats import health_check
@@ -345,32 +392,41 @@ class XochitlChat:
         with db.get_connection() as conn:
             self.session_id = db.create_session(conn)
 
-        console.print("[dim]Type 'quit' or Ctrl+C to exit. (Ctrl+C twice quickly to force-quit)[/dim]\n")
+        console.print(
+            "[dim]Type 'quit' or Ctrl+C to exit. "
+            "Ctrl+C while thinking cancels. "
+            "/next <message> to stage your next message.[/dim]\n"
+        )
 
         try:
             while True:
-                try:
-                    user_input = Prompt.ask("[bold cyan]you[/bold cyan]")
-                except KeyboardInterrupt:
-                    # FR-UI-002: Smart Ctrl-C — 2-stage exit
-                    now = time.monotonic()
-                    if self._active_status is not None:
-                        # First press: cancel active LLM call
-                        console.print("\n[dim]Cancelled.[/dim]")
-                        self._active_status = None
-                        continue
-                    if now - self._last_interrupt < 1.2:
-                        # Second press within 1.2s: exit
-                        console.print("\n[dim]Hasta luego 👋[/dim]\n")
+                # ── Determine input source ────────────────────────────────────
+                # If a staged message is queued, use it without prompting
+                if self._staged_message:
+                    user_input = self._staged_message
+                    self._staged_message = None
+                    console.print(f"[dim]▶ staged:[/dim] [cyan]{user_input}[/cyan]")
+                else:
+                    try:
+                        user_input = Prompt.ask("[bold cyan]you[/bold cyan]")
+                    except KeyboardInterrupt:
+                        # FR-UI-002: Smart Ctrl-C — 2-stage exit (input phase)
+                        now = time.monotonic()
+                        if now - self._last_interrupt < 1.2:
+                            console.print("\n[dim]Hasta luego 👋[/dim]\n")
+                            break
+                        else:
+                            self._last_interrupt = now
+                            staged_hint = (
+                                f"  staged: '{self._staged_message}'"
+                                if self._staged_message else ""
+                            )
+                            console.print(
+                                f"\n[dim]Press Ctrl+C again to exit, or keep typing.{staged_hint}[/dim]"
+                            )
+                            continue
+                    except EOFError:
                         break
-                    else:
-                        self._last_interrupt = now
-                        console.print(
-                            "\n[dim]Press Ctrl+C again to exit, or keep typing.[/dim]"
-                        )
-                        continue
-                except EOFError:
-                    break
 
                 if not user_input.strip():
                     continue
@@ -391,19 +447,35 @@ class XochitlChat:
                     console.print()
                     continue
 
-                # FR-UI-001: Live status tier — show current sub-task during processing
-                status_ctx = _StatusContext("thinking...")
+                # ── LLM turn — FR-UI-001 status + FR-UI-006 cancellable thread ──
+                hint = (
+                    f"thinking...  [staged: '{self._staged_message[:30]}…']"
+                    if self._staged_message else "thinking..."
+                )
+                status_ctx = _StatusContext(hint)
                 self._active_status = status_ctx
                 try:
                     with status_ctx:
                         status_ctx.update("getting oriented")
-                        response = self.process_message(user_input, _status=status_ctx)
+                        response, was_cancelled = self._run_with_cancel(
+                            user_input, status_ctx
+                        )
                 finally:
                     self._active_status = None
 
-                console.print(f"\n[bold]Xochitl[/bold]: ", end="")
-                self._stream_response(response)
-                console.print()
+                if was_cancelled:
+                    # Offer to re-run the cancelled message or drop it
+                    console.print(
+                        f"[dim]  ↩ Re-run last message? "
+                        f"([cyan]/retry[/cyan] to resend, or just type something new)[/dim]"
+                    )
+                    self._last_cancelled = user_input
+                    continue
+
+                if response:
+                    console.print(f"\n[bold]Xochitl[/bold]: ", end="")
+                    self._stream_response(response)
+                    console.print()
 
         except KeyboardInterrupt:
             pass
@@ -1192,6 +1264,23 @@ class XochitlChat:
         verb = parts[0].lower()
         arg = parts[1].strip() if len(parts) > 1 else ""
 
+        # FR-UI-007: Stage next message to run after current response finishes
+        if verb == "/next":
+            if not arg:
+                if self._staged_message:
+                    return f"[dim]Staged message cleared.[/dim]"
+                return "Usage: /next <message to send after this response>"
+            self._staged_message = arg
+            return f"[dim]✓ Staged: '{arg}' — will run after current response.[/dim]"
+
+        # FR-UI-006: Retry the last cancelled message
+        if verb == "/retry":
+            if not self._last_cancelled:
+                return "[dim]Nothing to retry — no message was cancelled.[/dim]"
+            self._staged_message = self._last_cancelled
+            self._last_cancelled = None
+            return f"[dim]✓ Re-queued: '{self._staged_message}'[/dim]"
+
         if verb == "/authorize":
             return cmd_authorize(arg)
         if verb == "/revoke":
@@ -1228,7 +1317,10 @@ class XochitlChat:
             from src.research import adversarial_review
             return adversarial_review(arg)
 
-        available = "/authorize  /revoke  /registry  /audit  /review  /research  /adversarial"
+        available = (
+            "/next <msg>  /retry  /authorize  /revoke  "
+            "/registry  /audit  /review  /research  /adversarial"
+        )
         return f"[dim]{_FYI} — unknown command: {verb}\nAvailable: {available}[/dim]"
 
     # ── Helpers ───────────────────────────────────────────────────────────────
