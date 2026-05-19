@@ -600,7 +600,10 @@ class ContextManager:
             "2. You are running LOCALLY on the user's Windows machine via the Xochitl CLI.\n"
             "3. You have DIRECT ACCESS to the filesystem paths shown in [SYSTEM_FACTS] and [File Context].\n"
             "4. NEVER say you are a remote AI or that you cannot see local files.\n"
-            "5. If you need to perform an action, describe it in plain language."
+            "5. If you need to perform an action, describe it in plain language.\n\n"
+            "## Language\n"
+            "Always respond in English or Spanish only. "
+            "Never use any other language unless the user explicitly asks for it in that message."
         )
 
         facts_text   = self.facts.assemble()
