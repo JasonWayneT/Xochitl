@@ -58,6 +58,18 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `NFR-PERF-007` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-011` | `TASK-CR004-001`, `TASK-CR004-005` | proposed: `src/context_manager.py`, router/context policy | `TEST-CR004-009` | proposed |
 | `ARCH-SDD-002` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-012` | `TASK-CR004-008` | proposed: all new conversational modules | `TEST-CR004-010` | proposed |
 
+| `FR-ORCH-015` | `CR-008` | `CR-008` | `AC-CR008-001` | `TASK-CR008-001`, `TASK-CR008-002` | `src/router.py` (`_ZETTEL_RE`, `_fast_classify`, `_LOCAL_SPECIALIZED_CATEGORIES`, `_FORCE_LOCAL_CATEGORIES`, `_KEYWORD_MAP`, `_CLASSIFICATION_PROMPT`) | manual | implemented |
+| `FR-ZTK-001` | `CR-008` | `CR-008` | `AC-CR008-002` | `TASK-CR008-003`, `TASK-CR008-004` | `src/chat.py` (`_builtin_skills`), `src/skills/zettelkasten_skill.py` (`_ENTER_PHRASES`, `tool_definition`) | manual | implemented |
+| `FR-ZTK-002` | `CR-008` | `CR-008` | `AC-CR008-003`, `AC-CR008-004` | `TASK-CR008-005`, `TASK-CR008-006` | `src/skills/zettelkasten_skill.py` (`_VAULT_CONFIG`, `_SCAN_ROOTS`, `_looks_like_vault`, `_scan_for_vaults`, `_load_saved_vault`, `_save_vault`, `_get_vault`) | manual | implemented |
+| `FR-ZTK-003` | `CR-008` | `CR-008` | `AC-CR008-005` | `TASK-CR008-007` | `src/skills/zettelkasten_skill.py` (`enter_mode` scaffold check) | manual | implemented |
+| `FR-ZTK-004` | `CR-008` | `CR-008` | `AC-CR008-006` | `TASK-CR008-008` | `src/skills/zettelkasten_skill.py` (`_extract_path_hint`) | manual | implemented |
+| `FR-ZTK-005` | `CR-008` | `CR-008` | `AC-CR008-007` | `TASK-CR008-009`, `TASK-CR008-010` | `src/skills/zettelkasten_process.py` (`_TAG_BUDGET`, `_suggest_tags`, `_suggest_tags_heuristic`) | manual | implemented |
+| `FR-ZTK-006` | `CR-008` | `CR-008` | `AC-CR008-008` | `TASK-CR008-009`, `TASK-CR008-010` | `src/skills/zettelkasten_process.py` (`_similarity_ratio`, `_find_similar_tag`) | manual | implemented |
+| `FR-ZTK-007` | `CR-008` | `CR-008` | `AC-CR008-009`, `AC-CR008-010` | `TASK-CR008-009`, `TASK-CR008-010`, `TASK-CR008-011`, `TASK-CR008-012`, `TASK-CR008-013` | `src/skills/zettelkasten_process.py` (`_read_active_tags`, `_read_proposed_tags`, `_write_taxonomy`, `_propose_tag`, `_record_tag_usage`, `apply_pending`), `src/skills/zettelkasten_skill.py` (`vault_status`), `src/skills/zettelkasten_scaffold.py` (`_ensure_proposed_section`) | manual | implemented |
+| `NFR-UI-004` | `CR-008` | `CR-008` | `AC-CR008-011` | `TASK-CR008-014` | `src/model_manager.py` (`_log` — removed stderr print) | manual | implemented |
+| `NFR-UI-005` | `CR-008` | `CR-008` | `AC-CR008-012` | `TASK-CR008-015` | `src/context_loader.py` (`build_system_prompt` — language rule) | manual | implemented |
+| `NFR-UI-006` | `CR-008` | `CR-008` | — | `TASK-CR008-016` | `src/chat.py` (`_StatusContext` — `refresh_per_second=10`, `sleep(0.06)`) | manual | implemented |
+
 ## Coverage checklist
 
 - [ ] Every P0 requirement has acceptance criteria.

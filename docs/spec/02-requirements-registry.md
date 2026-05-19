@@ -14,6 +14,8 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `DATA` | SQLite schema, migrations, ChromaDB |
 | `AUTH` | Security sandboxing, path restrictions |
 | `SDD` | BMAD → SDD → Code generation pipeline |
+| `ZTK` | Zettelkasten vault management, note pipeline, tag system |
+| `ORCH` | Orchestration, routing, intent classification, skill dispatch |
 
 | Prefix | Category | Example |
 |---|---|---|
@@ -126,6 +128,32 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `FR-SDD-005` | functional | P0 | implemented | Project initialization creates BMAD artifacts, SDD workflow scaffolding, and project-local agent instructions explaining the BMAD to SDD to code process | `AC-CR004-010` | `CR-004` | Init project caveat |
 | `NFR-PERF-007` | non-functional | P0 | proposed | Conversational context assembly prefers selective retrieval and mode-specific context to minimize token use and reduce confusion | `AC-CR004-011` | `CR-004` | Token discipline |
 | `ARCH-SDD-002` | architecture | P0 | proposed | Conversational model calls continue to route through `TieredRouter`; no new raw model API calls are introduced | `AC-CR004-012` | `CR-004` | Routing preservation |
+
+### Orchestration — Routing and Intent Classification (CR-008)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-015` | functional | P0 | implemented | Zettelkasten intent is detected in `_fast_classify()` before the bare-path `file_operations` check so a Windows/Unix path in the query cannot hijack routing | `AC-CR008-001` | `CR-008` | `_ZETTEL_RE` guard |
+
+### UI — Output Quality (CR-008)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `NFR-UI-004` | non-functional | P2 | implemented | Model manager routing decisions are written to `logs/model_manager.log` only; no `[Model Manager]` output to stderr or terminal | `AC-CR008-011` | `CR-008` | Removes console noise |
+| `NFR-UI-005` | non-functional | P1 | implemented | Xochitl responds in English or Spanish only unless the user explicitly requests another language for that message | `AC-CR008-012` | `CR-008` | System prompt language rule |
+| `NFR-UI-006` | non-functional | P2 | implemented | Flower thinking animation runs at ≥10 fps (tick interval ≤0.1s, `refresh_per_second` ≥10) | — | `CR-008` | `_StatusContext` |
+
+### ZTK — Zettelkasten Vault and Note Management (CR-008)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ZTK-001` | functional | P0 | implemented | `ZettelkastenSkill` is registered in `_builtin_skills` and its `tool_definition()` is present in the LLM skill manifest at every chat turn | `AC-CR008-002` | `CR-008` | Enables LLM-driven skill dispatch |
+| `FR-ZTK-002` | functional | P1 | implemented | Vault path resolves via a 4-step priority chain: (1) session module state, (2) `VAULT_PATH` env var, (3) `~/.xochitl/vault_config.json`, (4) filesystem scan of well-known locations for vault marker folders | `AC-CR008-003`, `AC-CR008-004` | `CR-008` | Auto-discovery |
+| `FR-ZTK-003` | functional | P1 | implemented | `enter_mode()` checks for Fleeting/Permanent/Literature folders before entering; if absent, calls `scaffold_vault()` automatically | `AC-CR008-005` | `CR-008` | One-step vault init |
+| `FR-ZTK-004` | functional | P1 | implemented | Natural language path hints are extracted from the user message and passed to `enter_mode()`: absolute path → used directly; "here"/"this folder" → cwd; "in [name]" → scanned against known roots | `AC-CR008-006` | `CR-008` | `_extract_path_hint()` |
+| `FR-ZTK-005` | functional | P1 | implemented | Tag suggestions per note are capped at 4 (tag budget); the strongest matching active tags are selected first | `AC-CR008-007` | `CR-008` | `_TAG_BUDGET = 4` |
+| `FR-ZTK-006` | functional | P1 | implemented | A similarity gate computes token overlap between a proposed new tag and all active tags; if overlap ≥60% the existing tag is suggested instead | `AC-CR008-008` | `CR-008` | `_find_similar_tag()` |
+| `FR-ZTK-007` | functional | P1 | implemented | New tags that pass the similarity gate enter `## Proposed Tags` in `vault-taxonomy.md` with a use counter; they auto-promote to `## Active Tags` after 3 uses and a promotion message is shown to the user | `AC-CR008-009`, `AC-CR008-010` | `CR-008` | Quarantine → Promotion |
 
 ## Acceptance criteria
 
