@@ -229,6 +229,64 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR009-004` | `FR-ORCH-018`, `NFR-PERF-008` | Daemon non-blocking | Background review raises an exception or the KB write fails | `BackgroundReview._process()` runs | The main thread is unaffected; the exception is swallowed and logged at DEBUG level | implemented |
 | `AC-CR009-005` | `FR-ORCH-019` | Single classifier | Any chat message triggers routing | `router.route()` runs | Exactly one `_classify()` call is made; no `_fast_classify()` call appears in the routing path | implemented |
 | `AC-CR009-006` | All CR-009 | Smoke test regression | All changes are applied | `smoke_test.py` executes | 27 tests pass, 0 failures | implemented |
+| `AC-CR010-001` | `FR-ORCH-020` | Event emission | `_agent_loop` completes a turn | At least `routing_started` and `llm_complete` events are emitted on the module-level emitter | Adding a subscriber at runtime does not affect the chat response | implemented |
+| `AC-CR010-002` | `FR-ORCH-021` | History trim | A session has more than 10 messages | `_route_local()` is called | It receives a list whose first two entries are the summary context block and acknowledgement, followed by exactly 10 real messages | implemented |
+| `AC-CR010-003` | `NFR-UI-007` | Staged loop guard | 6 or more staged messages fire consecutively without a real `Prompt.ask()` turn | The staged queue is cleared and a `⚠ Staged message loop detected` warning is printed | The counter resets to 0 on the next real user input | implemented |
+| `AC-CR010-004` | `DATA-DATA-006` | Structured fact write | `BackgroundReview._write()` runs and extraction returns a fact with `confidence ≥ 0.4` | `db.upsert_memory_fact()` is called | The fact is stored in `memory_facts` with the correct category enum value | implemented |
+| `AC-CR010-005` | `DATA-DATA-007` | HyDE embedding | `VectorMemory._hyde_embed()` calls the local router model with `_HYDE_PROMPT` | The model returns non-empty content | The embedding is computed on the generated passage, not the original query; a model error causes clean fallback to `_embed(query)` with no exception propagating | implemented |
+| `AC-CR010-006` | `OPS-CORE-001` | Ollama startup | `scripts/start_ollama.ps1` is executed | All five Ollama env vars are set before `ollama serve` is invoked | `.env.example` lists every tunable with inline comments | implemented |
+| `AC-CR011-001` | `NFR-UI-008` | Boot banner | Xochitl starts a chat session | Boot banner is printed | The subtitle reads "Personal AI System", not "Chief of Staff" | implemented |
+| `AC-CR011-002` | `NFR-UI-008` | Identity Guard | Any chat session runs | System prompt is assembled | The Identity Guard line reads "personal AI system", not "Chief of Staff" | implemented |
+| `AC-CR011-003` | `NFR-UI-008` | Documentation | Any active doc file is read | The string "Chief of Staff" is searched across non-archive files | Zero matches | implemented |
+| `AC-CR012-001` | `FR-ORCH-022` | Me.md present | `~/.xochitl/Me.md` exists with content | System prompt is assembled | `## About the User` block appears between Identity Guard and Facts sections | implemented |
+| `AC-CR012-002` | `FR-ORCH-022` | Me.md absent | No Me.md file found in any search path | System prompt is assembled | System prompt is unchanged — no empty section injected | implemented |
+| `AC-CR012-003` | `NFR-ORCH-001` | Token compaction | Token budget is exceeded | `user_profile.compact()` runs | Top sections (Who I am, Domains) preserved; truncation from bottom with compaction note | implemented |
+| `AC-CR012-004` | `FR-ORCH-022` | Search path priority | Both `cwd/.xochitl/Me.md` and `~/.xochitl/Me.md` exist | `UserProfileEngine.ingest()` runs | The `cwd/.xochitl/Me.md` version is used | implemented |
+| `AC-CR013-001` | `NFR-ORCH-002` | Long Me.md | `Me.md` has 81+ lines | `UserProfileEngine.ingest()` runs | A dim warning is printed: line count and a note that lower sections may compact | implemented |
+| `AC-CR013-002` | `NFR-ORCH-002` | Normal Me.md | `Me.md` has ≤80 lines | `UserProfileEngine.ingest()` runs | No warning is printed | implemented |
+| `AC-CR013-003` | `NFR-ORCH-002` | Missing Me.md | No `Me.md` file found | `UserProfileEngine.ingest()` runs | No warning is printed | implemented |
+| `AC-CR013-004` | `FR-ORCH-022` | Warning does not block | `Me.md` has 120 lines | `UserProfileEngine.ingest()` runs | File still loads fully; `self._content` contains the full file | implemented |
+| `AC-CR014-001` | `BUG-API-002` | City-Country query (no comma) | User asks "what is the weather in Tijuana Mexico?" | WeatherSkill geocodes | Coordinates for Tijuana, Baja California, Mexico are resolved and current weather is returned | resolved |
+| `AC-CR014-002` | `NFR-API-001` | Country-filtered API call | User provides a location with a recognized country name | `_split_country()` identifies the country | The geocoding URL includes `countrycode=XX` scoping results to that country | implemented |
+| `AC-CR014-003` | `NFR-API-001` | Country-aware result ranking | Geocoding returns multiple cities with the same name | `_best_geocode_result()` runs with a known country code | The result whose `country_code` field matches is returned | implemented |
+| `AC-CR014-004` | `NFR-API-001` | Proper-noun location cleaning | Location string is "The Hague" | `_clean_location()` runs | "The" is preserved because it is followed by a capital letter; location resolves correctly | implemented |
+
+### Architecture Hardening — Local AI Reference Spec Gap Closure (CR-010)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-020` | functional | P1 | implemented | `src/events.py` provides a thread-safe event bus; `_agent_loop` emits `routing_started`, `skill_matched`, `skill_started`, `skill_complete`, `llm_complete`, and `hitl_required` events so the future web SSE layer can subscribe without coupling to chat internals | `AC-CR010-001` | `CR-010` | Module-level singleton; terminal ignores it, web layer subscribes |
+| `FR-ORCH-021` | functional | P0 | implemented | `_route_local()` trims conversation history to the 10 most recent messages before the LLM call, summarising older messages as a heuristic context block, preventing context window overflow on long sessions | `AC-CR010-002` | `CR-010` | `trim_history_for_local()` in `context_loader.py` |
+| `NFR-UI-007` | non-functional | P1 | implemented | A consecutive-staged-message counter in `XochitlChat.start()` clears the staged queue and warns the user if more than 5 staged messages fire without real user input | `AC-CR010-003` | `CR-010` | `_consecutive_staged` counter |
+| `DATA-DATA-006` | data | P1 | implemented | A `memory_facts` SQLite table stores structured per-turn facts with `category` (preference / context / project / skill / constraint / goal), `confidence` (0–1), `source`, `project`, and a `superseded_by` reference for tombstoning | `AC-CR010-004` | `CR-010` | Written by `BackgroundReview` alongside existing KB markdown |
+| `DATA-DATA-007` | data | P1 | implemented | `VectorMemory.recall()` generates a hypothetical document via the fast local model before embedding, so declarative personal notes are retrieved by embedding a statement rather than a question (HyDE pattern); falls back to direct query embedding on failure | `AC-CR010-005` | `CR-010` | `_hyde_embed()` in `src/memory.py` |
+| `OPS-CORE-001` | operations | P2 | implemented | `scripts/start_ollama.ps1` configures Ollama with `KEEP_ALIVE=30m`, `NUM_PARALLEL=2`, `FLASH_ATTENTION=1`, `KV_CACHE_TYPE=q8_0`, and `MAX_LOADED_MODELS=2` before starting the server; `.env.example` documents all configurable variables | `AC-CR010-006` | `CR-010` | Run once before `xochitl chat` |
+
+### Product Identity Refactor (CR-011)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `NFR-UI-008` | non-functional | P2 | implemented | All user-facing strings, documentation, and system prompt templates describe Xochitl as a personal AI system; no instance of "Chief of Staff" appears in active (non-archive) files | `AC-CR011-001`, `AC-CR011-002`, `AC-CR011-003` | `CR-011` | Branding/identity refactor |
+
+### User Profile Engine and Me.md (CR-012)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-022` | functional | P1 | implemented | `UserProfileEngine` loads `Me.md` from the persona search path and injects its content as `## About the User` in every system prompt, positioned between the Identity Guard and the Facts block | `AC-CR012-001`, `AC-CR012-002`, `AC-CR012-004` | `CR-012` | `src/context_manager.py` UserProfileEngine |
+| `NFR-ORCH-001` | non-functional | P2 | implemented | `Me.md` is designed to remain under 80 lines / 600 tokens; compaction preserves the top sections and truncates from the bottom | `AC-CR012-003` | `CR-012` | Token budget safe |
+
+### Me.md Line Count Warning (CR-013)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `NFR-ORCH-002` | non-functional | P2 | implemented | When `Me.md` loads with more than 80 lines, `UserProfileEngine.ingest()` prints a dim warning to the terminal indicating the line count and that lower sections may compact under token pressure | `AC-CR013-001`, `AC-CR013-002`, `AC-CR013-003`, `AC-CR013-004` | `CR-013` | Inform, don't block |
+
+### API — Weather Geocoding Robustness (CR-014)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `BUG-API-002` | bug | P1 | resolved | WeatherSkill fails to geocode locations expressed as "City Country" without a comma separator (e.g., "Tijuana Mexico") because Open-Meteo's `name` param expects a city name only | `AC-CR014-001` | session | Resolved by CR-014 |
+| `NFR-API-001` | non-functional | P1 | implemented | WeatherSkill geocoding resolves recognized country names in location queries to ISO 3166-1 alpha-2 codes, passes `countrycode` to Open-Meteo, and ranks results by country match before falling back to US-state matching or first result | `AC-CR014-002`, `AC-CR014-003`, `AC-CR014-004` | `CR-014` | `_split_country()`, `_COUNTRY_CODES` |
 
 ## Requirement lifecycle notes
 

@@ -23,6 +23,48 @@ _WEATHER_KEYWORDS = (
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
+# Maps common country names / aliases → ISO 3166-1 alpha-2 codes.
+# "Georgia" is intentionally absent — it's also a US state, so we let the
+# US-state disambiguation path handle ambiguous cases (Tbilisi is prominent
+# enough to be found without a country filter).
+_COUNTRY_CODES: dict[str, str] = {
+    "afghanistan": "AF", "albania": "AL", "algeria": "DZ", "angola": "AO",
+    "argentina": "AR", "armenia": "AM", "australia": "AU", "austria": "AT",
+    "azerbaijan": "AZ", "bahrain": "BH", "bangladesh": "BD", "belarus": "BY",
+    "belgium": "BE", "bolivia": "BO", "brazil": "BR", "bulgaria": "BG",
+    "cambodia": "KH", "cameroon": "CM", "canada": "CA", "chile": "CL",
+    "china": "CN", "colombia": "CO", "costa rica": "CR", "croatia": "HR",
+    "cuba": "CU", "czech republic": "CZ", "czechia": "CZ", "denmark": "DK",
+    "dominican republic": "DO", "ecuador": "EC", "egypt": "EG",
+    "el salvador": "SV", "estonia": "EE", "ethiopia": "ET", "finland": "FI",
+    "france": "FR", "germany": "DE", "ghana": "GH", "greece": "GR",
+    "guatemala": "GT", "haiti": "HT", "honduras": "HN", "hong kong": "HK",
+    "hungary": "HU", "iceland": "IS", "india": "IN", "indonesia": "ID",
+    "iran": "IR", "iraq": "IQ", "ireland": "IE", "israel": "IL",
+    "italy": "IT", "ivory coast": "CI", "jamaica": "JM", "japan": "JP",
+    "jordan": "JO", "kazakhstan": "KZ", "kenya": "KE", "kuwait": "KW",
+    "laos": "LA", "latvia": "LV", "lebanon": "LB", "libya": "LY",
+    "lithuania": "LT", "luxembourg": "LU", "malaysia": "MY", "mali": "ML",
+    "mexico": "MX", "moldova": "MD", "mongolia": "MN", "morocco": "MA",
+    "mozambique": "MZ", "myanmar": "MM", "burma": "MM", "namibia": "NA",
+    "nepal": "NP", "netherlands": "NL", "holland": "NL", "new zealand": "NZ",
+    "nicaragua": "NI", "nigeria": "NG", "norway": "NO", "oman": "OM",
+    "pakistan": "PK", "panama": "PA", "paraguay": "PY", "peru": "PE",
+    "philippines": "PH", "poland": "PL", "portugal": "PT", "qatar": "QA",
+    "romania": "RO", "russia": "RU", "rwanda": "RW", "saudi arabia": "SA",
+    "senegal": "SN", "serbia": "RS", "singapore": "SG", "slovakia": "SK",
+    "slovenia": "SI", "somalia": "SO", "south africa": "ZA",
+    "south korea": "KR", "korea": "KR", "spain": "ES", "sri lanka": "LK",
+    "sudan": "SD", "sweden": "SE", "switzerland": "CH", "syria": "SY",
+    "taiwan": "TW", "tanzania": "TZ", "thailand": "TH", "tunisia": "TN",
+    "turkey": "TR", "turkiye": "TR", "uganda": "UG", "ukraine": "UA",
+    "united arab emirates": "AE", "uae": "AE",
+    "united kingdom": "GB", "uk": "GB", "england": "GB", "scotland": "GB", "wales": "GB",
+    "united states": "US", "usa": "US", "america": "US",
+    "uruguay": "UY", "uzbekistan": "UZ", "venezuela": "VE", "vietnam": "VN",
+    "yemen": "YE", "zambia": "ZM", "zimbabwe": "ZW",
+}
+
 _US_STATE_ABBREVIATIONS = {
     "AL": "Alabama",
     "AK": "Alaska",
@@ -159,11 +201,14 @@ class WeatherSkill(Skill):
         return self._format_weather(place, forecast)
 
     def _geocode(self, location: str) -> dict:
-        for candidate in self._geocode_candidates(location):
+        city_part, country_code = self._split_country(location)
+        for candidate in self._geocode_candidates(city_part):
             url = f"{_GEOCODE_URL}?name={quote_plus(candidate)}&count=10&language=en&format=json"
+            if country_code:
+                url += f"&countrycode={country_code}"
             data = self._fetch_json(url)
             results = data.get("results") or []
-            first = self._best_geocode_result(results, location)
+            first = self._best_geocode_result(results, city_part, country_code)
             if first:
                 break
         else:
@@ -225,11 +270,15 @@ class WeatherSkill(Skill):
     @staticmethod
     def _clean_location(text: str) -> str:
         cleaned = re.sub(
-            r"\b(?:today|tomorrow|tonight|right now|now|currently|current|weather|forecast|temperature|what is|what's|please|can you tell me|tell me|show me|check|look up|the|in)\b",
+            r"\b(?:today|tomorrow|tonight|right now|now|currently|current|weather|forecast|temperature|what is|what's|please|can you tell me|tell me|show me|check|look up)\b",
             " ",
             text,
             flags=re.I,
         )
+        # Strip "the" only when NOT followed by a capital letter — preserves "The Hague", "The Bronx", etc.
+        cleaned = re.sub(r"\bthe\b(?!\s+[A-Z])", " ", cleaned)
+        # Strip standalone "in" only when NOT followed by a capital letter — preserves "Indiana", "In-cheon".
+        cleaned = re.sub(r"\bin\b(?!\s+[A-Z])", " ", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned).strip(" ,")
         return cleaned
 
@@ -272,12 +321,40 @@ class WeatherSkill(Skill):
             if expanded:
                 candidates.append(f"{city} {expanded}")
             candidates.append(city)
+        elif " " in cleaned:
+            # "Tijuana Mexico" style (no comma) — Open-Meteo's name param is city-only,
+            # so strip trailing words one at a time as fallback candidates.
+            words = cleaned.split()
+            for i in range(len(words) - 1, 0, -1):
+                candidates.append(" ".join(words[:i]))
         return list(dict.fromkeys(c for c in candidates if c))
 
     @staticmethod
-    def _best_geocode_result(results: list[dict], original_location: str) -> dict | None:
+    def _split_country(location: str) -> tuple[str, str | None]:
+        """Return (city_part, iso2_code) by stripping a recognized country suffix."""
+        for name in sorted(_COUNTRY_CODES, key=len, reverse=True):
+            pattern = r",?\s+" + re.escape(name) + r"\s*$"
+            match = re.search(pattern, location, re.I)
+            if match:
+                city = location[:match.start()].strip(", ")
+                if city:
+                    return city, _COUNTRY_CODES[name]
+        return location, None
+
+    @staticmethod
+    def _best_geocode_result(
+        results: list[dict],
+        original_location: str,
+        country_code: str | None = None,
+    ) -> dict | None:
         if not results:
             return None
+        # Prefer the result whose country_code matches the one we searched with.
+        if country_code:
+            for result in results:
+                if str(result.get("country_code", "")).upper() == country_code.upper():
+                    return result
+        # Fall back to US-state matching when region is a known abbreviation.
         parts = [p.strip().lower() for p in original_location.split(",") if p.strip()]
         region = parts[1].upper().replace(".", "") if len(parts) >= 2 else ""
         expanded = _US_STATE_ABBREVIATIONS.get(region, "").lower()
