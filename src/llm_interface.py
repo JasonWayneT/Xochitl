@@ -68,6 +68,88 @@ def stream_local(
         return
 
 
+# ── Cloud streaming ───────────────────────────────────────────────────────────
+# Implements FR-UI-005 (LLM token streaming for conversational turns — CR-031)
+
+def _stream_gemini(
+    messages: list[dict],
+    system: str = "",
+    model: str = "",
+) -> Generator[str, None, None]:
+    """Yield tokens from Gemini via OpenAI-compatible streaming endpoint.
+
+    Implements FR-UI-005 / TASK-UI-031-a.
+    """
+    if not GEMINI_API_KEY:
+        return
+    try:
+        from openai import OpenAI
+        client = OpenAI(
+            api_key=GEMINI_API_KEY,
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+        )
+        full_messages = (
+            [{"role": "system", "content": system}] if system else []
+        ) + messages
+        stream = client.chat.completions.create(
+            model=model or CLOUD_MODEL,
+            messages=full_messages,
+            stream=True,
+            max_tokens=4000,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+    except Exception:
+        return
+
+
+def _stream_anthropic(
+    messages: list[dict],
+    system: str = "",
+    model: str = "claude-sonnet-4-20250514",
+) -> Generator[str, None, None]:
+    """Yield tokens from Anthropic via native streaming context manager.
+
+    Implements FR-UI-005 / TASK-UI-031-a.
+    """
+    if not ANTHROPIC_API_KEY:
+        return
+    try:
+        import anthropic
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        kwargs: dict = {
+            "model": model,
+            "max_tokens": 4000,
+            "messages": messages,
+        }
+        if system:
+            kwargs["system"] = system
+        with client.messages.stream(**kwargs) as stream:
+            for text in stream.text_stream:
+                yield text
+    except Exception:
+        return
+
+
+def stream_cloud(
+    messages: list[dict],
+    system: str = "",
+    model: str = "",
+) -> Generator[str, None, None]:
+    """Yield tokens from the configured cloud provider as they arrive.
+
+    Dispatches to Gemini or Anthropic based on CLOUD_PROVIDER secret.
+    Implements FR-UI-005 / TASK-UI-031-a.
+    """
+    m = model or CLOUD_MODEL
+    if CLOUD_PROVIDER == "anthropic":
+        yield from _stream_anthropic(messages, system=system, model=m)
+    else:
+        yield from _stream_gemini(messages, system=system, model=m)
+
+
 # ── Local: Ollama ──────────────────────────────────────────────────
 
 def call_ollama(

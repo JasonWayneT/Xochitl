@@ -246,6 +246,14 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR013-002` | `NFR-ORCH-002` | Normal Me.md | `Me.md` has ≤80 lines | `UserProfileEngine.ingest()` runs | No warning is printed | implemented |
 | `AC-CR013-003` | `NFR-ORCH-002` | Missing Me.md | No `Me.md` file found | `UserProfileEngine.ingest()` runs | No warning is printed | implemented |
 | `AC-CR013-004` | `FR-ORCH-022` | Warning does not block | `Me.md` has 120 lines | `UserProfileEngine.ingest()` runs | File still loads fully; `self._content` contains the full file | implemented |
+| `AC-CR031-001` | `FR-UI-005` | Real token streaming | User sends a conversational message (no skill matched) | `_agent_loop` runs with `_stream=True` | Tokens appear on screen progressively as the model generates them, not after a full batch wait | implemented |
+| `AC-CR031-002` | `FR-UI-005` | Skill path unaffected | User triggers a skill (`top_score ≥ 0.65`) | `_agent_loop` runs | Non-streaming path used; full `LLMResponse` returned and parsed for `<skill_call>` as before | implemented |
+| `AC-CR031-003` | `FR-UI-005` | Cloud streaming | Cloud provider (Gemini or Anthropic) is active | Conversational turn streams | Tokens arrive progressively from the provider's streaming API | implemented |
+| `AC-CR031-004` | `FR-UI-005` | Local streaming | Ollama is active | Conversational turn streams | Tokens arrive progressively from Ollama's `stream=True` chat endpoint | implemented |
+| `AC-CR031-005` | `FR-UI-005` | No double-print | Streaming turn completes | `start()` runs post-response | Response is not re-printed by `_stream_response()` (`_last_response_streamed` flag) | implemented |
+| `AC-CR031-006` | `FR-UI-005` | Empty stream fallback | Streaming yields no tokens | `_agent_loop` runs | Falls back to non-streaming `route()` call; user sees a response | implemented |
+| `AC-CR031-007` | `NFR-PERF-009` | Spinner until first token | Model is generating first token | `_StatusContext` is active | Spinner remains visible until streaming begins, then clears cleanly | implemented |
+| `AC-CR031-008` | `FR-UI-005` | Smoke tests pass | All changes applied | `python smoke_test.py` runs | 27 tests pass, 0 failures | implemented |
 | `AC-CR014-001` | `BUG-API-002` | City-Country query (no comma) | User asks "what is the weather in Tijuana Mexico?" | WeatherSkill geocodes | Coordinates for Tijuana, Baja California, Mexico are resolved and current weather is returned | resolved |
 | `AC-CR014-002` | `NFR-API-001` | Country-filtered API call | User provides a location with a recognized country name | `_split_country()` identifies the country | The geocoding URL includes `countrycode=XX` scoping results to that country | implemented |
 | `AC-CR014-003` | `NFR-API-001` | Country-aware result ranking | Geocoding returns multiple cities with the same name | `_best_geocode_result()` runs with a known country code | The result whose `country_code` field matches is returned | implemented |
@@ -280,6 +288,13 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
 |---|---|---|---|---|---|---|---|
 | `NFR-ORCH-002` | non-functional | P2 | implemented | When `Me.md` loads with more than 80 lines, `UserProfileEngine.ingest()` prints a dim warning to the terminal indicating the line count and that lower sections may compact under token pressure | `AC-CR013-001`, `AC-CR013-002`, `AC-CR013-003`, `AC-CR013-004` | `CR-013` | Inform, don't block |
+
+### UI — LLM Token Streaming (CR-031)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-UI-005` | functional | P1 | implemented | LLM responses for conversational turns are delivered as real token streams from the model provider; words appear progressively as the model generates them, not after a full batch wait | `AC-CR031-001`, `AC-CR031-002`, `AC-CR031-003`, `AC-CR031-004`, `AC-CR031-005`, `AC-CR031-006` | `CR-031` | `stream_local`, `stream_cloud`, `route_stream`, `_agent_loop` |
+| `NFR-PERF-009` | non-functional | P2 | accepted | First token appears within 3 seconds for local model and 5 seconds for cloud under normal network conditions | `AC-CR031-007` | `CR-031` | Perceived-latency target |
 
 ### API — Weather Geocoding Robustness (CR-014)
 

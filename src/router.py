@@ -10,16 +10,17 @@ import json
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Generator, Optional
 
 from src.llm_interface import (
     LLMResponse, RouteType,
     call_local, call_cloud, call_with_retry,
     estimate_confidence, CLOUD_MODEL,
-    CLOUD_MODEL_PRO, CLOUD_MODEL_FLASH, ROUTER_MODEL
+    CLOUD_MODEL_PRO, CLOUD_MODEL_FLASH, ROUTER_MODEL,
+    stream_local, stream_cloud,  # FR-UI-005: real token streaming
 )
 from src.model_manager import select_model
-from src.context_loader import build_system_prompt, compress_context
+from src.context_loader import build_system_prompt, compress_context, trim_history_for_local
 from src.memory import read_memory
 from src.config import get_confidence_threshold
 from src import database as db
@@ -521,7 +522,8 @@ class TieredRouter:
         model: str = "",
         category: str = "",
     ) -> LLMResponse:
-        messages = history + [{"role": "user", "content": query}]
+        trimmed = trim_history_for_local(history)
+        messages = trimmed + [{"role": "user", "content": query}]
         t0 = time.monotonic()
         result = call_with_retry(call_local, messages=messages, system=system, model=model)
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -595,6 +597,63 @@ class TieredRouter:
             return self._route_cloud(query, history, system, category=category, **kwargs)
 
         return local_result
+
+    def route_stream(
+        self,
+        query: str,
+        conversation_history: list[dict],
+        system_prompt: str = "",
+        force_route: Optional[str] = None,
+    ) -> Generator[str, None, None]:
+        """Classify and stream response tokens for conversational turns.
+
+        Implements FR-UI-005 (LLM token streaming — CR-031).
+
+        Classification (one blocking local LLM call) happens first, then tokens
+        are yielded from the appropriate provider's streaming API:
+          - Local (Ollama): `stream_local()` with `stream=True`
+          - Cloud (Gemini/Anthropic): `stream_cloud()` via provider-native SDKs
+
+        The caller is responsible for consuming the generator and handling
+        KeyboardInterrupt to support cancellation.
+        """
+        if not system_prompt:
+            system_prompt = build_system_prompt(read_memory())
+
+        if force_route:
+            category, confidence = force_route, 1.0
+        else:
+            category, confidence = self._classify(query)
+
+        threshold = get_confidence_threshold()
+        if confidence < threshold:
+            yield (
+                f"Fíjate, I wasn't sure how to interpret that — I read it as "
+                f"*{category.replace('_', ' ')}* ({confidence:.0%} confident), "
+                f"which is below my {threshold:.0%} threshold.\n\n"
+                f"Could you say more about what you'd like help with?"
+            )
+            return
+
+        if category in {"task_management", "simple_qa", "memory_recall"}:
+            system_prompt = system_prompt + "\n\n" + _live_db_context()
+
+        # Mirror _route_local message assembly: trim history then append current query.
+        trimmed = trim_history_for_local(conversation_history)
+        messages = trimmed + [{"role": "user", "content": query}]
+
+        _heavy = {"code_generation", "architecture_planning", "bmad_complex", "code_review"}
+
+        if category in _FORCE_LOCAL_CATEGORIES or category in _LOCAL_CATEGORIES:
+            model = select_model("general")
+            yield from stream_local(messages, system=system_prompt, model=model)
+        elif category in _CLOUD_CATEGORIES or category in _heavy:
+            selected = CLOUD_MODEL_PRO if category in _heavy else CLOUD_MODEL_FLASH
+            yield from stream_cloud(messages, system=system_prompt, model=selected)
+        else:
+            # Hybrid: stream local by default (falls back gracefully if Ollama down)
+            model = select_model("general")
+            yield from stream_local(messages, system=system_prompt, model=model)
 
     def _log_cloud_usage(self, result: LLMResponse) -> None:
         try:

@@ -83,6 +83,7 @@ from src.context_manager import ContextManager
 from src.memory import read_memory
 from src.background_review import BackgroundReview
 from src import database as db
+from src import events as _events
 from src.file_tools import FileTools
 from src.skills.base import Skill
 
@@ -189,7 +190,7 @@ def _print_boot_banner(con: Console) -> None:
     con.print()
     con.print("      [bold magenta]✿[/bold magenta] [bold yellow]❀[/bold yellow] [bold magenta]✿[/bold magenta]")
     con.print("    [bold yellow]❀[/bold yellow]   [bold magenta]✿[/bold magenta]   [bold yellow]❀[/bold yellow]    [bold cyan]Xochitl[/bold cyan]")
-    con.print("      [bold magenta]✿[/bold magenta] [bold yellow]❀[/bold yellow] [bold magenta]✿[/bold magenta]     [dim]Chief of Staff[/dim]")
+    con.print("      [bold magenta]✿[/bold magenta] [bold yellow]❀[/bold yellow] [bold magenta]✿[/bold magenta]     [dim]Personal AI System[/dim]")
     con.print()
 
     # WIP snapshot — 2-line dashboard
@@ -351,10 +352,16 @@ class XochitlChat:
         self._staged_message: Optional[str] = None
         # FR-UI-006: Last cancelled message — resendable via /retry
         self._last_cancelled: Optional[str] = None
+        # Guard against runaway staged-message chains (e.g. skill → stage → skill → ...)
+        self._consecutive_staged: int = 0
 
         # Phase 3: passive learning daemon — starts immediately, runs for session lifetime
         self._background_review = BackgroundReview()
         self._background_review.start()
+
+        # FR-UI-005: set to True inside _agent_loop when streaming already printed the response
+        # so start() knows to skip _stream_response() to avoid double-printing.
+        self._last_response_streamed: bool = False
 
     @property
     def skills(self) -> list[Skill]:
@@ -448,10 +455,20 @@ class XochitlChat:
                 # ── Determine input source ────────────────────────────────────
                 # If a staged message is queued, use it without prompting
                 if self._staged_message:
+                    self._consecutive_staged += 1
+                    if self._consecutive_staged > 5:
+                        console.print(
+                            "[dim]⚠ Staged message loop detected — clearing queue "
+                            "to prevent runaway.[/dim]"
+                        )
+                        self._staged_message = None
+                        self._consecutive_staged = 0
+                        continue
                     user_input = self._staged_message
                     self._staged_message = None
                     console.print(f"[dim]▶ staged:[/dim] [cyan]{user_input}[/cyan]")
                 else:
+                    self._consecutive_staged = 0
                     try:
                         user_input = Prompt.ask("[bold cyan]you[/bold cyan]")
                     except KeyboardInterrupt:
@@ -518,10 +535,13 @@ class XochitlChat:
                     self._last_cancelled = user_input
                     continue
 
-                if response:
+                # FR-UI-005: if _agent_loop streamed tokens directly to console
+                # (real LLM streaming), skip _stream_response() to avoid double-print.
+                if response and not self._last_response_streamed:
                     console.print(f"\n[bold]Xochitl[/bold]: ", end="")
                     self._stream_response(response)
                     console.print()
+                self._last_response_streamed = False  # reset for next turn
 
         except KeyboardInterrupt:
             pass
@@ -550,8 +570,18 @@ class XochitlChat:
             console.print(word, end="")
             time.sleep(0.012)
 
-    def process_message(self, user_input: str, _status: Optional["_StatusContext"] = None) -> str:
-        """Process one user message and return Xochitl's response."""
+    def process_message(
+        self,
+        user_input: str,
+        _status: Optional["_StatusContext"] = None,
+        _stream: bool = True,
+    ) -> str:
+        """Process one user message and return Xochitl's response.
+
+        When _stream=True (default), conversational agent-loop turns use real
+        LLM token streaming (FR-UI-005). Pass _stream=False in tests to keep
+        responses synchronous and avoid console side-effects.
+        """
         self.session_history.append({
             "role": "user",
             "content": user_input,
@@ -633,7 +663,7 @@ class XochitlChat:
             # research, sdd, new_project, and all other intents.
             if _status:
                 _status.update("drafting response")
-            response = self._agent_loop(user_input, cm, _status)
+            response = self._agent_loop(user_input, cm, _status, _stream=_stream)
 
         response = self._maybe_offer_skill_creation(user_input, response)
         final = self._record(response)
@@ -673,6 +703,7 @@ class XochitlChat:
         user_input: str,
         cm: ContextManager,
         _status: Optional[_StatusContext] = None,
+        _stream: bool = False,
     ) -> str:
         """LLM-controlled turn: deterministic skill scoring + LLM response.
 
@@ -686,6 +717,8 @@ class XochitlChat:
           5. If found: execute skill, record in history, append result to response
           6. Strip any stray <skill_call> tags from visible output
         """
+        _events.emit("routing_started", {"query": user_input[:100]})
+
         system_prompt = cm.assemble_system_prompt()
         messages = cm.assemble_messages(self._clean_history(), user_input, tag_provenance=True)
 
@@ -709,10 +742,64 @@ class XochitlChat:
         if top_skill is not None and top_score >= _SKILL_INJECT_THRESHOLD:
             defn = top_skill.tool_definition()
             system_prompt = system_prompt + "\n\n---\n\n" + _format_active_skill_block(defn)
+            _events.emit("skill_matched", {"skill": defn.get("name", ""), "score": top_score})
             if _status:
                 _status.update(f"skill ready: {defn.get('name', type(top_skill).__name__)}")
 
         force = "code_generation" if self.force_cloud else None
+
+        # ── FR-UI-005: Real LLM token streaming (CR-031) ─────────────────────
+        # Stream when: _stream is True, no skill schema was injected (because
+        # skill-call parsing requires the full response), and we're not in
+        # force_cloud mode (which targets code generation, always non-streaming).
+        use_streaming = (
+            _stream
+            and not self.force_cloud
+            and (top_skill is None or top_score < _SKILL_INJECT_THRESHOLD)
+        )
+
+        if use_streaming:
+            # Stop the Live refresh context before printing streaming tokens to
+            # avoid Rich display conflicts. The main thread's with-status_ctx
+            # block will see _live=None and skip its own cleanup.
+            if _status is not None:
+                _status._stop_event.set()
+                if _status._refresh_thread:
+                    _status._refresh_thread.join(timeout=0.3)
+                    _status._refresh_thread = None
+                live = _status._live
+                _status._live = None  # prevent double-exit in _StatusContext.__exit__
+                if live:
+                    try:
+                        live.stop()
+                    except Exception:
+                        pass
+
+            buffer: list[str] = []
+            printed_header = False
+            for token in self.router.route_stream(
+                query=user_input,
+                conversation_history=messages,
+                system_prompt=system_prompt,
+                force_route=force,
+            ):
+                if not printed_header:
+                    console.print(f"\n[bold]Xochitl[/bold]: ", end="")
+                    printed_header = True
+                console.print(token, end="", flush=True)
+                buffer.append(token)
+
+            if buffer:
+                console.print()  # trailing newline after stream
+                self._last_response_streamed = True
+                _events.emit("llm_complete", {"route": "stream", "tokens_out": len(buffer)})
+                response_text = "".join(buffer)
+                # Skill calls are not expected on streaming turns (no schema injected),
+                # but guard anyway: strip any stray XML and return clean text.
+                return _SKILL_CALL_RE.sub("", response_text).strip() or response_text
+            # Empty stream → fall through to non-streaming path below
+        # ── Non-streaming path (skill calls, special routes, streaming fallback) ──
+
         result = self.router.route(
             query=user_input,
             conversation_history=messages,
@@ -722,6 +809,8 @@ class XochitlChat:
 
         if result.error:
             return f"{_ERR} — {result.error}"
+
+        _events.emit("llm_complete", {"route": str(result.route), "tokens_out": result.tokens_out})
 
         response_text = result.content or ""
 
@@ -736,11 +825,17 @@ class XochitlChat:
             skill = self._find_skill_by_name(skill_name)
             if skill:
                 if self._skill_call_requires_approval(skill, params):
+                    _events.emit("hitl_required", {
+                        "action": str(params.get("action", skill_name)),
+                        "risk": self._risk_label_for_skill(type(skill).__name__, params),
+                    })
                     return self._stage_skill_call_plan(skill, params, user_input, visible)
 
+                _events.emit("skill_started", {"skill": skill_name, "params": list(params.keys())})
                 if _status:
                     _status.update(f"running skill: {skill_name}")
                 tool_result = skill.execute(user_input, self.current_context, params)
+                _events.emit("skill_complete", {"skill": skill_name, "success": True})
 
                 # Implements FR-ORCH-009 — persist tool turn in session history
                 self.session_history.append({
