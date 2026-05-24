@@ -1,0 +1,9 @@
+# Pyrefly configuration for Xochitl
+# Points the type checker at the Python 3.12 interpreter where
+# project dependencies are installed.
+
+python_interpreter = "C:\\Users\\Jason\\AppData\\Local\\Programs\\Python\\Python312\\python.exe"
+
+# Only type-check the src package
+project_includes = ["src"]
+project_excludes = ["node_modules", ".claude", "__pycache__", ".xochitl"]

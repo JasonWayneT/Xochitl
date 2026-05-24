@@ -3,7 +3,7 @@
 ## Project identity
 
 - **Project name**: Xochitl (pronounced "so-CHEEL")
-- **Product type**: Terminal-native AI Chief of Staff CLI
+- **Product type**: Terminal-native personal AI system CLI
 - **Target users**: Solo developer (personal productivity and AI-assisted app development)
 - **Primary problem**: Fragmented personal task management and the absence of a repeatable, traceable AI-assisted app development pipeline
 - **Primary value proposition**: A single CLI that manages a daily priority queue with Notion sync (PARA methodology) and runs a full BMAD → SDD → Code Generation pipeline for building new applications

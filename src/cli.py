@@ -22,7 +22,7 @@ SPINNERS["xochitl"] = {
 
 console = Console()
 
-XOCHITL_BANNER = "[bold cyan]Xochitl[/bold cyan] [dim]— Chief of Staff[/dim]"
+XOCHITL_BANNER = "[bold cyan]Xochitl[/bold cyan] [dim]— Personal AI System[/dim]"
 
 
 def _boot() -> None:
@@ -36,7 +36,7 @@ def _boot() -> None:
 @click.group(invoke_without_command=True)
 @click.pass_context
 def cli(ctx):
-    """Xochitl — terminal-native AI Chief of Staff."""
+    """Xochitl — terminal-native personal AI system."""
     _boot()
     if ctx.invoked_subcommand is None:
         # Default: launch chat

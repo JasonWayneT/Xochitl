@@ -15,8 +15,10 @@ Design principles:
 
 from __future__ import annotations
 
+import json
 import logging
 import queue
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -69,6 +71,24 @@ USER: {user_input}
 XOCHITL: {assistant_response}
 
 Your observation (ONE sentence or NONE):"""
+
+
+_STRUCTURED_EXTRACT_PROMPT = """\
+Extract ONE structured fact about the user from this exchange. Output ONLY valid JSON.
+
+Exchange:
+USER: {user_input}
+XOCHITL: {assistant_response}
+
+Schema:
+{{"fact": "<third-person statement under 180 chars>", "category": "<preference|context|project|skill|constraint|goal>", "confidence": <0.0-1.0>}}
+
+Confidence guide: explicit correction=0.95, stated preference=0.80, revealed by behavior=0.65, implied=0.45
+If nothing durable to extract, output: {{"fact": "", "category": "context", "confidence": 0.0}}
+
+JSON only:"""
+
+_VALID_CATEGORIES = {"preference", "context", "project", "skill", "constraint", "goal"}
 
 
 class _TurnData:
@@ -169,17 +189,18 @@ class BackgroundReview:
                 self._queue.task_done()
 
     def _process(self, turn: _TurnData) -> None:
-        """Run the extraction LLM call and write any finding to the KB."""
-        # Rate limit — skip if we wrote very recently
+        """Run both extraction passes and write findings to KB + structured DB."""
         now = time.monotonic()
         if (now - self._last_write_at) < _MIN_WRITE_INTERVAL_SECS:
             return
 
         observation = self._extract(turn)
-        if not observation:
+        structured = self._extract_structured(turn)
+
+        if not observation and not structured:
             return
 
-        self._write(observation, turn.project)
+        self._write(observation, structured, turn.project)
         self._last_write_at = time.monotonic()
 
     def _extract(self, turn: _TurnData) -> Optional[str]:
@@ -220,8 +241,47 @@ class BackgroundReview:
 
         return cleaned if cleaned else None
 
-    def _write(self, observation: str, project: Optional[str]) -> None:
-        """Write the observation to KnowledgeBase Tier 2 and attempt Tier 3."""
+    def _extract_structured(self, turn: _TurnData) -> Optional[dict]:
+        """Second pass: extract a categorized fact with confidence score for DB storage."""
+        try:
+            from src.llm_interface import call_local, ROUTER_MODEL
+        except ImportError:
+            return None
+
+        prompt = _STRUCTURED_EXTRACT_PROMPT.format(
+            user_input=turn.user_input,
+            assistant_response=turn.assistant_response,
+        )
+        try:
+            result = call_local(
+                messages=[{"role": "user", "content": prompt}],
+                model=ROUTER_MODEL,
+            )
+        except Exception:
+            return None
+
+        if result.error or not result.content:
+            return None
+
+        raw = result.content.strip()
+        raw = re.sub(r'^```(?:json)?\s*|\s*```$', '', raw, flags=re.MULTILINE).strip()
+
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, ValueError):
+            return None
+
+        fact = (data.get("fact") or "").strip()
+        category = str(data.get("category", "context")).strip()
+        confidence = float(data.get("confidence", 0.0))
+
+        if not fact or confidence < 0.4 or category not in _VALID_CATEGORIES:
+            return None
+
+        return {"fact": fact, "category": category, "confidence": confidence}
+
+    def _write(self, observation: Optional[str], structured: Optional[dict], project: Optional[str]) -> None:
+        """Write findings to KB (Tier 2), vector store (Tier 3), and structured DB."""
         try:
             from src.memory import KnowledgeBase, VectorMemory
         except ImportError:
@@ -230,49 +290,67 @@ class BackgroundReview:
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         title = f"passive_learning_{date_str}"
 
-        # ── Tier 2: append to today's passive-learning KB file ───────────────
-        try:
-            kb = KnowledgeBase()
-            kb_dir = kb.kb_dir
-            kb_dir.mkdir(parents=True, exist_ok=True)
+        # ── Tier 2: append unstructured observation to today's KB file ────────
+        if observation:
+            try:
+                kb = KnowledgeBase()
+                kb_dir = kb.kb_dir
+                kb_dir.mkdir(parents=True, exist_ok=True)
 
-            import re
-            slug = re.sub(r'\W+', '_', title.lower()).strip('_')
-            kb_path = kb_dir / f"{slug}.md"
+                slug = re.sub(r'\W+', '_', title.lower()).strip('_')
+                kb_path = kb_dir / f"{slug}.md"
 
-            ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
-            entry_line = f"- [{ts}] {observation}"
-            if project:
-                entry_line += f" (project: {project})"
+                ts = datetime.now(timezone.utc).strftime("%H:%M UTC")
+                entry_line = f"- [{ts}] {observation}"
+                if project:
+                    entry_line += f" (project: {project})"
 
-            if kb_path.exists():
-                existing = kb_path.read_text(encoding="utf-8")
-                # Avoid duplicating the same observation
-                if observation[:60] in existing:
-                    return
-                updated = existing.rstrip() + "\n" + entry_line + "\n"
-            else:
-                header = (
-                    f"# Passive Learning — {date_str}\n"
-                    f"tags: passive_learning, user_facts\n"
-                    f"updated: {datetime.now(timezone.utc).isoformat()}\n\n"
+                if kb_path.exists():
+                    existing = kb_path.read_text(encoding="utf-8")
+                    if observation[:60] in existing:
+                        pass  # already recorded — skip KB write but continue to DB
+                    else:
+                        updated = existing.rstrip() + "\n" + entry_line + "\n"
+                        tmp = kb_path.with_suffix(".tmp")
+                        tmp.write_text(updated, encoding="utf-8")
+                        tmp.replace(kb_path)
+                else:
+                    header = (
+                        f"# Passive Learning — {date_str}\n"
+                        f"tags: passive_learning, user_facts\n"
+                        f"updated: {datetime.now(timezone.utc).isoformat()}\n\n"
+                    )
+                    updated = header + entry_line + "\n"
+                    tmp = kb_path.with_suffix(".tmp")
+                    tmp.write_text(updated, encoding="utf-8")
+                    tmp.replace(kb_path)
+            except Exception as exc:
+                logger.debug("background_review: KB write failed: %s", exc)
+
+        # ── Tier 3: best-effort vector store (no-op if Ollama is down) ────────
+        if observation:
+            try:
+                VectorMemory().memorize(
+                    topic="passive_learning",
+                    summary=observation,
+                    tags=["passive_learning", "user_facts"],
+                    project=project,
                 )
-                updated = header + entry_line + "\n"
+            except Exception:
+                pass  # vector store optional — Tier 2 write already succeeded
 
-            tmp = kb_path.with_suffix(".tmp")
-            tmp.write_text(updated, encoding="utf-8")
-            tmp.replace(kb_path)
-        except Exception as exc:
-            logger.debug("background_review: KB write failed: %s", exc)
-            return
-
-        # ── Tier 3: best-effort vector store (no-op if Ollama is down) ──────
-        try:
-            VectorMemory().memorize(
-                topic="passive_learning",
-                summary=observation,
-                tags=["passive_learning", "user_facts"],
-                project=project,
-            )
-        except Exception:
-            pass  # vector store is optional — Tier 2 write already succeeded
+        # ── Structured DB fact (category + confidence) ─────────────────────────
+        if structured:
+            try:
+                from src import database as _db
+                with _db.get_connection() as conn:
+                    _db.upsert_memory_fact(
+                        conn,
+                        fact=structured["fact"],
+                        category=structured["category"],
+                        confidence=structured["confidence"],
+                        source="background_review",
+                        project=project,
+                    )
+            except Exception as exc:
+                logger.debug("background_review: structured DB write failed: %s", exc)

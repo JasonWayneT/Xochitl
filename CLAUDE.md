@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Xochitl (pronounced "so-CHEEL") is a terminal-native AI Chief of Staff. It manages personal tasks via Notion (PARA methodology) and supports a full BMAD → SDD → Code Generation pipeline for building new applications.
+Xochitl (pronounced "so-CHEEL") is a terminal-native personal AI system — modeled after the JARVIS vision. She manages personal tasks via Notion (PARA methodology) and supports a full BMAD → SDD → Code Generation pipeline for building new applications.
 
 ## Tech Stack
 
@@ -42,6 +42,7 @@ Every code change must cite at least one requirement ID (`FR-*`, `NFR-*`, `ARCH-
 │   ├── notion_sync.py         # Notion integration
 │   ├── database.py            # SQLite schema
 │   ├── security.py            # Path sandboxing
+│   ├── events.py              # Thread-safe event bus for web SSE layer (FR-ORCH-020)
 │   └── skills/                # Pipeline logic
 │       ├── bmad_skill.py      # Project init & BMAD artifacts
 │       ├── sdd_skill.py       # Spec generation & requirement CRUD

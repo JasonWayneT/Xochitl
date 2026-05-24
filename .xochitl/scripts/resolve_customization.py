@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 """
 Resolve customization for a BMad skill using three-layer TOML merge.
 
@@ -12,23 +12,23 @@ Skill name is derived from the basename of the skill directory.
 Outputs merged JSON to stdout. Errors go to stderr.
 
 Requires Python 3.11+ (uses stdlib `tomllib`). No `uv`, no `pip install`,
-no virtualenv — plain `python3` is sufficient.
+no virtualenv ΓÇö plain `python3` is sufficient.
 
   python3 resolve_customization.py --skill /abs/path/to/skill-dir
   python3 resolve_customization.py --skill ... --key agent
   python3 resolve_customization.py --skill ... --key agent.menu
 
-Merge rules (purely structural — no field-name special-casing):
+Merge rules (purely structural ΓÇö no field-name special-casing):
   - Scalars (string, int, bool, float): override wins
   - Tables: deep merge (recursively apply these rules)
   - Arrays of tables where every item shares the *same* identifier
     field (every item has `code`, or every item has `id`):
     merge by that key (matching keys replace, new keys append)
-  - All other arrays — including arrays where only some items have
+  - All other arrays ΓÇö including arrays where only some items have
     `code` or `id`, or where items mix the two keys:
     append (base items followed by override items)
 
-No removal mechanism — overrides cannot delete base items. To suppress
+No removal mechanism ΓÇö overrides cannot delete base items. To suppress
 a default, fork the skill or override the item by code with a no-op
 description/prompt.
 """
@@ -97,7 +97,7 @@ def _detect_keyed_merge_field(items):
     """Return 'code' or 'id' if every table item carries that *same* field.
 
     All items must share the same identifier (all `code`, or all `id`).
-    Mixed arrays — where some items use `code` and others use `id` —
+    Mixed arrays ΓÇö where some items use `code` and others use `id` ΓÇö
     return None and fall through to append semantics. This is intentional:
     mixing identifier keys within one array is a schema smell, and
     append-fallback is safer than guessing which key should merge.

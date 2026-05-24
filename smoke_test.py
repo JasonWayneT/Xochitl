@@ -775,6 +775,148 @@ def t_governor_should_warn_dedup():
 test("Governor: should_warn deduplicates per-tier (AC-CR026-007)", t_governor_should_warn_dedup)
 
 
+# ── Local AI hardening (CR-010) — AC-CR010-001..005 ───────────────────────────
+
+def t_trim_history_for_local():
+    """AC-CR010-002: >10 messages → summary block + ack + 10 recent messages."""
+    from src.context_loader import trim_history_for_local
+    history = [{"role": "user", "content": f"msg-{i}"} for i in range(15)]
+    trimmed = trim_history_for_local(history)
+    assert len(trimmed) == 12, f"Expected 12 entries, got {len(trimmed)}"
+    assert trimmed[0]["role"] == "user"
+    assert "Earlier conversation" in trimmed[0]["content"]
+    assert trimmed[1]["role"] == "assistant"
+    assert trimmed[-1]["content"] == "msg-14"
+test("Context: trim_history_for_local keeps 10 + summary (AC-CR010-002)", t_trim_history_for_local)
+
+
+def t_event_emitter_subscriber():
+    """AC-CR010-001: emit() delivers events to subscribers without error."""
+    from src.events import get_emitter
+    emitter = get_emitter()
+    received = []
+    def _cb(event, payload):
+        received.append((event, payload))
+    emitter.subscribe(_cb)
+    try:
+        emitter.emit("routing_started", {"query": "hello"})
+        emitter.emit("llm_complete", {"route": "local", "tokens_out": 42})
+    finally:
+        emitter.unsubscribe(_cb)
+    assert ("routing_started", {"query": "hello"}) in received
+    assert ("llm_complete", {"route": "local", "tokens_out": 42}) in received
+test("Events: emitter delivers routing_started + llm_complete (AC-CR010-001)", t_event_emitter_subscriber)
+
+
+def t_memory_facts_table():
+    """AC-CR010-004: upsert_memory_fact stores structured facts."""
+    import sqlite3
+    from src.database import upsert_memory_fact, get_memory_facts
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        fact_id = upsert_memory_fact(
+            conn, "Prefers morning standups", "preference", 0.8, project="smoke"
+        )
+        assert fact_id > 0
+        facts = get_memory_facts(conn, min_confidence=0.4)
+        assert any(f["fact"] == "Prefers morning standups" for f in facts)
+        assert any(f["category"] == "preference" for f in facts)
+    finally:
+        conn.close()
+test("Database: upsert_memory_fact stores structured facts (AC-CR010-004)", t_memory_facts_table)
+
+
+def t_hyde_embed_fallback():
+    """AC-CR010-005: _hyde_embed falls back to direct embed when model fails."""
+    from src.memory import VectorMemory
+    vm = VectorMemory.__new__(VectorMemory)
+    called = {"direct": False}
+
+    def fake_embed(text):
+        called["direct"] = True
+        return [0.1, 0.2, 0.3]
+
+    vm._embed = fake_embed
+    with _patch("src.llm_interface.call_local", side_effect=RuntimeError("model down")):
+        result = vm._hyde_embed("what is my favorite color?")
+    assert result == [0.1, 0.2, 0.3]
+    assert called["direct"] is True
+test("Memory: _hyde_embed falls back to _embed on failure (AC-CR010-005)", t_hyde_embed_fallback)
+
+
+def t_staged_message_guard():
+    """AC-CR010-003: consecutive staged counter threshold is 5."""
+    import src.chat as chat_mod
+    assert hasattr(chat_mod, "_OPEN_ENDED_SCORE_THRESHOLD")
+    src = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    assert "_consecutive_staged" in src
+    assert "self._consecutive_staged > 5" in src
+    assert "Staged message loop detected" in src
+test("Chat: staged message loop guard present (AC-CR010-003)", t_staged_message_guard)
+
+
+def t_env_example_documents_vars():
+    """AC-CR010-006: .env.example lists tunable model and API variables."""
+    env_example = (ROOT / ".env.example").read_text(encoding="utf-8")
+    for key in (
+        "LOCAL_MODEL", "OLLAMA_URL", "GEMINI_API_KEY", "ANTHROPIC_API_KEY",
+        "XCH_PREFER_LOCAL_TOKENS", "XCH_LOCAL_ONLY_TOKENS", "XCH_HARD_STOP_TOKENS",
+    ):
+        assert key in env_example, f"{key} missing from .env.example"
+test("Config: .env.example documents tunable vars (AC-CR010-006)", t_env_example_documents_vars)
+
+
+def t_bmad_resolver_installed():
+    """BMAD native: resolve_customization.py ships with Xochitl installation."""
+    resolver = ROOT / ".xochitl" / "scripts" / "resolve_customization.py"
+    assert resolver.exists(), "resolve_customization.py missing from .xochitl/scripts/"
+    assert "deep_merge" in resolver.read_text(encoding="utf-8")
+test("BMAD: resolve_customization.py installed in .xochitl/scripts/", t_bmad_resolver_installed)
+
+
+# ── Uncertainty tiers (CR-032) — AC-CR032-001..004 ────────────────────────────
+
+def t_uncertainty_tiers_in_prompt():
+    """AC-CR032-001: system prompt contains [UNCERTAINTY TIERS] section."""
+    prompt = (ROOT / "prompts" / "system_xochitl.txt").read_text(encoding="utf-8")
+    assert "[UNCERTAINTY TIERS]" in prompt
+    for tier in ("TIER 0", "TIER 1", "TIER 2", "TIER 3"):
+        assert tier in prompt, f"{tier} missing from system prompt"
+test("Prompt: [UNCERTAINTY TIERS] section present (AC-CR032-001)", t_uncertainty_tiers_in_prompt)
+
+
+def t_capability_boundary_in_prompt():
+    """AC-CR032-002: system prompt contains [CAPABILITY BOUNDARY] section."""
+    prompt = (ROOT / "prompts" / "system_xochitl.txt").read_text(encoding="utf-8")
+    assert "[CAPABILITY BOUNDARY]" in prompt
+    assert "Xochitl CAN:" in prompt and "Xochitl CANNOT" in prompt
+test("Prompt: [CAPABILITY BOUNDARY] section present (AC-CR032-002)", t_capability_boundary_in_prompt)
+
+
+def t_turn_context_injection_low_score():
+    """AC-CR032-003: open-ended turns inject [TURN CONTEXT] when score < 0.2."""
+    import src.chat as chat_mod
+    assert chat_mod._OPEN_ENDED_SCORE_THRESHOLD == 0.2
+    src = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    assert "[TURN CONTEXT:" in src
+    assert "top_score < _OPEN_ENDED_SCORE_THRESHOLD" in src
+test("Chat: [TURN CONTEXT] injected for low skill scores (AC-CR032-003)", t_turn_context_injection_low_score)
+
+
+def t_no_turn_context_high_score():
+    """AC-CR032-004: matched skills (>= 0.65) skip [TURN CONTEXT] injection."""
+    import src.chat as chat_mod
+    assert chat_mod._SKILL_INJECT_THRESHOLD == 0.65
+    src = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    assert "top_score >= _SKILL_INJECT_THRESHOLD" in src
+    # Injection only runs in the else branch (below threshold), not after skill match block.
+    skill_block_end = src.index("if top_skill is None or top_score < _OPEN_ENDED_SCORE_THRESHOLD:")
+    skill_match_block = src[:skill_block_end]
+    assert "[TURN CONTEXT:" not in skill_match_block
+test("Chat: no [TURN CONTEXT] when skill matched >= 0.65 (AC-CR032-004)", t_no_turn_context_high_score)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

@@ -32,13 +32,8 @@ This uses **micro-file architecture** for disciplined execution:
 
 Run: `python3 {project-root}/_bmad/scripts/resolve_customization.py --skill {skill-root} --key workflow`
 
-**If the script fails**, resolve the `workflow` block yourself by reading these three files in base → team → user order and applying the same structural merge rules as the resolver:
-
-1. `{skill-root}/customize.toml` — defaults
-2. `{project-root}/_bmad/custom/{skill-name}.toml` — team overrides
-3. `{project-root}/_bmad/custom/{skill-name}.user.toml` — personal overrides
-
-Any missing file is skipped. Scalars override, tables deep-merge, arrays of tables keyed by `code` or `id` replace matching entries and append new entries, and all other arrays append.
+**If the script fails**, HALT immediately. Do not attempt to resolve configuration manually.
+Report: "BMAD is not initialized in this project, or `_bmad/scripts/resolve_customization.py` is missing. Run the `bmad-init` skill to set up this project, then retry."
 
 ### Step 2: Execute Prepend Steps
 

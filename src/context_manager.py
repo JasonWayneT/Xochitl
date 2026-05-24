@@ -156,7 +156,7 @@ class SoulEngine(ContextEngine):
         if soul_path:
             self._content = soul_path.read_text(encoding="utf-8")
         else:
-            self._content = "You are Xochitl, an AI Chief of Staff assistant."
+            self._content = "You are Xochitl, a personal AI system."
         self._loaded_at = time.time()
 
     def assemble(self) -> str:
@@ -174,6 +174,55 @@ class SoulEngine(ContextEngine):
         for line in lines:
             if total + len(line) > max_chars:
                 kept.append("\n[Soul compacted — persona core preserved]")
+                break
+            kept.append(line)
+            total += len(line) + 1
+        return "\n".join(kept)
+
+
+@dataclass
+class UserProfileEngine(ContextEngine):
+    """Loads Me.md — a portable identity file describing the user.
+
+    Sits just below the Identity Guard so Xochitl knows who she is talking to
+    before processing any other context. Never compacted — the file is small
+    by design (50-80 lines) and load-bearing for every interaction.
+    """
+
+    def __init__(self):
+        super().__init__(name="user_profile")
+
+    def ingest(self) -> None:  # type: ignore[override]
+        # Implements NFR-ORCH-002 — warn when Me.md exceeds the 80-line target.
+        profile_path = _first_existing(_persona_search_paths("Me.md", "Me.md.example"))
+        if profile_path:
+            self._content = profile_path.read_text(encoding="utf-8")
+            line_count = self._content.count("\n") + 1
+            if line_count > 80:
+                print(
+                    f"\033[2m[Me.md] {line_count} lines — target is ≤80. "
+                    "Lower sections may compact under token pressure.\033[0m"
+                )
+        else:
+            self._content = ""
+        self._loaded_at = time.time()
+
+    def assemble(self) -> str:
+        if not self._content:
+            return ""
+        return f"## About the User\n{self._content}"
+
+    def compact(self, max_tokens: int) -> str:
+        text = self.assemble()
+        max_chars = max_tokens * _CHARS_PER_TOKEN
+        if len(text) <= max_chars:
+            return text
+        # Keep top sections (identity, domains) — truncate from bottom
+        lines = text.split("\n")
+        kept, total = [], 0
+        for line in lines:
+            if total + len(line) > max_chars:
+                kept.append("\n[User profile compacted — core identity preserved]")
                 break
             kept.append(line)
             total += len(line) + 1
@@ -554,9 +603,10 @@ class ContextManager:
         self._skills_list = skills or []
 
         # Initialize engines
-        self.facts   = FactsEngine()
-        self.soul    = SoulEngine()
-        self.behavior = ConversationConfigEngine()
+        self.facts        = FactsEngine()
+        self.soul         = SoulEngine()
+        self.user_profile = UserProfileEngine()
+        self.behavior     = ConversationConfigEngine()
         self.preferences = PreferenceEngine()
         self.memory  = MemoryEngine()
         self.files   = FileContextEngine()
@@ -574,6 +624,7 @@ class ContextManager:
         """Load all engine data. Call once per request."""
         self.facts.ingest(project=project, local_mode=local_mode)
         self.soul.ingest()
+        self.user_profile.ingest()
         self.behavior.ingest()
         self.preferences.ingest(query=query, project=project)
         self.memory.ingest(query=query, project=project)
@@ -614,7 +665,7 @@ class ContextManager:
         soul_text = self.soul.assemble()
         base_guard = (
             "## Identity Guard\n"
-            "1. You are Xochitl, a TERMINAL-NATIVE AI Chief of Staff.\n"
+            "1. You are Xochitl, a TERMINAL-NATIVE personal AI system.\n"
             "2. You are running LOCALLY on the user's Windows machine via the Xochitl CLI.\n"
             "3. You have DIRECT ACCESS to the filesystem paths shown in [SYSTEM_FACTS] and [File Context].\n"
             "4. NEVER say you are a remote AI or that you cannot see local files.\n"
@@ -627,6 +678,7 @@ class ContextManager:
         soul_block = f"{soul_text}\n\n---\n\n{base_guard}" if soul_text else base_guard
         guard_text = _LANG_HARD_GUARD + soul_block
 
+        user_profile_text = self.user_profile.assemble()
         facts_text        = self.facts.assemble()
         behavior_text     = self.behavior.assemble()
         preferences_text  = self.preferences.assemble()
@@ -641,14 +693,17 @@ class ContextManager:
         )
 
         total = self._total_tokens(
-            guard_text, facts_text, behavior_text,
+            guard_text, user_profile_text, facts_text, behavior_text,
             preferences_text, memory_text, files_text,
         )
         budget_remaining = self._budget
 
         # ── Under budget: assemble without compaction ─────────────────────────
         if total <= budget_remaining:
-            parts = [guard_text, facts_text]
+            parts = [guard_text]
+            if user_profile_text:
+                parts.append(user_profile_text)
+            parts.append(facts_text)
             if behavior_text:
                 parts.append(behavior_text)
             parts.append(skills_hint)
@@ -662,6 +717,8 @@ class ContextManager:
 
         # ── Over budget: compact in reverse priority order ────────────────────
         # guard_text (soul + identity) is NEVER compacted — it is load-bearing.
+        # user_profile_text is small by design — give it a fixed budget and preserve it.
+        profile_budget     = min(_estimate_tokens(user_profile_text), 600)
         facts_budget       = min(_estimate_tokens(facts_text), 200)
         behavior_budget    = min(_estimate_tokens(behavior_text), 500)
         preferences_budget = min(_estimate_tokens(preferences_text), 400)
@@ -669,6 +726,7 @@ class ContextManager:
         files_budget       = (
             budget_remaining
             - _estimate_tokens(guard_text)
+            - profile_budget
             - facts_budget
             - behavior_budget
             - preferences_budget
@@ -676,7 +734,10 @@ class ContextManager:
             - _estimate_tokens(skills_hint)
         )
 
-        parts = [guard_text, self.facts.compact(facts_budget)]
+        parts = [guard_text]
+        if user_profile_text:
+            parts.append(self.user_profile.compact(profile_budget))
+        parts.append(self.facts.compact(facts_budget))
         if behavior_text:
             parts.append(self.behavior.compact(behavior_budget))
         parts.append(skills_hint)
@@ -742,6 +803,7 @@ class ContextManager:
             return 0.0
         total = self._total_tokens(
             self.soul.assemble(),   # soul is now part of the guard block
+            self.user_profile.assemble(),
             self.facts.assemble(),
             self.behavior.assemble(),
             self.preferences.assemble(),

@@ -25,7 +25,7 @@ Paste or summarize BMAD outputs here. This is the staging area before requiremen
 
 ```text
 Initial project concept captured in CLAUDE.md. Key outputs:
-- Terminal-native AI Chief of Staff
+- Terminal-native personal AI system
 - Commands: today, done, chat, plan, sync, pull
 - Architecture: TieredRouter (local gemma4-e4b + cloud Gemini/Claude)
 - BMAD → SDD → Code pipeline for projects/

@@ -1,6 +1,7 @@
 # Environment & secrets
 .env
 .env.*
+!.env.example
 .env copy*
 *.env
 
@@ -9,6 +10,7 @@ SOUL.md
 conversation.config.yaml
 .xochitl/*
 !.xochitl/skills/
+!.xochitl/scripts/
 
 
 # Python

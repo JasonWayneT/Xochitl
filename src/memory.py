@@ -162,6 +162,15 @@ class KnowledgeBase:
         return entries
 
 
+_HYDE_PROMPT = """\
+Write a short passage (2-4 sentences) that would directly contain or address the following.
+Write as a factual statement, as if you are a document, not as an answer to a question.
+
+Query: {query}
+
+Passage:"""
+
+
 # ── Tier 3: LanceDB Semantic Search ──────────────────────────────────────────
 
 class VectorMemory:
@@ -181,6 +190,28 @@ class VectorMemory:
             return resp.get("embedding")
         except Exception:
             return None
+
+    def _hyde_embed(self, query: str) -> list[float] | None:
+        """HyDE: embed a generated hypothetical document rather than the raw query.
+
+        Personal notes are written as statements of fact. Embedding a generated
+        passage retrieves them more accurately than embedding a question directly.
+        Falls back to direct query embedding if the model call fails.
+        """
+        try:
+            from src.llm_interface import call_local, ROUTER_MODEL
+            result = call_local(
+                messages=[{"role": "user", "content": _HYDE_PROMPT.format(query=query)}],
+                model=ROUTER_MODEL,
+            )
+            if not result.error and result.content:
+                hypothetical = result.content.strip()[:500]
+                vec = self._embed(hypothetical)
+                if vec:
+                    return vec
+        except Exception:
+            pass
+        return self._embed(query)
 
     def _open_table(self):
         """Open existing LanceDB memories table, or None if not yet created."""
@@ -223,13 +254,13 @@ class VectorMemory:
             return False
 
     def recall(self, query: str, n_results: int = 10, project: str | None = None) -> list[dict]:
-        """Semantic vector search. NFR-PERF-002: < 550ms."""
+        """Semantic vector search with HyDE. NFR-PERF-002: < 550ms."""
         # Implements FR-MEM-004, NFR-PERF-002
         table = self._open_table()
         if table is None:
             return []
 
-        vector = self._embed(query)
+        vector = self._hyde_embed(query)
         if vector is None:
             return []
 

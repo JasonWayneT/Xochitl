@@ -128,6 +128,38 @@ what you are doing in plain language. The calling code handles all tool dispatch
 
 # ── Context compression for cloud routing ─────────────────────────────────────
 
+_LOCAL_HISTORY_KEEP = 10  # messages to keep verbatim; older ones become a summary block
+
+
+def trim_history_for_local(history: list[dict], keep: int = _LOCAL_HISTORY_KEEP) -> list[dict]:
+    """Keep the most recent `keep` messages verbatim; summarize older ones as a context block.
+
+    Prevents local model context overflow on long sessions. Uses the same heuristic
+    bullet summarizer as compress_context so no extra LLM call is needed before the
+    actual routing call.
+    """
+    if len(history) <= keep:
+        return history
+
+    older = history[:-keep]
+    recent = history[-keep:]
+
+    summary = _summarize_older_history(older)
+    if not summary:
+        return recent
+
+    return [
+        {
+            "role": "user",
+            "content": f"[Earlier conversation — {len(older)} messages]\n{summary}",
+        },
+        {
+            "role": "assistant",
+            "content": "Understood, I have context from our earlier conversation.",
+        },
+    ] + recent
+
+
 def compress_context(
     query: str,
     conversation_history: list[dict],

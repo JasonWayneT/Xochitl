@@ -280,6 +280,11 @@ _MUTATING_SKILL_ACTIONS = {
 # Matches the 0.6 suggestion threshold from Skill base docstring with a small buffer.
 _SKILL_INJECT_THRESHOLD = 0.65
 
+# CR-032: skill-score threshold below which intent is considered open-ended.
+# When top_score < this, _agent_loop injects a [TURN CONTEXT] note reminding the
+# model to apply calibrated [UNCERTAINTY TIERS] vocabulary for this turn.
+_OPEN_ENDED_SCORE_THRESHOLD = 0.2
+
 
 def _format_active_skill_block(defn: dict) -> str:
     """Format one skill's tool_definition() as a focused per-turn system prompt block.
@@ -771,6 +776,19 @@ class XochitlChat:
             _events.emit("skill_matched", {"skill": defn.get("name", ""), "score": top_score})
             if _status:
                 _status.update(f"skill ready: {defn.get('name', type(top_skill).__name__)}")
+
+        # ── CR-032: Per-turn uncertainty tier signal (FR-ORCH-026, NFR-ORCH-003) ──
+        # When no skill scores above _OPEN_ENDED_SCORE_THRESHOLD the turn is
+        # open-ended (general knowledge, casual conversation, ambiguous query).
+        # Append a brief [TURN CONTEXT] note so the model has an explicit per-turn
+        # reminder to apply calibrated [UNCERTAINTY TIERS] vocabulary.
+        if top_skill is None or top_score < _OPEN_ENDED_SCORE_THRESHOLD:
+            system_prompt = (
+                system_prompt
+                + "\n\n[TURN CONTEXT: No specific task skill matched — "
+                "open-ended or general knowledge turn. "
+                "Apply [UNCERTAINTY TIERS] vocabulary as appropriate.]\n"
+            )
 
         force = "code_generation" if self.force_cloud else None
 

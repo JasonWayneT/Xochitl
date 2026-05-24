@@ -123,6 +123,19 @@ def init_db() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
+
+            CREATE TABLE IF NOT EXISTS memory_facts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fact TEXT NOT NULL,
+                category TEXT NOT NULL CHECK(category IN
+                    ('preference','context','project','skill','constraint','goal')),
+                confidence REAL DEFAULT 0.5 CHECK(confidence BETWEEN 0.0 AND 1.0),
+                source TEXT DEFAULT 'background_review',
+                project TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                superseded_by INTEGER REFERENCES memory_facts(id)
+            );
         """)
 
 
@@ -506,3 +519,81 @@ def delete_secret_db(conn: sqlite3.Connection, key: str) -> bool:
 
 def list_secrets_db(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT key, updated_at FROM secrets ORDER BY key").fetchall()
+
+
+# ── Memory Facts (structured long-term memory) ────────────────────────────────
+
+def _ensure_memory_facts_table(conn: sqlite3.Connection) -> None:
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS memory_facts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fact TEXT NOT NULL,
+            category TEXT NOT NULL CHECK(category IN
+                ('preference','context','project','skill','constraint','goal')),
+            confidence REAL DEFAULT 0.5 CHECK(confidence BETWEEN 0.0 AND 1.0),
+            source TEXT DEFAULT 'background_review',
+            project TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            superseded_by INTEGER REFERENCES memory_facts(id)
+        )
+    """)
+
+
+def upsert_memory_fact(
+    conn: sqlite3.Connection,
+    fact: str,
+    category: str,
+    confidence: float,
+    source: str = "background_review",
+    project: Optional[str] = None,
+) -> int:
+    """Insert a structured memory fact, or update confidence if near-duplicate exists.
+
+    Near-duplicate detection is a simple 80-char prefix match — good enough to
+    avoid storing the same fact twice without requiring a vector call at write time.
+    """
+    _ensure_memory_facts_table(conn)
+    existing = conn.execute(
+        """SELECT id, confidence FROM memory_facts
+           WHERE LOWER(SUBSTR(fact, 1, 80)) = LOWER(SUBSTR(?, 1, 80))
+             AND superseded_by IS NULL
+           LIMIT 1""",
+        (fact,),
+    ).fetchone()
+
+    if existing:
+        if confidence >= existing["confidence"]:
+            conn.execute(
+                "UPDATE memory_facts SET confidence=?, last_seen_at=CURRENT_TIMESTAMP WHERE id=?",
+                (confidence, existing["id"]),
+            )
+        return int(existing["id"])
+
+    cursor = conn.execute(
+        "INSERT INTO memory_facts (fact, category, confidence, source, project) VALUES (?,?,?,?,?)",
+        (fact, category, confidence, source, project),
+    )
+    return int(cursor.lastrowid)
+
+
+def get_memory_facts(
+    conn: sqlite3.Connection,
+    category: Optional[str] = None,
+    min_confidence: float = 0.5,
+    limit: int = 20,
+) -> list[sqlite3.Row]:
+    _ensure_memory_facts_table(conn)
+    if category:
+        return conn.execute(
+            """SELECT * FROM memory_facts
+               WHERE category=? AND confidence>=? AND superseded_by IS NULL
+               ORDER BY confidence DESC, last_seen_at DESC LIMIT ?""",
+            (category, min_confidence, limit),
+        ).fetchall()
+    return conn.execute(
+        """SELECT * FROM memory_facts
+           WHERE confidence>=? AND superseded_by IS NULL
+           ORDER BY confidence DESC, last_seen_at DESC LIMIT ?""",
+        (min_confidence, limit),
+    ).fetchall()
