@@ -697,6 +697,84 @@ def t_ssrf_not_retried():
 test("HTTP retry: SSRF block never retried (AC-CR017-006)", t_ssrf_not_retried)
 
 
+# ── Session governor (FR-ORCH-025, NFR-PERF-011) — AC-CR026-001..005 ──────────
+
+def t_governor_starts_full():
+    """AC-CR026-001: fresh SessionGovernor is at FULL tier with 0 tokens."""
+    from src.governor import SessionGovernor, Tier
+    g = SessionGovernor()
+    assert g.tier() == Tier.FULL, f"Expected FULL, got {g.tier()}"
+    assert g.total_tokens == 0
+    assert g.force_route() is None
+test("Governor: fresh session starts at FULL tier (AC-CR026-001)", t_governor_starts_full)
+
+
+def t_governor_prefer_local_tier():
+    """AC-CR026-002: ≥20 000 est. tokens → PREFER_LOCAL; force_route still None."""
+    from src.governor import SessionGovernor, Tier
+    g = SessionGovernor()
+    # 20 000 tokens at 4 chars/token = 80 000 chars
+    g.record_turn("x" * 80_000, "")
+    assert g.tier() == Tier.PREFER_LOCAL, f"Expected PREFER_LOCAL, got {g.tier()}"
+    assert g.force_route() is None, "PREFER_LOCAL should not force local routing"
+test("Governor: >=20k est. tokens -> PREFER_LOCAL tier (AC-CR026-002)", t_governor_prefer_local_tier)
+
+
+def t_governor_local_only_tier():
+    """AC-CR026-003: ≥40 000 est. tokens → LOCAL_ONLY; force_route returns 'general'."""
+    from src.governor import SessionGovernor, Tier
+    g = SessionGovernor()
+    # 40 000 tokens = 160 000 chars
+    g.record_turn("x" * 160_000, "")
+    assert g.tier() == Tier.LOCAL_ONLY, f"Expected LOCAL_ONLY, got {g.tier()}"
+    assert g.force_route() == "general", f"Expected 'general', got {g.force_route()!r}"
+test("Governor: >=40k est. tokens -> LOCAL_ONLY, force_route='general' (AC-CR026-003)", t_governor_local_only_tier)
+
+
+def t_governor_hard_stop_tier():
+    """AC-CR026-004: ≥80 000 est. tokens → HARD_STOP; budget_message returns canned text."""
+    from src.governor import SessionGovernor, Tier
+    g = SessionGovernor()
+    # 80 000 tokens = 320 000 chars
+    g.record_turn("x" * 320_000, "")
+    assert g.tier() == Tier.HARD_STOP, f"Expected HARD_STOP, got {g.tier()}"
+    msg = g.budget_message()
+    assert "budget" in msg.lower() or "token" in msg.lower(), f"Unexpected message: {msg!r}"
+test("Governor: >=80k est. tokens -> HARD_STOP, budget message (AC-CR026-004)", t_governor_hard_stop_tier)
+
+
+def t_governor_env_override():
+    """AC-CR026-005: XCH_LOCAL_ONLY_TOKENS env var overrides the LOCAL_ONLY threshold."""
+    import importlib
+    import src.governor as gov_mod
+    original_threshold = gov_mod._LOCAL_ONLY_THRESHOLD
+    try:
+        os.environ["XCH_LOCAL_ONLY_TOKENS"] = "1000"
+        importlib.reload(gov_mod)
+        assert gov_mod._LOCAL_ONLY_THRESHOLD == 1000, (
+            f"Expected 1000, got {gov_mod._LOCAL_ONLY_THRESHOLD}"
+        )
+        # Create governor using reloaded module
+        g = gov_mod.SessionGovernor()
+        g.record_turn("x" * 4001, "")  # ~1000 tokens
+        assert g.tier() == gov_mod.Tier.LOCAL_ONLY, f"Expected LOCAL_ONLY, got {g.tier()}"
+    finally:
+        del os.environ["XCH_LOCAL_ONLY_TOKENS"]
+        importlib.reload(gov_mod)  # restore defaults
+test("Governor: XCH_LOCAL_ONLY_TOKENS env var overrides threshold (AC-CR026-005)", t_governor_env_override)
+
+
+def t_governor_should_warn_dedup():
+    """AC-CR026-007: should_warn returns True once per tier, False on repeat."""
+    from src.governor import SessionGovernor, Tier
+    g = SessionGovernor()
+    assert g.should_warn(Tier.PREFER_LOCAL) is True,  "First warn should be True"
+    assert g.should_warn(Tier.PREFER_LOCAL) is False, "Second warn should be False"
+    assert g.should_warn(Tier.LOCAL_ONLY)   is True,  "New tier warn should be True"
+    assert g.should_warn(Tier.LOCAL_ONLY)   is False, "Repeat tier warn should be False"
+test("Governor: should_warn deduplicates per-tier (AC-CR026-007)", t_governor_should_warn_dedup)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

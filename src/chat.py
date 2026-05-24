@@ -85,6 +85,7 @@ from src.background_review import BackgroundReview
 from src import database as db
 from src import events as _events
 from src.file_tools import FileTools
+from src.governor import SessionGovernor, Tier as _GovTier  # FR-ORCH-025
 from src.skills.base import Skill
 
 # FR-UX-001: TERM=dumb detection for no-markup fallback
@@ -363,6 +364,10 @@ class XochitlChat:
         # so start() knows to skip _stream_response() to avoid double-printing.
         self._last_response_streamed: bool = False
 
+        # FR-ORCH-025: session token budget governor — tracks estimated spend and
+        # applies progressive routing restrictions (FULL → PREFER_LOCAL → LOCAL_ONLY → HARD_STOP).
+        self._governor = SessionGovernor()
+
     @property
     def skills(self) -> list[Skill]:
         if getattr(self, "_skills", None) is not None:
@@ -510,6 +515,23 @@ class XochitlChat:
                     console.print()
                     continue
 
+                # ── FR-ORCH-025: Governor — session budget gate ───────────────
+                _gov_tier = self._governor.tier()
+                if _gov_tier == _GovTier.HARD_STOP:
+                    console.print(f"\n[bold]Xochitl[/bold]: {self._governor.budget_message()}")
+                    console.print()
+                    continue  # skip LLM call entirely
+                if _gov_tier == _GovTier.LOCAL_ONLY and self._governor.should_warn(_GovTier.LOCAL_ONLY):
+                    console.print(
+                        f"[dim yellow]⚠ Session budget limit reached — local model only. "
+                        f"{self._governor.status_line()}[/dim yellow]"
+                    )
+                elif _gov_tier == _GovTier.PREFER_LOCAL and self._governor.should_warn(_GovTier.PREFER_LOCAL):
+                    console.print(
+                        f"[dim yellow]⚠ Approaching session budget — preferring local model. "
+                        f"{self._governor.status_line()}[/dim yellow]"
+                    )
+
                 # ── LLM turn — FR-UI-001 status + FR-UI-006 cancellable thread ──
                 hint = (
                     f"thinking...  [staged: '{self._staged_message[:30]}…']"
@@ -542,6 +564,10 @@ class XochitlChat:
                     self._stream_response(response)
                     console.print()
                 self._last_response_streamed = False  # reset for next turn
+
+                # FR-ORCH-025: record turn for governor budget tracking.
+                if response and not was_cancelled:
+                    self._governor.record_turn(user_input, response)
 
         except KeyboardInterrupt:
             pass
@@ -747,6 +773,14 @@ class XochitlChat:
                 _status.update(f"skill ready: {defn.get('name', type(top_skill).__name__)}")
 
         force = "code_generation" if self.force_cloud else None
+
+        # FR-ORCH-025: apply governor routing constraint when LOCAL_ONLY or HARD_STOP.
+        # Governor force_route only overrides when no other force is already set
+        # (e.g., force_cloud / code_generation always wins).
+        if force is None:
+            _gov_force = self._governor.force_route()
+            if _gov_force:
+                force = _gov_force
 
         # ── FR-UI-005: Real LLM token streaming (CR-031) ─────────────────────
         # Stream when: _stream is True, no skill schema was injected (because
@@ -1495,9 +1529,13 @@ class XochitlChat:
             from src.research import adversarial_review
             return adversarial_review(arg)
 
+        # FR-ORCH-025: show session token budget status (AC-CR026-006)
+        if verb == "/budget":
+            return self._governor.budget_detail()
+
         available = (
             "/next <msg>  /retry  /authorize  /revoke  "
-            "/registry  /audit  /review  /research  /adversarial"
+            "/registry  /audit  /review  /research  /adversarial  /budget"
         )
         return f"[dim]{_FYI} — unknown command: {verb}\nAvailable: {available}[/dim]"
 

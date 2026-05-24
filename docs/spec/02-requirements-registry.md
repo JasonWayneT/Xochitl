@@ -343,6 +343,25 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR017-007` | `FR-API-005` | Weather call site | Inspect `WeatherSkill._fetch_json` | — | Uses `fetch_bytes`; no direct `urlopen` | implemented |
 | `AC-CR017-008` | `FR-API-005` | Web lookup call sites | Inspect `WebLookupSkill._search`, `_fetch_text` | — | Both use `fetch_bytes`; no direct `urlopen` | implemented |
 
+### Orchestration — Session Tiered Governor (CR-026)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-025` | functional | P1 | implemented | Before each LLM turn the chat session evaluates `SessionGovernor.tier()` and applies progressive routing restrictions: `prefer_local` warns the user once; `local_only` forces `force_route="general"` (local model); `hard_stop` returns a canned budget message and skips the LLM call | `AC-CR026-001`, `AC-CR026-002`, `AC-CR026-003`, `AC-CR026-004`, `AC-CR026-006`, `AC-CR026-007` | `CR-026` | `src/governor.py`, `src/chat.py` |
+| `NFR-PERF-011` | non-functional | P2 | implemented | Token estimation uses `len(text) // 4` (chars/4 approximation); no I/O, no dependencies; the governor is a rough budget guide, not a billing meter | `AC-CR026-005` | `CR-026`, `ADR-004` | env-var configurable thresholds |
+
+### Acceptance criteria — Session Tiered Governor (CR-026)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR026-001` | `FR-ORCH-025` | Fresh session | `SessionGovernor()` created | — | `tier()` returns `Tier.FULL`; `total_tokens == 0` | implemented |
+| `AC-CR026-002` | `FR-ORCH-025` | Prefer-local transition | `record_turn` accumulates ≥ 20 000 est. tokens | — | `tier()` returns `Tier.PREFER_LOCAL`; `force_route()` returns `None` | implemented |
+| `AC-CR026-003` | `FR-ORCH-025` | Local-only transition | `record_turn` accumulates ≥ 40 000 est. tokens | — | `tier()` returns `Tier.LOCAL_ONLY`; `force_route()` returns `"general"` | implemented |
+| `AC-CR026-004` | `FR-ORCH-025` | Hard-stop transition | `record_turn` accumulates ≥ 80 000 est. tokens | — | `tier()` returns `Tier.HARD_STOP`; `start()` returns budget message without LLM call | implemented |
+| `AC-CR026-005` | `NFR-PERF-011` | Env-var override | `XCH_LOCAL_ONLY_TOKENS=1000` set before import | — | `_LOCAL_ONLY_THRESHOLD == 1000`; tier transitions at 1 000 tokens | implemented |
+| `AC-CR026-006` | `FR-ORCH-025` | `/budget` command | User types `/budget` in chat | — | Budget detail printed: tier, estimated tokens, thresholds | implemented |
+| `AC-CR026-007` | `FR-ORCH-025` | Warning de-dup | `should_warn(Tier.PREFER_LOCAL)` called twice | — | Returns `True` first time, `False` second time | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.
