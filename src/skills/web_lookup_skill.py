@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 from urllib.request import Request, urlopen
 
+from src.security import validate_outbound_url, XochitlPermissionError  # FR-SEC-005
 from src.skills.base import Skill
 
 
@@ -92,6 +93,7 @@ class WebLookupSkill(Skill):
 
     def _search(self, query: str) -> list[tuple[str, str, str]]:
         url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
+        validate_outbound_url(url)  # FR-SEC-005 — defense in depth even for hardcoded base
         req = Request(url, headers={"User-Agent": "Mozilla/5.0 Xochitl/1.0"})
         with urlopen(req, timeout=8) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")
@@ -115,6 +117,12 @@ class WebLookupSkill(Skill):
         return out
 
     def _fetch_text(self, url: str) -> str:
+        # FR-SEC-005: validate before opening any connection
+        try:
+            validate_outbound_url(url)
+        except XochitlPermissionError as e:
+            _logger.warning("ssrf_blocked url=%r reason=%s", url, e)
+            return ""
         try:
             req = Request(url, headers={"User-Agent": "Mozilla/5.0 Xochitl/1.0"})
             with urlopen(req, timeout=8) as resp:

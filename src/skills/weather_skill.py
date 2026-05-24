@@ -7,6 +7,7 @@ import re
 from urllib.parse import quote_plus, urlencode
 from urllib.request import Request, urlopen
 
+from src.security import validate_outbound_url  # FR-SEC-005
 from src.skills.base import Skill
 
 
@@ -248,6 +249,7 @@ class WeatherSkill(Skill):
 
     @staticmethod
     def _fetch_json(url: str) -> dict:
+        validate_outbound_url(url)  # FR-SEC-005 — SSRF guard before connection
         req = Request(url, headers={"User-Agent": "Xochitl/1.0 (weather lookup)"})
         with urlopen(req, timeout=8) as resp:
             raw = resp.read().decode("utf-8", errors="ignore")

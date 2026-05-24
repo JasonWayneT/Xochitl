@@ -3,13 +3,18 @@
 # Implements FR-SEC-002 (permission-gated writes — ALL writes, not just overwrites)
 # Implements FR-SEC-003 (JSONL decision log at ~/.xochitl/decision_log.jsonl)
 # Implements FR-SEC-004 (directory access revocation)
+# Implements FR-SEC-005 (SSRF protection — validate_outbound_url)
 # Implements NFR-SEC-002 (100% of write operations gated)
+# Implements NFR-SEC-003 (resolve-then-validate for outbound URL guard)
 # Implements NFR-AUD-001 (log entry appended within 100ms of action)
 
+import ipaddress
 import json
+import socket
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from urllib.parse import urlparse
 
 from src.config import (
     is_authorized,
@@ -19,6 +24,75 @@ from src.config import (
     DECISION_LOG_PATH,
     CONFIG_DIR,
 )
+
+
+# ── SSRF protection (FR-SEC-005, NFR-SEC-003) ────────────────────────────────
+
+_ALLOWED_SCHEMES: frozenset[str] = frozenset({"http", "https"})
+
+# Private, reserved, and infrastructure IP ranges that must never be fetched.
+# Covers loopback, RFC 1918, link-local / cloud metadata (IMDS), CGN, documentation
+# ranges, and IPv6 ULA / link-local.
+_BLOCKED_NETWORKS: list[ipaddress.IPv4Network | ipaddress.IPv6Network] = [
+    ipaddress.ip_network("0.0.0.0/8"),        # "This" network (RFC 1122)
+    ipaddress.ip_network("10.0.0.0/8"),        # RFC 1918 private
+    ipaddress.ip_network("100.64.0.0/10"),     # Carrier-grade NAT (RFC 6598)
+    ipaddress.ip_network("127.0.0.0/8"),       # IPv4 loopback
+    ipaddress.ip_network("169.254.0.0/16"),    # Link-local / AWS·GCP·Azure IMDS
+    ipaddress.ip_network("172.16.0.0/12"),     # RFC 1918 private
+    ipaddress.ip_network("192.168.0.0/16"),    # RFC 1918 private
+    ipaddress.ip_network("198.51.100.0/24"),   # Documentation TEST-NET-2 (RFC 5737)
+    ipaddress.ip_network("203.0.113.0/24"),    # Documentation TEST-NET-3 (RFC 5737)
+    ipaddress.ip_network("::1/128"),           # IPv6 loopback
+    ipaddress.ip_network("fc00::/7"),          # IPv6 ULA (fc00::/8 + fd00::/8)
+    ipaddress.ip_network("fe80::/10"),         # IPv6 link-local
+]
+
+
+def validate_outbound_url(url: str) -> str:
+    """Validate that *url* is safe to fetch (SSRF guard).
+
+    Checks:
+    1. Scheme must be ``http`` or ``https``.
+    2. Hostname must resolve (via ``socket.getaddrinfo``) to at least one IP.
+    3. Every resolved IP must fall outside all private / reserved ranges.
+
+    Returns the original *url* unchanged if all checks pass.
+    Raises ``XochitlPermissionError`` on any violation.
+
+    Implements FR-SEC-005, NFR-SEC-003.  See also ADR-002.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme not in _ALLOWED_SCHEMES:
+        raise XochitlPermissionError(
+            f"SSRF: scheme '{parsed.scheme}' not allowed (only http/https)"
+        )
+
+    host = parsed.hostname
+    if not host:
+        raise XochitlPermissionError(f"SSRF: could not extract hostname from URL: {url!r}")
+
+    # Resolve hostname → IP(s); raises on DNS failure (treated as blocked).
+    try:
+        addr_results = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise XochitlPermissionError(
+            f"SSRF: hostname resolution failed for '{host}': {exc}"
+        ) from exc
+
+    for _family, _type, _proto, _canonname, sockaddr in addr_results:
+        ip_str = sockaddr[0]
+        try:
+            ip = ipaddress.ip_address(ip_str)
+        except ValueError:
+            continue  # malformed address — skip rather than crash
+        for network in _BLOCKED_NETWORKS:
+            if ip in network:
+                raise XochitlPermissionError(
+                    f"SSRF: host '{host}' resolves to blocked address {ip} (range {network})"
+                )
+
+    return url
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────

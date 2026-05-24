@@ -303,6 +303,25 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `BUG-API-002` | bug | P1 | resolved | WeatherSkill fails to geocode locations expressed as "City Country" without a comma separator (e.g., "Tijuana Mexico") because Open-Meteo's `name` param expects a city name only | `AC-CR014-001` | session | Resolved by CR-014 |
 | `NFR-API-001` | non-functional | P1 | implemented | WeatherSkill geocoding resolves recognized country names in location queries to ISO 3166-1 alpha-2 codes, passes `countrycode` to Open-Meteo, and ranks results by country match before falling back to US-state matching or first result | `AC-CR014-002`, `AC-CR014-003`, `AC-CR014-004` | `CR-014` | `_split_country()`, `_COUNTRY_CODES` |
 
+### Security — SSRF Protection (CR-016)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-SEC-005` | security | P0 | implemented | All outbound HTTP requests made by Xochitl skill modules must pass `validate_outbound_url()` before the connection is opened; the validator rejects non-http/https schemes and any hostname that resolves to a private or reserved IP range | `AC-CR016-001`, `AC-CR016-002`, `AC-CR016-003`, `AC-CR016-004`, `AC-CR016-005`, `AC-CR016-006`, `AC-CR016-007` | `CR-016` | `src/security.py` `validate_outbound_url()` |
+| `NFR-SEC-003` | non-functional | P0 | implemented | SSRF validation must resolve hostnames to IP addresses via `socket.getaddrinfo()` before range-checking, preventing DNS rebinding bypass | `AC-CR016-001`, `AC-CR016-005` | `CR-016` | Resolve-then-validate; see ADR-002 |
+
+### Acceptance criteria — SSRF Protection (CR-016)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR016-001` | `FR-SEC-005` | Loopback blocked | `validate_outbound_url("http://127.0.0.1/secret")` called | — | Raises `XochitlPermissionError` | implemented |
+| `AC-CR016-002` | `FR-SEC-005` | Private range blocked | `validate_outbound_url("http://10.0.0.1/data")` called | — | Raises `XochitlPermissionError` | implemented |
+| `AC-CR016-003` | `FR-SEC-005` | Cloud metadata blocked | `validate_outbound_url("http://169.254.169.254/latest/meta-data/")` called | — | Raises `XochitlPermissionError` | implemented |
+| `AC-CR016-004` | `FR-SEC-005` | Non-http scheme blocked | `validate_outbound_url("file:///etc/passwd")` called | — | Raises `XochitlPermissionError` | implemented |
+| `AC-CR016-005` | `FR-SEC-005`, `NFR-SEC-003` | Public URL allowed | `validate_outbound_url("https://api.open-meteo.com/v1/forecast")` called | — | Returns URL unchanged | implemented |
+| `AC-CR016-006` | `FR-SEC-005` | Web skill call site | Inspect `_fetch_text()` and `_search()` in `web_lookup_skill.py` | — | `validate_outbound_url()` called before every `urlopen()` | implemented |
+| `AC-CR016-007` | `FR-SEC-005` | Weather skill call site | Inspect `_fetch_json()` in `weather_skill.py` | — | `validate_outbound_url()` called before every `urlopen()` | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

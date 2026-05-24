@@ -528,6 +528,76 @@ def t_weather_skill_default_location_preference():
 test("WeatherSkill: falls back to default location preference", t_weather_skill_default_location_preference)
 
 
+# ── SSRF protection (FR-SEC-005, NFR-SEC-003) — AC-CR016-001..005 ─────────────
+
+import socket as _socket
+import ipaddress as _ipaddress
+from unittest.mock import patch as _patch
+
+
+def _make_addrinfo(ip: str):
+    """Return a getaddrinfo-shaped result list for the given IP string."""
+    family = _socket.AF_INET6 if ":" in ip else _socket.AF_INET
+    return [(family, _socket.SOCK_STREAM, 6, "", (ip, 0))]
+
+
+def t_ssrf_loopback_blocked():
+    """AC-CR016-001: 127.0.0.1 must be rejected."""
+    from src.security import validate_outbound_url, XochitlPermissionError
+    with _patch("socket.getaddrinfo", return_value=_make_addrinfo("127.0.0.1")):
+        try:
+            validate_outbound_url("http://127.0.0.1/secret")
+            raise AssertionError("Expected XochitlPermissionError, got no exception")
+        except XochitlPermissionError:
+            pass  # correct
+test("SSRF: loopback 127.0.0.1 blocked (AC-CR016-001)", t_ssrf_loopback_blocked)
+
+
+def t_ssrf_private_blocked():
+    """AC-CR016-002: 10.0.0.1 (RFC 1918) must be rejected."""
+    from src.security import validate_outbound_url, XochitlPermissionError
+    with _patch("socket.getaddrinfo", return_value=_make_addrinfo("10.0.0.1")):
+        try:
+            validate_outbound_url("http://internal.corp/data")
+            raise AssertionError("Expected XochitlPermissionError, got no exception")
+        except XochitlPermissionError:
+            pass
+test("SSRF: RFC 1918 private 10.0.0.1 blocked (AC-CR016-002)", t_ssrf_private_blocked)
+
+
+def t_ssrf_metadata_blocked():
+    """AC-CR016-003: 169.254.169.254 (cloud IMDS) must be rejected."""
+    from src.security import validate_outbound_url, XochitlPermissionError
+    with _patch("socket.getaddrinfo", return_value=_make_addrinfo("169.254.169.254")):
+        try:
+            validate_outbound_url("http://169.254.169.254/latest/meta-data/")
+            raise AssertionError("Expected XochitlPermissionError, got no exception")
+        except XochitlPermissionError:
+            pass
+test("SSRF: cloud metadata 169.254.169.254 blocked (AC-CR016-003)", t_ssrf_metadata_blocked)
+
+
+def t_ssrf_scheme_blocked():
+    """AC-CR016-004: non-http/https schemes must be rejected without DNS lookup."""
+    from src.security import validate_outbound_url, XochitlPermissionError
+    try:
+        validate_outbound_url("file:///etc/passwd")
+        raise AssertionError("Expected XochitlPermissionError, got no exception")
+    except XochitlPermissionError:
+        pass
+test("SSRF: file:// scheme blocked (AC-CR016-004)", t_ssrf_scheme_blocked)
+
+
+def t_ssrf_public_allowed():
+    """AC-CR016-005: a known public IP must pass validation unchanged."""
+    from src.security import validate_outbound_url
+    public_ip = "93.184.216.34"  # example.com
+    with _patch("socket.getaddrinfo", return_value=_make_addrinfo(public_ip)):
+        result = validate_outbound_url("https://api.open-meteo.com/v1/forecast")
+    assert result == "https://api.open-meteo.com/v1/forecast", f"URL was mutated: {result!r}"
+test("SSRF: public IP passes validation unchanged (AC-CR016-005)", t_ssrf_public_allowed)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
