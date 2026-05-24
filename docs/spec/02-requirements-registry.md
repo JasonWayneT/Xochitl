@@ -322,6 +322,27 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR016-006` | `FR-SEC-005` | Web skill call site | Inspect `_fetch_text()` and `_search()` in `web_lookup_skill.py` | — | `validate_outbound_url()` called before every `urlopen()` | implemented |
 | `AC-CR016-007` | `FR-SEC-005` | Weather skill call site | Inspect `_fetch_json()` in `weather_skill.py` | — | `validate_outbound_url()` called before every `urlopen()` | implemented |
 
+### API — HTTP Retry and Rate Limiting (CR-017)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-API-005` | functional | P1 | implemented | Outbound HTTP requests from skill modules must be retried on transient failures (HTTP 429/500/502/503/504 and network errors) using exponential backoff; a maximum of 3 total attempts are made | `AC-CR017-001`, `AC-CR017-002`, `AC-CR017-003`, `AC-CR017-004`, `AC-CR017-006` | `CR-017` | `src/http_utils.py` `fetch_bytes` retry loop |
+| `NFR-PERF-010` | non-functional | P2 | implemented | Retry delays use exponential backoff (`base × 2^attempt`, capped at 4 s) with ±25% random jitter to reduce thundering-herd effects | `AC-CR017-001` | `CR-017` | See ADR-003 |
+| `NFR-API-002` | non-functional | P1 | implemented | A per-domain sliding-window rate limiter throttles skill outbound HTTP calls to at most 5 requests per 10-second window; excess calls block the calling thread until a slot opens | `AC-CR017-005` | `CR-017` | `src/http_utils.py` `_rate_limit_acquire` |
+
+### Acceptance criteria — HTTP Retry and Rate Limiting (CR-017)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR017-001` | `FR-API-005`, `NFR-PERF-010` | 429 retried | `fetch_bytes` receives HTTP 429 twice then succeeds | — | Returns response body; total attempts = 3 | implemented |
+| `AC-CR017-002` | `FR-API-005` | 400 not retried | `fetch_bytes` receives HTTP 400 | — | `HTTPError(400)` propagates immediately; total attempts = 1 | implemented |
+| `AC-CR017-003` | `FR-API-005` | `URLError` retried | `fetch_bytes` receives `URLError` on first call | — | Retry attempted; second call succeeds | implemented |
+| `AC-CR017-004` | `FR-API-005` | All attempts exhausted | `fetch_bytes` receives 3× `URLError` | — | Final `URLError` propagates to caller | implemented |
+| `AC-CR017-005` | `NFR-API-002` | Rate limit blocks | 6 calls in <10 s to same domain | — | 6th call waits until a slot opens; no call is dropped | implemented |
+| `AC-CR017-006` | `FR-API-005` | SSRF not retried | `validate_outbound_url` raises | — | `XochitlPermissionError` propagates immediately; 0 `urlopen` calls | implemented |
+| `AC-CR017-007` | `FR-API-005` | Weather call site | Inspect `WeatherSkill._fetch_json` | — | Uses `fetch_bytes`; no direct `urlopen` | implemented |
+| `AC-CR017-008` | `FR-API-005` | Web lookup call sites | Inspect `WebLookupSkill._search`, `_fetch_text` | — | Both use `fetch_bytes`; no direct `urlopen` | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

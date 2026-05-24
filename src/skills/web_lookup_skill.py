@@ -7,9 +7,9 @@ import logging
 import re
 from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
-from urllib.request import Request, urlopen
 
-from src.security import validate_outbound_url, XochitlPermissionError  # FR-SEC-005
+from src.http_utils import fetch_bytes  # FR-API-005, NFR-API-002 (retry + rate limit)
+from src.security import XochitlPermissionError  # caught in _fetch_text
 from src.skills.base import Skill
 
 
@@ -93,10 +93,8 @@ class WebLookupSkill(Skill):
 
     def _search(self, query: str) -> list[tuple[str, str, str]]:
         url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
-        validate_outbound_url(url)  # FR-SEC-005 — defense in depth even for hardcoded base
-        req = Request(url, headers={"User-Agent": "Mozilla/5.0 Xochitl/1.0"})
-        with urlopen(req, timeout=8) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
+        # fetch_bytes handles SSRF validation, rate limiting, and retry (FR-API-005).
+        raw = fetch_bytes(url, headers={"User-Agent": "Mozilla/5.0 Xochitl/1.0"}).decode("utf-8", errors="ignore")
         out: list[tuple[str, str, str]] = []
         title_matches = list(re.finditer(r'<a[^>]*class="result__a"[^>]*href="(.*?)"[^>]*>(.*?)</a>', raw, re.I | re.S))
 
@@ -117,20 +115,20 @@ class WebLookupSkill(Skill):
         return out
 
     def _fetch_text(self, url: str) -> str:
-        # FR-SEC-005: validate before opening any connection
+        # fetch_bytes: SSRF validation, rate limiting, retry (FR-API-005, FR-SEC-005).
         try:
-            validate_outbound_url(url)
-        except XochitlPermissionError as e:
-            _logger.warning("ssrf_blocked url=%r reason=%s", url, e)
-            return ""
-        try:
-            req = Request(url, headers={"User-Agent": "Mozilla/5.0 Xochitl/1.0"})
-            with urlopen(req, timeout=8) as resp:
-                raw = resp.read(22000).decode("utf-8", errors="ignore")
-            text = self._clean_text(raw)
+            raw = fetch_bytes(
+                url,
+                headers={"User-Agent": "Mozilla/5.0 Xochitl/1.0"},
+                read_limit=22000,
+            )
+            text = self._clean_text(raw.decode("utf-8", errors="ignore"))
             text = re.sub(r"\s+", " ", text).strip()
             _logger.info("fetch_ok url=%r chars=%d", url, len(text))
             return text
+        except XochitlPermissionError as e:
+            _logger.warning("ssrf_blocked url=%r reason=%s", url, e)
+            return ""
         except Exception as e:
             _logger.warning("fetch_failed url=%r error=%s", url, e)
             return ""

@@ -391,10 +391,11 @@ test("BMADSkill.can_handle: build=high, plan-in-context=high, unrelated=0", t_bm
 
 # -- 25. WebLookupSkill DuckDuckGo redirect/snippet regression --
 def t_web_lookup_redirect_snippet():
-    from src.skills import web_lookup_skill as mod
+    # Patch the local 'fetch_bytes' name inside the skill module's namespace.
+    import src.skills.web_lookup_skill as mod
     from src.skills.web_lookup_skill import WebLookupSkill
 
-    html = """
+    fake_html = """
     <div class="result">
       <div class="result__body">
         <a class="result__a" href="/l/?uddg=https%3A%2F%2Fforecast.weather.gov%2FMapClick.php%3Fsite%3DSGX%26textField1%3D33.1192%26textField2%3D-117.086&amp;rut=abc">Escondido Weather</a>
@@ -403,22 +404,12 @@ def t_web_lookup_redirect_snippet():
     </div>
     """
 
-    class FakeResponse:
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def read(self, *args):
-            return html.encode("utf-8")
-
-    original_urlopen = mod.urlopen
+    original_fetch = mod.fetch_bytes
     try:
-        mod.urlopen = lambda *args, **kwargs: FakeResponse()
+        mod.fetch_bytes = lambda url, **kwargs: fake_html.encode("utf-8")
         links = WebLookupSkill()._search("weather today in Escondido, CA")
     finally:
-        mod.urlopen = original_urlopen
+        mod.fetch_bytes = original_fetch
 
     assert links, "Expected parsed search result"
     title, url, snippet = links[0]
@@ -430,7 +421,6 @@ test("WebLookupSkill: normalizes DDG redirects and keeps snippets", t_web_lookup
 
 # -- 26. WeatherSkill Open-Meteo geocode + forecast regression --
 def t_weather_skill_open_meteo():
-    from src.skills import weather_skill as mod
     from src.skills.weather_skill import WeatherSkill
 
     geocode = {
@@ -472,37 +462,24 @@ def t_weather_skill_open_meteo():
         },
     }
 
-    class FakeResponse:
-        def __init__(self, payload):
-            self.payload = payload
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *args):
-            return None
-
-        def read(self, *args):
-            return json.dumps(self.payload).encode("utf-8")
-
-    def fake_urlopen(req, timeout=8):
-        url = req.full_url
+    def fake_fetch_bytes(url, **kwargs):
         if "geocoding-api.open-meteo.com" in url:
             if "Escondido%2C+CA" in url:
-                return FakeResponse({"results": []})
-            assert "Escondido+California" in url, url
-            return FakeResponse(geocode)
+                return json.dumps({"results": []}).encode("utf-8")
+            return json.dumps(geocode).encode("utf-8")
         if "api.open-meteo.com" in url:
-            return FakeResponse(forecast)
+            return json.dumps(forecast).encode("utf-8")
         raise AssertionError(f"Unexpected URL: {url}")
 
-    original_urlopen = mod.urlopen
+    # Patch the local 'fetch_bytes' name inside the skill module's namespace.
+    import src.skills.weather_skill as weather_mod
+    original_fetch = weather_mod.fetch_bytes
     try:
-        mod.urlopen = fake_urlopen
+        weather_mod.fetch_bytes = fake_fetch_bytes
         ctx = {}
         result = WeatherSkill().execute("what is the weather today in Escondido, CA", ctx, {})
     finally:
-        mod.urlopen = original_urlopen
+        weather_mod.fetch_bytes = original_fetch
 
     assert ctx["last_skill_success"] is True
     assert "Weather for Escondido, California, United States" in result
@@ -596,6 +573,128 @@ def t_ssrf_public_allowed():
         result = validate_outbound_url("https://api.open-meteo.com/v1/forecast")
     assert result == "https://api.open-meteo.com/v1/forecast", f"URL was mutated: {result!r}"
 test("SSRF: public IP passes validation unchanged (AC-CR016-005)", t_ssrf_public_allowed)
+
+
+# ── HTTP retry + rate limiting (FR-API-005, NFR-PERF-010) — AC-CR017-001..006 ─
+
+import io as _io
+import http.client as _http_client
+from unittest.mock import patch as _patch2, MagicMock as _MagicMock
+
+
+def _make_mock_response(body: bytes) -> _MagicMock:
+    """Return a MagicMock that acts as a context-manager urlopen response."""
+    m = _MagicMock()
+    m.__enter__ = lambda s: s
+    m.__exit__ = _MagicMock(return_value=False)
+    m.read = _MagicMock(return_value=body)
+    return m
+
+
+def _make_http_error(code: int) -> Exception:
+    from urllib.error import HTTPError
+    return HTTPError("http://example.com/", code, f"HTTP {code}", {}, _io.BytesIO(b""))
+
+
+def t_retry_429_succeeds():
+    """AC-CR017-001: 429 is retried; succeeds on 3rd attempt."""
+    import src.http_utils as hu
+    from urllib.error import HTTPError
+    attempt = [0]
+    def fake_urlopen(req, timeout=None):
+        attempt[0] += 1
+        if attempt[0] < 3:
+            raise _make_http_error(429)
+        return _make_mock_response(b"ok")
+    with _patch("socket.getaddrinfo", return_value=_make_addrinfo("93.184.216.34")):
+        with _patch("src.http_utils.urlopen", fake_urlopen):
+            with _patch("time.sleep"):
+                with _patch("src.http_utils._rate_limit_acquire"):
+                    result = hu.fetch_bytes("https://example.com/path")
+    assert result == b"ok", f"Got {result!r}"
+    assert attempt[0] == 3, f"Expected 3 attempts, got {attempt[0]}"
+test("HTTP retry: 429 retried, succeeds on 3rd attempt (AC-CR017-001)", t_retry_429_succeeds)
+
+
+def t_no_retry_on_400():
+    """AC-CR017-002: HTTP 400 propagates immediately without retry."""
+    import src.http_utils as hu
+    attempt = [0]
+    def fake_urlopen(req, timeout=None):
+        attempt[0] += 1
+        raise _make_http_error(400)
+    with _patch("socket.getaddrinfo", return_value=_make_addrinfo("93.184.216.34")):
+        with _patch("src.http_utils.urlopen", fake_urlopen):
+            with _patch("time.sleep"):
+                with _patch("src.http_utils._rate_limit_acquire"):
+                    try:
+                        hu.fetch_bytes("https://example.com/path")
+                        raise AssertionError("Expected HTTPError, got no exception")
+                    except Exception as e:
+                        assert "400" in str(e), f"Unexpected error: {e}"
+    assert attempt[0] == 1, f"Expected 1 attempt (no retry), got {attempt[0]}"
+test("HTTP retry: 400 not retried, propagates immediately (AC-CR017-002)", t_no_retry_on_400)
+
+
+def t_retry_on_url_error():
+    """AC-CR017-003: URLError is retried; succeeds on 2nd attempt."""
+    import src.http_utils as hu
+    from urllib.error import URLError
+    attempt = [0]
+    def fake_urlopen(req, timeout=None):
+        attempt[0] += 1
+        if attempt[0] == 1:
+            raise URLError("connection refused")
+        return _make_mock_response(b"recovered")
+    with _patch("socket.getaddrinfo", return_value=_make_addrinfo("93.184.216.34")):
+        with _patch("src.http_utils.urlopen", fake_urlopen):
+            with _patch("time.sleep"):
+                with _patch("src.http_utils._rate_limit_acquire"):
+                    result = hu.fetch_bytes("https://example.com/path")
+    assert result == b"recovered"
+    assert attempt[0] == 2, f"Expected 2 attempts, got {attempt[0]}"
+test("HTTP retry: URLError retried, succeeds on 2nd attempt (AC-CR017-003)", t_retry_on_url_error)
+
+
+def t_all_attempts_exhausted():
+    """AC-CR017-004: After 3 failed attempts the final exception propagates."""
+    import src.http_utils as hu
+    from urllib.error import URLError
+    attempt = [0]
+    def fake_urlopen(req, timeout=None):
+        attempt[0] += 1
+        raise URLError("always fails")
+    with _patch("socket.getaddrinfo", return_value=_make_addrinfo("93.184.216.34")):
+        with _patch("src.http_utils.urlopen", fake_urlopen):
+            with _patch("time.sleep"):
+                with _patch("src.http_utils._rate_limit_acquire"):
+                    try:
+                        hu.fetch_bytes("https://example.com/path")
+                        raise AssertionError("Expected URLError, got no exception")
+                    except Exception as exc:
+                        assert "always fails" in str(exc), f"Wrong error: {exc}"
+    assert attempt[0] == hu._MAX_ATTEMPTS, f"Expected {hu._MAX_ATTEMPTS} attempts, got {attempt[0]}"
+test("HTTP retry: all attempts exhausted, final error propagates (AC-CR017-004)", t_all_attempts_exhausted)
+
+
+def t_ssrf_not_retried():
+    """AC-CR017-006: XochitlPermissionError (SSRF block) is never retried."""
+    import src.http_utils as hu
+    urlopen_calls = [0]
+    def fake_urlopen(req, timeout=None):
+        urlopen_calls[0] += 1
+        return _make_mock_response(b"should not reach")
+    with _patch("socket.getaddrinfo", return_value=_make_addrinfo("127.0.0.1")):
+        with _patch("src.http_utils.urlopen", fake_urlopen):
+            with _patch("time.sleep"):
+                try:
+                    hu.fetch_bytes("http://internal-host/secret")
+                    raise AssertionError("Expected XochitlPermissionError")
+                except Exception as exc:
+                    assert "SSRF" in str(exc) or "blocked" in str(exc).lower() or "127.0.0.1" in str(exc), \
+                        f"Expected SSRF error, got: {exc}"
+    assert urlopen_calls[0] == 0, f"urlopen should not be called; got {urlopen_calls[0]} calls"
+test("HTTP retry: SSRF block never retried (AC-CR017-006)", t_ssrf_not_retried)
 
 
 # ── Print results ─────────────────────────────────────────────────────────────
