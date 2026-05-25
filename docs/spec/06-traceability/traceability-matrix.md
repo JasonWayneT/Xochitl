@@ -52,6 +52,10 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `NFR-ORCH-008` | `CR-025` | `CR-025` | `AC-CR025-002` through `AC-CR025-004` | `TASK-ORCH-025` | `src/response_mode.py` (regex + frozenset only, no LLM call) | smoke (AC-CR025-002–004) | implemented |
 | `FR-ORCH-034` | `CR-036` | `CR-036` | `AC-CR036-001`, `AC-CR036-002`, `AC-CR036-003` | `TASK-ORCH-036` | `src/chat.py` (`_agent_loop` — three-zone if/elif/else for [TURN CONTEXT] injection) | smoke (AC-CR036-001–003) | implemented |
 | `NFR-ORCH-009` | `CR-036` | `CR-036` | `AC-CR036-001`, `AC-CR036-002`, `AC-CR036-003` | `TASK-ORCH-036` | `src/chat.py` (no new LLM call — uses existing `can_handle()` scores) | source inspection | implemented |
+| `FR-ORCH-035` | `CR-021` | `CR-021` | `AC-CR021-001`, `AC-CR021-004`, `AC-CR021-005` | `TASK-ORCH-021` | `src/observability.py` (`ObservabilityLogger`); `src/database.py` (`agent_traces` table, `insert_agent_trace()`) | smoke (AC-CR021-001–005) | implemented |
+| `FR-ORCH-036` | `CR-021` | `CR-021` | `AC-CR021-002`, `AC-CR021-003` | `TASK-ORCH-021` | `src/chat.py` (`_agent_loop` — `trace_id` in `routing_started`, `tokens_in`/`cost_usd` in `llm_complete`) | smoke (AC-CR021-002–003) | implemented |
+| `NFR-ORCH-010` | `CR-021` | `CR-021` | — | `TASK-ORCH-021` | `src/observability.py` (`_write_jsonl()` — rotate at 10 MB to `.jsonl.bak`) | source inspection | implemented |
+| `NFR-ORCH-011` | `CR-021` | `CR-021` | — | `TASK-ORCH-021` | `src/observability.py` (`_handle_llm_complete()` — `threading.Thread(daemon=True)` for `_write_db()`) | source inspection | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |

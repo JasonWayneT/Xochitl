@@ -1325,6 +1325,85 @@ def t_capability_boundary_skill_matched_pass():
 test("CapBoundary: skill-matched zone has no capability [TURN CONTEXT] (AC-CR036-003)", t_capability_boundary_skill_matched_pass)
 
 
+# ── CR-021 — Structured Observability ────────────────────────────────────────
+
+def t_obs_logger_lifecycle():
+    """AC-CR021-001: ObservabilityLogger defines start() and stop()."""
+    from src.observability import ObservabilityLogger
+    logger = ObservabilityLogger()
+    assert callable(getattr(logger, "start", None)), \
+        "ObservabilityLogger must define start() (FR-ORCH-035)"
+    assert callable(getattr(logger, "stop", None)), \
+        "ObservabilityLogger must define stop() (FR-ORCH-035)"
+test("Obs: ObservabilityLogger defines start() and stop() (AC-CR021-001)", t_obs_logger_lifecycle)
+
+
+def t_routing_started_has_trace_id():
+    """AC-CR021-002: routing_started payload includes trace_id in chat.py source."""
+    import src.chat as chat_mod
+    src_text = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    assert '"trace_id"' in src_text or "'trace_id'" in src_text, \
+        "routing_started emit must include trace_id key (FR-ORCH-036)"
+    assert "routing_started" in src_text, \
+        "chat.py must emit routing_started event (FR-ORCH-036)"
+test("Obs: routing_started payload includes trace_id (AC-CR021-002)", t_routing_started_has_trace_id)
+
+
+def t_llm_complete_enriched_payload():
+    """AC-CR021-003: llm_complete emit includes tokens_in and cost_usd in chat.py source."""
+    import src.chat as chat_mod
+    src_text = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    assert '"tokens_in"' in src_text or "'tokens_in'" in src_text, \
+        "llm_complete emit must include tokens_in key (FR-ORCH-036)"
+    assert '"cost_usd"' in src_text or "'cost_usd'" in src_text, \
+        "llm_complete emit must include cost_usd key (FR-ORCH-036)"
+test("Obs: llm_complete payload includes tokens_in and cost_usd (AC-CR021-003)", t_llm_complete_enriched_payload)
+
+
+def t_agent_traces_table_exists():
+    """AC-CR021-004: agent_traces table defined in database.py schema."""
+    import src.database as db_mod
+    src_text = Path(db_mod.__file__).read_text(encoding="utf-8")
+    assert "agent_traces" in src_text, \
+        "agent_traces table must be defined in database.py schema (FR-ORCH-035)"
+    assert "insert_agent_trace" in src_text, \
+        "insert_agent_trace() helper must be defined in database.py (FR-ORCH-035)"
+test("Obs: agent_traces table defined in database.py schema (AC-CR021-004)", t_agent_traces_table_exists)
+
+
+def t_obs_on_llm_complete_writes_jsonl():
+    """AC-CR021-005: on_event('llm_complete', ...) assembles trace and calls _write_jsonl."""
+    from unittest.mock import MagicMock, patch
+    from src.observability import ObservabilityLogger
+
+    logger = ObservabilityLogger()
+    # Prime a turn trace via routing_started
+    logger._handle_routing_started({"trace_id": "abc123def456"})
+
+    written_records: list[dict] = []
+
+    def _fake_write_jsonl(record: dict) -> None:
+        written_records.append(record)
+
+    with patch.object(logger, "_write_jsonl", side_effect=_fake_write_jsonl), \
+         patch.object(logger, "_write_db"):  # silence background DB call
+        logger._handle_llm_complete({
+            "route": "local",
+            "tokens_in": 100,
+            "tokens_out": 50,
+            "cost_usd": 0.0,
+        })
+
+    assert len(written_records) == 1, \
+        "_write_jsonl must be called exactly once per llm_complete (FR-ORCH-035)"
+    rec = written_records[0]
+    assert rec.get("trace_id") == "abc123def456", \
+        "Written record must preserve trace_id (FR-ORCH-036)"
+    assert "tokens_in" in rec or "gen_ai.usage.prompt_tokens" in rec, \
+        "Written record must include token counts (FR-ORCH-036)"
+test("Obs: on_event('llm_complete') assembles trace and calls _write_jsonl (AC-CR021-005)", t_obs_on_llm_complete_writes_jsonl)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

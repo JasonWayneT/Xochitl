@@ -373,6 +373,15 @@ class XochitlChat:
         # announcements. Starts as conversational (default). (FR-ORCH-032)
         self._current_mode: str = "conversational"
 
+        # CR-021: structured observability — subscribes to event bus, writes
+        # per-turn traces to JSONL + SQLite (FR-ORCH-035).
+        try:
+            from src.observability import ObservabilityLogger
+            self._obs_logger = ObservabilityLogger()
+            self._obs_logger.start()
+        except Exception:
+            self._obs_logger = None  # type: ignore[assignment]
+
         # FR-ORCH-025: session token budget governor — tracks estimated spend and
         # applies progressive routing restrictions (FULL → PREFER_LOCAL → LOCAL_ONLY → HARD_STOP).
         self._governor = SessionGovernor()
@@ -752,7 +761,10 @@ class XochitlChat:
           5. If found: execute skill, record in history, append result to response
           6. Strip any stray <skill_call> tags from visible output
         """
-        _events.emit("routing_started", {"query": user_input[:100]})
+        # CR-021: generate per-turn trace_id for observability correlation (FR-ORCH-036)
+        import secrets as _secrets
+        _trace_id = _secrets.token_hex(6)
+        _events.emit("routing_started", {"query": user_input[:100], "trace_id": _trace_id})
 
         # CR-025: infer response mode and announce transitions (FR-ORCH-032, NFR-ORCH-007)
         try:
@@ -890,7 +902,12 @@ class XochitlChat:
             if buffer:
                 console.print()  # trailing newline after stream
                 self._last_response_streamed = True
-                _events.emit("llm_complete", {"route": "stream", "tokens_out": len(buffer)})
+                _events.emit("llm_complete", {  # FR-ORCH-036 (CR-021)
+                    "route": "stream",
+                    "tokens_in": 0,
+                    "tokens_out": len(buffer),
+                    "cost_usd": 0.0,
+                })
                 response_text = "".join(buffer)
                 # Skill calls are not expected on streaming turns (no schema injected),
                 # but guard anyway: strip any stray XML and return clean text.
@@ -908,7 +925,12 @@ class XochitlChat:
         if result.error:
             return f"{_ERR} — {result.error}"
 
-        _events.emit("llm_complete", {"route": str(result.route), "tokens_out": result.tokens_out})
+        _events.emit("llm_complete", {  # FR-ORCH-036 (CR-021)
+            "route": str(result.route),
+            "tokens_in": result.tokens_in,
+            "tokens_out": result.tokens_out,
+            "cost_usd": result.cost_usd,
+        })
 
         response_text = result.content or ""
 

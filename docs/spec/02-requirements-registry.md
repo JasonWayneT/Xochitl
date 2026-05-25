@@ -497,6 +497,26 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR036-003` | `FR-ORCH-034` | Skill matched | `top_score ≥ 0.65` (source inspection) | — | Skill-matched zone uses `pass` — no `[TURN CONTEXT]` injected | implemented |
 | `AC-CR036-004` | All CR-036 | Smoke tests | `python smoke_test.py` runs | — | 78 passed, 0 failed | implemented |
 
+### Orchestration — Structured Observability (CR-021)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-035` | functional | P1 | implemented | `ObservabilityLogger` subscribes to the event bus; on each `routing_started`/`llm_complete`/`skill_*` event sequence it assembles and persists a structured `_TurnTrace` record to JSONL + SQLite (`agent_traces` table) | `AC-CR021-001`, `AC-CR021-004`, `AC-CR021-005` | `CR-021` | `src/observability.py` — `ObservabilityLogger`; `src/database.py` — `agent_traces` table |
+| `FR-ORCH-036` | functional | P1 | implemented | `routing_started` payload includes a `trace_id` (12-char hex); `llm_complete` payload includes `tokens_in` and `cost_usd` in addition to the existing `route` and `tokens_out` fields | `AC-CR021-002`, `AC-CR021-003` | `CR-021` | `src/chat.py` — `_agent_loop()` emits enriched payloads |
+| `NFR-ORCH-010` | non-functional | P1 | implemented | JSONL ring buffer capped at 10 MB; when exceeded the current file is renamed to `agent_traces.jsonl.bak` and a new file is started | — | `CR-021` | `src/observability.py` — `_write_jsonl()` rotation logic |
+| `NFR-ORCH-011` | non-functional | P1 | implemented | SQLite writes happen in a background daemon thread so the main chat loop is never blocked by observability I/O; JSONL writes are synchronous append-only wrapped in try/except | — | `CR-021` | `src/observability.py` — `_handle_llm_complete()` spawns `threading.Thread(daemon=True)` |
+
+### Acceptance criteria — Structured Observability (CR-021)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR021-001` | `FR-ORCH-035` | Lifecycle | Import `ObservabilityLogger` | — | `start()` and `stop()` are callable | implemented |
+| `AC-CR021-002` | `FR-ORCH-036` | trace_id in routing_started | Source inspection of `chat.py` | — | `"trace_id"` key present in `routing_started` emit | implemented |
+| `AC-CR021-003` | `FR-ORCH-036` | Enriched llm_complete | Source inspection of `chat.py` | — | `"tokens_in"` and `"cost_usd"` keys present in `llm_complete` emit | implemented |
+| `AC-CR021-004` | `FR-ORCH-035` | Schema | Source inspection of `database.py` | — | `agent_traces` table and `insert_agent_trace()` defined | implemented |
+| `AC-CR021-005` | `FR-ORCH-035` | JSONL write | `on_event("llm_complete", ...)` called with primed trace | — | `_write_jsonl()` called once with record containing `trace_id` | implemented |
+| `AC-CR021-006` | All CR-021 | Smoke tests | `python smoke_test.py` runs | — | 83 passed, 0 failed | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

@@ -136,6 +136,23 @@ def init_db() -> None:
                 last_seen_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 superseded_by INTEGER REFERENCES memory_facts(id)
             );
+
+            CREATE TABLE IF NOT EXISTS agent_traces (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                trace_id     TEXT NOT NULL,
+                ts           TEXT NOT NULL,
+                route        TEXT,
+                tokens_in    INTEGER DEFAULT 0,
+                tokens_out   INTEGER DEFAULT 0,
+                cost_usd     REAL DEFAULT 0.0,
+                latency_ms   INTEGER DEFAULT 0,
+                top_skill    TEXT,
+                top_score    REAL DEFAULT 0.0,
+                tool_calls   TEXT,
+                failure_reason TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_traces_ts
+                ON agent_traces(ts DESC);
         """)
 
 
@@ -597,3 +614,44 @@ def get_memory_facts(
            ORDER BY confidence DESC, last_seen_at DESC LIMIT ?""",
         (min_confidence, limit),
     ).fetchall()
+
+
+# ── Observability ─────────────────────────────────────────────────────────────
+
+def insert_agent_trace(conn: sqlite3.Connection, trace: dict) -> int:
+    """Insert one structured turn trace into the agent_traces table.
+
+    Called by ObservabilityLogger on llm_complete (FR-ORCH-035, CR-021).
+    The table is created lazily via init_db(); init_db() is called on session
+    start so the table is always available by the time this runs.
+
+    Args:
+        conn:  Active SQLite connection (used as context manager by caller).
+        trace: OTel-aligned record dict from ``_TurnTrace.to_record()``.
+
+    Returns:
+        The rowid of the newly inserted row.
+    """
+    tool_calls_json = json.dumps(trace.get("tool_calls") or [])
+    cursor = conn.execute(
+        """
+        INSERT INTO agent_traces
+            (trace_id, ts, route, tokens_in, tokens_out, cost_usd,
+             latency_ms, top_skill, top_score, tool_calls, failure_reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            trace.get("trace_id", ""),
+            trace.get("ts", ""),
+            trace.get("gen_ai.request.model", ""),
+            int(trace.get("gen_ai.usage.prompt_tokens", 0)),
+            int(trace.get("gen_ai.usage.completion_tokens", 0)),
+            float(trace.get("cost_usd", 0.0)),
+            int(trace.get("latency_ms", 0)),
+            trace.get("top_skill"),
+            float(trace.get("top_score", 0.0)),
+            tool_calls_json,
+            trace.get("failure_reason"),
+        ),
+    )
+    return int(cursor.lastrowid)
