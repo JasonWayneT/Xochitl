@@ -362,6 +362,24 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR026-006` | `FR-ORCH-025` | `/budget` command | User types `/budget` in chat | — | Budget detail printed: tier, estimated tokens, thresholds | implemented |
 | `AC-CR026-007` | `FR-ORCH-025` | Warning de-dup | `should_warn(Tier.PREFER_LOCAL)` called twice | — | Returns `True` first time, `False` second time | implemented |
 
+### Orchestration — Uncertainty Tiers and Capability Boundary (CR-032)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-026` | functional | P1 | implemented | `prompts/system_xochitl.txt` includes an `[UNCERTAINTY TIERS]` section defining four tiers — CERTAIN, CONFIDENT INFERENCE, UNCERTAIN, UNKNOWN — each with source conditions, marker language examples, and usage rules | `AC-CR032-001` | `CR-032` | Model-behavior guidance; no code logic |
+| `FR-ORCH-027` | functional | P1 | implemented | `prompts/system_xochitl.txt` includes a `[CAPABILITY BOUNDARY]` section with explicit CAN and CANNOT lists so the model has permission to say "I can't do that" rather than constructing unreliable workarounds | `AC-CR032-002` | `CR-032` | Model-behavior guidance; no code logic |
+| `NFR-ORCH-003` | non-functional | P1 | implemented | When `top_score < 0.2` in `_agent_loop`, a one-line `[TURN CONTEXT]` note is appended to the assembled system prompt for that turn only, signalling an open-ended or general knowledge turn and reminding the model to apply calibrated `[UNCERTAINTY TIERS]` vocabulary; no note is injected when a skill scores >= 0.65 | `AC-CR032-003`, `AC-CR032-004` | `CR-032` | `_OPEN_ENDED_SCORE_THRESHOLD = 0.2` in `chat.py` |
+
+### Acceptance criteria — Uncertainty Tiers and Capability Boundary (CR-032)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR032-001` | `FR-ORCH-026` | Uncertainty tiers present | `prompts/system_xochitl.txt` is read | — | File contains `[UNCERTAINTY TIERS]` section | implemented |
+| `AC-CR032-002` | `FR-ORCH-027` | Capability boundary present | `prompts/system_xochitl.txt` is read | — | File contains `[CAPABILITY BOUNDARY]` section | implemented |
+| `AC-CR032-003` | `NFR-ORCH-003` | Low-score injection | `top_score < 0.2` in `_agent_loop` | — | Assembled system prompt contains `[TURN CONTEXT]` note | implemented |
+| `AC-CR032-004` | `NFR-ORCH-003` | High-score no injection | `top_score >= 0.65` (skill matched) | — | No `[TURN CONTEXT]` note injected | implemented |
+| `AC-CR032-005` | `FR-ORCH-026`, `FR-ORCH-027` | Smoke test | `python smoke_test.py` runs | — | Both sections confirmed present in prompt file | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

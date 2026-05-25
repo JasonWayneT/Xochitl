@@ -27,6 +27,9 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `NFR-API-002` | `CR-017` | `CR-017`, `ADR-003` | `AC-CR017-005` | `TASK-API-017` | `src/http_utils.py` (`_rate_limit_acquire`, `_RL_CAPACITY`, `_RL_WINDOW`, `_rl_buckets`) | code inspection (AC-CR017-005) | implemented |
 | `FR-ORCH-025` | `CR-026` | `CR-026`, `ADR-004` | `AC-CR026-001`, `AC-CR026-002`, `AC-CR026-003`, `AC-CR026-004`, `AC-CR026-006`, `AC-CR026-007` | `TASK-ORCH-026` | `src/governor.py` (`SessionGovernor`, `Tier`, `_estimate_tokens`), `src/chat.py` (`__init__` governor init, `start` tier check + record, `_agent_loop` force_route override, `_handle_slash_command` `/budget`) | smoke (AC-CR026-001–005) + code inspection (AC-CR026-006–007) | implemented |
 | `NFR-PERF-011` | `CR-026` | `CR-026`, `ADR-004` | `AC-CR026-005` | `TASK-ORCH-026` | `src/governor.py` (`_estimate_tokens`, `_load_thresholds`, `XCH_*` env vars) | smoke AC-CR026-005 | implemented |
+| `FR-ORCH-026` | `CR-032` | `CR-032` | `AC-CR032-001`, `AC-CR032-005` | `TASK-ORCH-032` | `prompts/system_xochitl.txt` (`[UNCERTAINTY TIERS]` section) | smoke (AC-CR032-001) | implemented |
+| `FR-ORCH-027` | `CR-032` | `CR-032` | `AC-CR032-002`, `AC-CR032-005` | `TASK-ORCH-032` | `prompts/system_xochitl.txt` (`[CAPABILITY BOUNDARY]` section) | smoke (AC-CR032-002) | implemented |
+| `NFR-ORCH-003` | `CR-032` | `CR-032` | `AC-CR032-003`, `AC-CR032-004` | `TASK-ORCH-032` | `src/chat.py` (`_OPEN_ENDED_SCORE_THRESHOLD`, `_agent_loop` `[TURN CONTEXT]` injection) | smoke (AC-CR032-003, AC-CR032-004) + code inspection | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |
