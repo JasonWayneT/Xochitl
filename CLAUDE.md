@@ -103,3 +103,93 @@ xochitl pull            # Fetch latest from Notion
 - **Smoke Test**: `python smoke_test.py` (Unit tests for pipeline components)
 - **E2E Test**: `python end_to_end_test.py` (Mocked full pipeline flow)
 - **Linting**: No raw SQL outside `database.py`; all LLM calls via `router.py`.
+
+## Code Quality Standards
+
+These apply to all new code. Violations block merge. Auditing existing code is tracked separately.
+
+### NFR-DEV-001 — Conventional Commits scope (required)
+
+Every commit must include a scope from the closed list below. Scope-less commits are prohibited.
+
+| Scope | Area |
+|---|---|
+| `core` | Core CLI and task queue (`cli.py`, `task_manager.py`) |
+| `api` | External integrations (Notion, LLM providers) |
+| `ui` | Terminal UI (`rich` output, prompts) |
+| `data` | Database schema, migrations (`database.py`) |
+| `auth` | Authentication and security sandboxing (`security.py`) |
+| `sdd` | SDD pipeline (BMAD intake, spec gen, code gen) |
+| `orch` | Orchestration (`context_manager.py`, `chat.py`, `router.py`, `background_review.py`) |
+| `skill` | All files under `src/skills/` |
+| `mem` | Memory and retrieval (`memory.py`, ChromaDB layer) |
+| `ztk` | Zettelkasten note engine |
+| `dev` | Standards, tooling, CI, documentation changes |
+
+Examples: `feat(orch):`, `fix(skill):`, `docs(dev):`, `refactor(data):`
+
+### NFR-DEV-002 — Type hints on all public functions
+
+All public function signatures must include argument type hints and a return type annotation.
+Use `Optional[T]` or `T | None` for nullable returns. No unannotated public signatures.
+
+### NFR-DEV-003 — No bare `except:`
+
+Always catch a specific exception type or `Exception` with a named variable:
+
+```python
+# Good
+except Exception as exc:
+    raise RouterError("...") from exc
+
+# Bad
+except:          # catches KeyboardInterrupt, SystemExit — dangerous
+    pass
+except Exception:  # swallows exc silently — no chain
+    return None
+```
+
+Never `except BaseException:` unless in a top-level shutdown path with explicit justification.
+
+### NFR-DEV-004 — Google-style docstrings on public methods
+
+Priority: skill `can_handle()`, `execute()`, `tool_definition()` interfaces. Required sections:
+one-line summary, `Args:`, `Returns:`, `Raises:` (omit only if truly none).
+
+```python
+def execute(self, query: str, context: dict) -> SkillResult:
+    """Fetch live weather and format it for terminal output.
+
+    Args:
+        query: Natural-language weather request from the user.
+        context: Assembled context dict from ContextManager.
+
+    Returns:
+        SkillResult with formatted weather string or error message.
+
+    Raises:
+        GeocodingError: If the location cannot be resolved to coordinates.
+    """
+```
+
+### NFR-DEV-005 — Testing checklist
+
+Every test function must satisfy all of these:
+
+- [ ] Happy path covered
+- [ ] At least one edge case or failure path covered
+- [ ] External dependencies (LLM, HTTP, filesystem) mocked at the provider boundary
+- [ ] Output is deterministic (no random seeds, no real timestamps without freezing)
+- [ ] The test would **fail** if the logic under test were removed or broken
+
+Real API calls are never allowed in unit tests. Use `unittest.mock` or `pytest-recording`.
+
+### NFR-DEV-006 — Security checklist
+
+Every code change touching I/O or user input must verify:
+
+- [ ] No `eval()`, `exec()`, or `pickle.loads()` on user-controlled or LLM-generated input
+- [ ] No bare resource leaks — file handles, threads, sockets closed in `finally` or `with`
+- [ ] All `urlopen()` / `httpx.get()` calls carry an explicit `timeout=` parameter
+- [ ] `subprocess.run()` never uses `shell=True` with generated content
+- [ ] No API keys, secrets, or credentials in source files (use env vars via `.env`)

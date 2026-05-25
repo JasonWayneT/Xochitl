@@ -35,6 +35,29 @@ Before coding, read these files in order when they exist:
 
 If a file does not exist because the project is lightweight, continue with the available files.
 
+## Commit conventions
+
+Every commit must follow Conventional Commits format with a **required scope** from the closed
+list below. Scope-less commits (`feat: add thing`) are prohibited. See `CLAUDE.md §NFR-DEV-001`.
+
+```
+<type>(<scope>): <description>
+```
+
+| Scope | Area |
+|---|---|
+| `core` | Core CLI and task queue |
+| `api` | External integrations (Notion, LLM providers) |
+| `ui` | Terminal UI |
+| `data` | Database schema and migrations |
+| `auth` | Security and sandboxing |
+| `sdd` | SDD pipeline |
+| `orch` | Orchestration layer |
+| `skill` | Skills under `src/skills/` |
+| `mem` | Memory and retrieval |
+| `ztk` | Zettelkasten note engine |
+| `dev` | Standards, tooling, CI, docs |
+
 ## Requirement ID rule
 
 Every code change must cite at least one requirement, acceptance criterion, bug ID, or ADR in the task description, commit message, PR summary, or implementation notes.

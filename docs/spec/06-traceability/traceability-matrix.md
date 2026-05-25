@@ -37,6 +37,12 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-ORCH-030` | `CR-030` | `CR-030` | `AC-CR030-001` | `TASK-ORCH-030` | `prompts/system_xochitl.txt` (`[CORRECTION HANDLING]` section — 3-step pattern, minimal-ack examples) | smoke (AC-CR030-001) | implemented |
 | `FR-ORCH-031` | `CR-030` | `CR-030` | `AC-CR030-002`, `AC-CR030-003`, `AC-CR030-004` | `TASK-ORCH-030` | `src/background_review.py` (`_CORRECTION_SIGNALS`, `_detect_correction()`, `_TurnData.is_correction`, `_process()` bypass, `_store_correction_fact()`) | smoke (AC-CR030-002 through AC-CR030-004) | implemented |
 | `NFR-ORCH-006` | `CR-030` | `CR-030` | `AC-CR030-005` | `TASK-ORCH-030` | `src/background_review.py` (`_store_correction_fact()` — near-duplicate check, `upsert_preference()` escalation, deterministic key) | smoke (AC-CR030-005) | implemented |
+| `NFR-DEV-001` | `CR-015` | `CR-015` | `AC-CR015-001`, `AC-CR015-003`, `AC-CR015-004` | `TASK-DEV-015` | `CLAUDE.md` (§NFR-DEV-001 scope table), `AGENTS.md` (§Commit conventions) | doc review (AC-CR015-001, AC-CR015-003, AC-CR015-004) | implemented |
+| `NFR-DEV-002` | `CR-015` | `CR-015` | `AC-CR015-002` | `TASK-DEV-015` | `CLAUDE.md` (§NFR-DEV-002 type hints rule) | doc review (AC-CR015-002) | implemented |
+| `NFR-DEV-003` | `CR-015` | `CR-015` | `AC-CR015-002` | `TASK-DEV-015` | `CLAUDE.md` (§NFR-DEV-003 no bare except rule) | doc review (AC-CR015-002) | implemented |
+| `NFR-DEV-004` | `CR-015` | `CR-015` | `AC-CR015-002` | `TASK-DEV-015` | `CLAUDE.md` (§NFR-DEV-004 Google docstrings rule) | doc review (AC-CR015-002) | implemented |
+| `NFR-DEV-005` | `CR-015` | `CR-015` | `AC-CR015-002` | `TASK-DEV-015` | `CLAUDE.md` (§NFR-DEV-005 testing checklist) | doc review (AC-CR015-002) | implemented |
+| `NFR-DEV-006` | `CR-015` | `CR-015` | `AC-CR015-002` | `TASK-DEV-015` | `CLAUDE.md` (§NFR-DEV-006 security checklist) | doc review (AC-CR015-002) | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |

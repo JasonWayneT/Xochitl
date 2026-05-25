@@ -16,6 +16,7 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `SDD` | BMAD → SDD → Code generation pipeline |
 | `ZTK` | Zettelkasten vault management, note pipeline, tag system |
 | `ORCH` | Orchestration, routing, intent classification, skill dispatch |
+| `DEV` | Development standards, tooling, code quality |
 
 | Prefix | Category | Example |
 |---|---|---|
@@ -418,6 +419,26 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR030-004` | `FR-ORCH-031` | Correction storage | `_store_correction_fact()` source inspected | — | Stores with category=`"preference"` and confidence≥0.9 | implemented |
 | `AC-CR030-005` | `NFR-ORCH-006` | Escalation | `_store_correction_fact()` called with mock DB having near-duplicate | — | `upsert_preference()` called with category=`"communication"`, confidence≥0.9, key starting with `"correction_"` | implemented |
 | `AC-CR030-006` | All CR-030 | Smoke tests | `python smoke_test.py` runs | — | 63 passed, 0 failed | implemented |
+
+### Development Standards (CR-015)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `NFR-DEV-001` | non-functional | P1 | implemented | Every commit includes a scope from the closed list (`core`, `api`, `ui`, `data`, `auth`, `sdd`, `orch`, `skill`, `mem`, `ztk`, `dev`); scope-less commits are prohibited | `AC-CR015-001`, `AC-CR015-003`, `AC-CR015-004` | `CR-015` | Scope list in `CLAUDE.md` §NFR-DEV-001 and `AGENTS.md §Commit conventions` |
+| `NFR-DEV-002` | non-functional | P1 | implemented | All new public function signatures include argument type hints and a return type annotation; `Optional[T]` or `T \| None` for nullable returns | `AC-CR015-002` | `CR-015` | Applies to new code; existing code audited separately |
+| `NFR-DEV-003` | non-functional | P1 | implemented | No bare `except:` clauses in `src/`; always `except Exception as exc:` or a specific type; exception chain preserved with `raise … from exc` | `AC-CR015-002` | `CR-015` | `except BaseException:` allowed only in shutdown paths with explicit justification |
+| `NFR-DEV-004` | non-functional | P1 | implemented | Public methods on skill classes, context engines, and database helpers carry Google-style docstrings (one-line summary + `Args:` + `Returns:` + `Raises:`) | `AC-CR015-002` | `CR-015` | Priority: `can_handle()`, `execute()`, `tool_definition()` |
+| `NFR-DEV-005` | non-functional | P1 | implemented | Every test function covers: happy path, at least one edge/failure case, external deps mocked, output deterministic, test fails if logic removed | `AC-CR015-002` | `CR-015` | No real API calls in unit tests |
+| `NFR-DEV-006` | non-functional | P1 | implemented | No `eval()`/`exec()`/`pickle.loads()` on user or LLM-generated input; no bare resource leaks; all outbound HTTP carries explicit `timeout=`; `subprocess.run()` never `shell=True` with generated content | `AC-CR015-002` | `CR-015` | |
+
+### Acceptance criteria — Development Standards (CR-015)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR015-001` | `NFR-DEV-001` | Scope standards in CLAUDE.md | `CLAUDE.md` is read | — | File contains `## Code Quality Standards` section with scope table | implemented |
+| `AC-CR015-002` | `NFR-DEV-002` through `NFR-DEV-006` | Standards documented | `CLAUDE.md` is read | — | All six NFR-DEV-* standards listed with descriptions | implemented |
+| `AC-CR015-003` | `NFR-DEV-001` | Scope list in AGENTS.md | `AGENTS.md` is read | — | File contains a `## Commit conventions` section with the closed scope list | implemented |
+| `AC-CR015-004` | `NFR-DEV-001` | Scope rule in AGENTS.md | `AGENTS.md` is read | — | Section states that scope-less commits are prohibited | implemented |
 
 ## Requirement lifecycle notes
 
