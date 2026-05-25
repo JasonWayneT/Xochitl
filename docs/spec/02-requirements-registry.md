@@ -639,6 +639,26 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR035-005` | `FR-PREF-005` | M2/M3 blocks non-empty | `milestone_context_block(Milestone.M2)`, `milestone_context_block(Milestone.M3)` | — | Both return non-empty strings with `## Personalization` header | implemented |
 | `AC-CR035-006` | All CR-035 | Smoke tests | `python smoke_test.py` | — | 119 passed, 0 failed | implemented |
 
+### Controlled Initiative (CR-036)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-INIT-001` | functional | P1 | implemented | `InitiativeEngine.submit(signal)` rejects silently if: mode=OFF, mode=ERRORS_ONLY and category != SYSTEM_FAILURE, confidence < 0.80, or category suppressed; otherwise queues in `_pending` | `AC-CR036-001`, `AC-CR036-002`, `AC-CR036-003`, `AC-CR036-004` | `CR-036` | `src/initiative.py` — `InitiativeEngine.submit()`, `_CONFIDENCE_THRESHOLD=0.80`, `ProactiveMode` checks |
+| `FR-INIT-002` | functional | P1 | implemented | `InitiativeEngine.dismiss(category)` increments dismissal counter; after `_DISMISS_THRESHOLD (3)` the category is added to `_suppressed` and all future signals of that category are rejected | `AC-CR036-005` | `CR-036` | `src/initiative.py` — `dismiss()`, `_DISMISS_THRESHOLD=3`, `_suppressed` set |
+| `FR-INIT-003` | functional | P1 | implemented | `InitiativeEngine.drain() -> list[ProactiveSignal]` returns and clears `_pending`; second call returns `[]` | `AC-CR036-002` | `CR-036` | `src/initiative.py` — `drain()` |
+| `NFR-INIT-001` | non-functional | P1 | implemented | `submit()`, `dismiss()`, `drain()` never raise; below-threshold candidates logged at DEBUG only; `InitiativeEngine` wired to `BackgroundReview` via `_initiative_engine`; signals drained in `_agent_loop()` before LLM call | `AC-CR036-001` through `AC-CR036-005` | `CR-036` | `src/initiative.py` — try/except in all public methods; `src/chat.py` — drain+inject in `_agent_loop()`; `src/background_review.py` — `submit_initiative()` |
+
+### Acceptance criteria — Controlled Initiative (CR-036)
+
+| ID | Requirements | Scenario | Input | Pre-conditions | Expected | Status |
+|---|---|---|---|---|---|---|
+| `AC-CR036-001` | `FR-INIT-001` | OFF rejects all | `mode=OFF`, `SYSTEM_FAILURE`, conf=0.90 | — | `drain()` returns `[]` | implemented |
+| `AC-CR036-002` | `FR-INIT-001`, `FR-INIT-003` | ERRORS_ONLY allows failure | `mode=ERRORS_ONLY`, `SYSTEM_FAILURE`, conf=0.90 | — | `drain()` returns the signal | implemented |
+| `AC-CR036-003` | `FR-INIT-001` | ERRORS_ONLY rejects followup | `mode=ERRORS_ONLY`, `IN_SESSION_FOLLOWUP`, conf=0.90 | — | `drain()` returns `[]` | implemented |
+| `AC-CR036-004` | `FR-INIT-001` | Low confidence rejected | `mode=FULL`, `SYSTEM_FAILURE`, conf=0.75 | — | `drain()` returns `[]` | implemented |
+| `AC-CR036-005` | `FR-INIT-002` | 3 dismissals suppress | `dismiss()` x3, then `submit()` high-confidence | — | `drain()` returns `[]` | implemented |
+| `AC-CR036-006` | All CR-036 | Smoke tests | `python smoke_test.py` | — | 124 passed, 0 failed | implemented |
+
 ### Bounded Explorer (CR-023)
 
 | ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |

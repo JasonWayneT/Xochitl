@@ -387,6 +387,14 @@ class XochitlChat:
         self._background_review = BackgroundReview()
         self._background_review.start()
 
+        # CR-036: controlled initiative engine (FR-INIT-001)
+        try:
+            from src.initiative import InitiativeEngine
+            self._initiative = InitiativeEngine()
+            self._background_review._initiative_engine = self._initiative
+        except Exception:
+            self._initiative = None  # type: ignore[assignment]
+
         # FR-UI-005: set to True inside _agent_loop when streaming already printed the response
         # so start() knows to skip _stream_response() to avoid double-printing.
         self._last_response_streamed: bool = False
@@ -844,6 +852,22 @@ class XochitlChat:
         if getattr(self, "_background_review", None) and self._background_review.drift_detected:
             system_prompt += _DRIFT_IDENTITY_REMINDER
             self._background_review.clear_drift()
+
+        # CR-036: drain pending proactive signals and inject as system hint (FR-INIT-001)
+        try:
+            if getattr(self, "_initiative", None):
+                signals = self._initiative.drain()
+                if signals:
+                    sig = signals[0]  # surface one signal per turn maximum
+                    system_prompt += (
+                        "\n\n---\n"
+                        "[PROACTIVE ALERT]\n"
+                        f"{sig.message}\n"
+                        f"{sig.action_hint}\n"
+                        "---"
+                    )
+        except Exception:
+            pass
 
         # ── Phase 2: deterministic skill scoring pre-turn ─────────────────────
         # Score every loaded skill against the user's message BEFORE the LLM
@@ -1774,6 +1798,25 @@ class XochitlChat:
         if verb == "/budget":
             return self._governor.budget_detail()
 
+        # CR-036: dismiss a proactive signal category (FR-INIT-002)
+        if verb == "/dismiss":
+            try:
+                from src.initiative import InitiativeCategory
+                engine = getattr(self, "_initiative", None)
+                if engine is None:
+                    return "[dim]Initiative engine not active.[/dim]"
+                # Default: dismiss SYSTEM_FAILURE if no arg; otherwise parse arg
+                cat_str = arg.lower() if arg else "system_failure"
+                try:
+                    cat = InitiativeCategory(cat_str)
+                except ValueError:
+                    valid = ", ".join(c.value for c in InitiativeCategory)
+                    return f"[dim]Unknown category '{cat_str}'. Valid: {valid}[/dim]"
+                engine.dismiss(cat)
+                return f"[dim]Dismissed '{cat.value}' alerts. Repeated dismissals auto-suppress.[/dim]"
+            except Exception as exc:
+                return f"[dim]Dismiss failed: {exc}[/dim]"
+
         # A3 — structured daily brief (FR-CONV-003).
         # Pull-only: never surfaced unsolicited (alert-fatigue risk).
         if verb == "/brief":
@@ -1788,7 +1831,7 @@ class XochitlChat:
 
         available = (
             "/next <msg>  /retry  /authorize  /revoke  "
-            "/registry  /audit  /review  /research  /adversarial  /budget  /brief"
+            "/registry  /audit  /review  /research  /adversarial  /budget  /brief  /dismiss"
         )
         return f"[dim]{_FYI} — unknown command: {verb}\nAvailable: {available}[/dim]"
 

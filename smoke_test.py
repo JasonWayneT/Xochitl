@@ -2139,6 +2139,98 @@ def t_milestone_m2_m3_nonempty_blocks():
 test("Milestone: M2 and M3 context blocks are non-empty (AC-CR035-005)", t_milestone_m2_m3_nonempty_blocks)
 
 
+# ── CR-036 — Controlled Initiative ───────────────────────────────────────────
+
+def t_initiative_off_rejects_all():
+    """AC-CR036-001: ProactiveMode.OFF rejects signals regardless of category/confidence (FR-INIT-001)."""
+    from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
+    engine = InitiativeEngine(mode=ProactiveMode.OFF)
+    engine.submit(ProactiveSignal(
+        category=InitiativeCategory.SYSTEM_FAILURE,
+        message="Notion sync failed.",
+        confidence=0.90,
+        action_hint="Run /sync or /dismiss to skip.",
+    ))
+    result = engine.drain()
+    assert result == [], f"OFF mode must reject all signals, got: {result}"
+test("Initiative: OFF mode rejects all signals (AC-CR036-001)", t_initiative_off_rejects_all)
+
+
+def t_initiative_errors_only_allows_system_failure():
+    """AC-CR036-002: ERRORS_ONLY allows SYSTEM_FAILURE signals above threshold (FR-INIT-001)."""
+    from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
+    engine = InitiativeEngine(mode=ProactiveMode.ERRORS_ONLY)
+    signal = ProactiveSignal(
+        category=InitiativeCategory.SYSTEM_FAILURE,
+        message="Notion sync failed 12 minutes ago.",
+        confidence=0.90,
+        action_hint="Run /sync or /dismiss to skip.",
+    )
+    engine.submit(signal)
+    result = engine.drain()
+    assert len(result) == 1, f"ERRORS_ONLY must queue SYSTEM_FAILURE, got: {result}"
+    assert result[0].category == InitiativeCategory.SYSTEM_FAILURE
+test("Initiative: ERRORS_ONLY allows SYSTEM_FAILURE above threshold (AC-CR036-002)", t_initiative_errors_only_allows_system_failure)
+
+
+def t_initiative_errors_only_rejects_followup():
+    """AC-CR036-003: ERRORS_ONLY rejects IN_SESSION_FOLLOWUP (FR-INIT-001)."""
+    from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
+    engine = InitiativeEngine(mode=ProactiveMode.ERRORS_ONLY)
+    engine.submit(ProactiveSignal(
+        category=InitiativeCategory.IN_SESSION_FOLLOWUP,
+        message="You started a plan for ZettleLib earlier.",
+        confidence=0.90,
+        action_hint="Type 'continue ZettleLib' or /dismiss.",
+    ))
+    result = engine.drain()
+    assert result == [], f"ERRORS_ONLY must reject IN_SESSION_FOLLOWUP, got: {result}"
+test("Initiative: ERRORS_ONLY rejects IN_SESSION_FOLLOWUP (AC-CR036-003)", t_initiative_errors_only_rejects_followup)
+
+
+def t_initiative_low_confidence_rejected():
+    """AC-CR036-004: Signal below 0.80 confidence threshold is rejected (FR-INIT-001)."""
+    from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
+    engine = InitiativeEngine(mode=ProactiveMode.FULL)
+    engine.submit(ProactiveSignal(
+        category=InitiativeCategory.SYSTEM_FAILURE,
+        message="Possible sync issue detected.",
+        confidence=0.75,
+        action_hint="Check /sync or /dismiss.",
+    ))
+    result = engine.drain()
+    assert result == [], f"Confidence 0.75 < 0.80 must be rejected, got: {result}"
+test("Initiative: below-threshold confidence (0.75) rejected (AC-CR036-004)", t_initiative_low_confidence_rejected)
+
+
+def t_initiative_dismissal_suppresses_after_3():
+    """AC-CR036-005: 3 dismissals suppress the category permanently (FR-INIT-002)."""
+    from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
+    engine = InitiativeEngine(mode=ProactiveMode.FULL)
+    signal = ProactiveSignal(
+        category=InitiativeCategory.SYSTEM_FAILURE,
+        message="Notion sync failed.",
+        confidence=0.90,
+        action_hint="Run /sync or /dismiss.",
+    )
+
+    # Verify signal queues before suppression
+    engine.submit(signal)
+    pre_suppress = engine.drain()
+    assert len(pre_suppress) == 1, "Signal must queue before any dismissals"
+
+    # Dismiss 3 times
+    for _ in range(3):
+        engine.dismiss(InitiativeCategory.SYSTEM_FAILURE)
+
+    # Signal must now be suppressed
+    engine.submit(signal)
+    post_suppress = engine.drain()
+    assert post_suppress == [], \
+        f"After 3 dismissals, SYSTEM_FAILURE must be suppressed, got: {post_suppress}"
+test("Initiative: 3 dismissals suppress category permanently (AC-CR036-005)", t_initiative_dismissal_suppresses_after_3)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
