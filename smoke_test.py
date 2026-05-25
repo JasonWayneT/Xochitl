@@ -974,6 +974,112 @@ def t_assemble_system_prompt_wires_template():
 test("Persona: assemble_system_prompt() contains [GOAL] and [UNCERTAINTY TIERS] (AC-CR029-004/005)", t_assemble_system_prompt_wires_template)
 
 
+# ── CR-030 Correction Handling ────────────────────────────────────────────────
+
+def t_correction_handling_in_prompt():
+    """AC-CR030-001: [CORRECTION HANDLING] section present in system prompt."""
+    prompt_path = Path(__file__).parent / "prompts" / "system_xochitl.txt"
+    assert prompt_path.exists(), "prompts/system_xochitl.txt not found"
+    content = prompt_path.read_text(encoding="utf-8")
+    assert "[CORRECTION HANDLING]" in content, \
+        "[CORRECTION HANDLING] section missing from system_xochitl.txt (FR-ORCH-030)"
+    assert "Got it." in content or "Noted." in content, \
+        "Minimal acknowledgment examples missing from [CORRECTION HANDLING] section"
+test("Correction: [CORRECTION HANDLING] section present in system_xochitl.txt (AC-CR030-001)", t_correction_handling_in_prompt)
+
+
+def t_detect_correction_signals():
+    """AC-CR030-002: _detect_correction() returns True for correction phrases, False for normal input."""
+    from src.background_review import _detect_correction
+    # Should return True
+    true_cases = [
+        "No, that's not what I meant.",
+        "actually, you got that wrong",
+        "I meant the other file",
+        "to clarify, I said yesterday",
+        "correction: the value is 42",
+        "you misunderstood my request",
+        "not what i asked for",
+        "let me clarify what I need",
+    ]
+    for case in true_cases:
+        result = _detect_correction(case)
+        assert result is True, f"_detect_correction() returned False for correction input: {case!r}"
+    # Should return False
+    false_cases = [
+        "Can you help me with this?",
+        "What's the weather today?",
+        "Show me my tasks",
+        "I want to build a new feature",
+    ]
+    for case in false_cases:
+        result = _detect_correction(case)
+        assert result is False, f"_detect_correction() returned True for non-correction input: {case!r}"
+test("Correction: _detect_correction() returns True/False correctly (AC-CR030-002)", t_detect_correction_signals)
+
+
+def t_correction_bypasses_rate_limit():
+    """AC-CR030-003: Correction turns bypass _MIN_WRITE_INTERVAL_SECS rate limit."""
+    import inspect
+    from src.background_review import BackgroundReview
+    source = inspect.getsource(BackgroundReview._process)
+    # The guard must check is_correction before applying the rate limit
+    assert "is_correction" in source, \
+        "_process() does not reference is_correction — correction bypass not implemented (FR-ORCH-031)"
+    assert "not turn.is_correction" in source or "turn.is_correction" in source, \
+        "Rate-limit bypass logic missing from _process() (FR-ORCH-031)"
+test("Correction: correction turns bypass _MIN_WRITE_INTERVAL_SECS (AC-CR030-003)", t_correction_bypasses_rate_limit)
+
+
+def t_correction_storage_category():
+    """AC-CR030-004: _store_correction_fact() stores with category='preference', confidence>=0.9."""
+    import inspect
+    from src.background_review import BackgroundReview
+    source = inspect.getsource(BackgroundReview._store_correction_fact)
+    assert "preference" in source, \
+        "_store_correction_fact() does not set category='preference' (FR-ORCH-031)"
+    assert "0.9" in source or "confidence=0.9" in source, \
+        "_store_correction_fact() does not set confidence>=0.9 (FR-ORCH-031)"
+test("Correction: _store_correction_fact() stores as preference with confidence>=0.9 (AC-CR030-004)", t_correction_storage_category)
+
+
+def t_correction_escalation_to_preferences():
+    """AC-CR030-005: Recurring correction triggers upsert_preference (NFR-ORCH-006)."""
+    import sqlite3
+    from unittest.mock import MagicMock, patch, call
+    from src.background_review import BackgroundReview
+
+    br = BackgroundReview()
+    fact = "User prefers concise responses without preamble."
+
+    # Simulate a connection where a near-duplicate already exists (recurring correction)
+    mock_conn = MagicMock(spec=sqlite3.Connection)
+    mock_cursor = MagicMock()
+    mock_cursor.fetchone.return_value = (1,)  # existing row found
+    mock_conn.execute.return_value = mock_cursor
+
+    upsert_pref_calls = []
+
+    def mock_upsert_pref(conn, pref_dict):
+        upsert_pref_calls.append(pref_dict)
+
+    with patch("src.database._ensure_memory_facts_table"), \
+         patch("src.database.upsert_memory_fact"), \
+         patch("src.database.upsert_preference", side_effect=mock_upsert_pref):
+        br._store_correction_fact(mock_conn, fact, project=None)
+
+    assert len(upsert_pref_calls) == 1, \
+        f"upsert_preference not called on recurring correction (NFR-ORCH-006). Calls: {upsert_pref_calls}"
+    pref = upsert_pref_calls[0]
+    assert pref.get("category") == "communication", \
+        f"Escalated preference should have category='communication', got {pref.get('category')!r}"
+    assert pref.get("confidence", 0) >= 0.9, \
+        f"Escalated preference confidence should be >=0.9, got {pref.get('confidence')}"
+    assert pref.get("preference_key", "").startswith("correction_"), \
+        f"Preference key should start with 'correction_', got {pref.get('preference_key')!r}"
+test("Correction: recurring correction escalates to preferences table (AC-CR030-005)", t_correction_escalation_to_preferences)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

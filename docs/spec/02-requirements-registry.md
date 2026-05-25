@@ -400,6 +400,25 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR029-005` | `FR-ORCH-028` | Template wired — uncertainty | `ContextManager.assemble_system_prompt()` called | — | Output contains `[UNCERTAINTY TIERS]` (confirming CR-032 vocabulary reaches model) | implemented |
 | `AC-CR029-006` | All CR-029 | Smoke tests | `python smoke_test.py` runs | — | 58 passed, 0 failed | implemented |
 
+### Orchestration — Graceful Correction Handling (CR-030)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-030` | functional | P1 | implemented | `prompts/system_xochitl.txt` includes a `[CORRECTION HANDLING]` section defining a three-step correction pattern: (1) minimal acknowledgment ("Got it.", "Right.", "Noted."), (2) apply immediately without re-explanation or confirmation, (3) treat as preference signal and do not repeat the mistake | `AC-CR030-001` | `CR-030` | `prompts/system_xochitl.txt` |
+| `FR-ORCH-031` | functional | P1 | implemented | `BackgroundReview` detects correction-signal turns via `_detect_correction()`; correction turns bypass `_MIN_WRITE_INTERVAL_SECS` rate limit and are stored as category=`"preference"` with confidence ≥ 0.9 | `AC-CR030-002`, `AC-CR030-003`, `AC-CR030-004` | `CR-030` | `src/background_review.py` — `_CORRECTION_SIGNALS`, `_detect_correction()`, `_TurnData.is_correction`, `_store_correction_fact()` |
+| `NFR-ORCH-006` | non-functional | P1 | implemented | When a correction fact near-duplicate is found in `memory_facts` (80-char LOWER prefix match), `BackgroundReview._store_correction_fact()` also calls `upsert_preference()` with category=`"communication"`, confidence=0.95, and a deterministic key (`"correction_" + MD5 prefix) | `AC-CR030-005` | `CR-030` | Recurring-correction escalation; key is stable across upserts |
+
+### Acceptance criteria — Graceful Correction Handling (CR-030)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR030-001` | `FR-ORCH-030` | Prompt section | `prompts/system_xochitl.txt` is read | — | File contains `[CORRECTION HANDLING]` section with minimal-ack examples ("Got it.", "Noted.") | implemented |
+| `AC-CR030-002` | `FR-ORCH-031` | Detection — True | `_detect_correction()` called with correction phrases | — | Returns `True` for "no,", "actually", "I meant", "let me clarify", etc. | implemented |
+| `AC-CR030-003` | `FR-ORCH-031` | Rate-limit bypass | `BackgroundReview._process()` source inspected | — | `is_correction` flag present; correction turns bypass `_MIN_WRITE_INTERVAL_SECS` | implemented |
+| `AC-CR030-004` | `FR-ORCH-031` | Correction storage | `_store_correction_fact()` source inspected | — | Stores with category=`"preference"` and confidence≥0.9 | implemented |
+| `AC-CR030-005` | `NFR-ORCH-006` | Escalation | `_store_correction_fact()` called with mock DB having near-duplicate | — | `upsert_preference()` called with category=`"communication"`, confidence≥0.9, key starting with `"correction_"` | implemented |
+| `AC-CR030-006` | All CR-030 | Smoke tests | `python smoke_test.py` runs | — | 63 passed, 0 failed | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

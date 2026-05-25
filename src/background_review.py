@@ -15,6 +15,7 @@ Design principles:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import queue
@@ -90,17 +91,63 @@ JSON only:"""
 
 _VALID_CATEGORIES = {"preference", "context", "project", "skill", "constraint", "goal"}
 
+# ── CR-030: Correction detection ──────────────────────────────────────────────
+# Keyword signals that strongly indicate the user is correcting Xochitl.
+# Err on the side of sensitivity — false positives have low cost (slightly
+# elevated confidence, bypassed rate limit); false negatives miss corrections.
+_CORRECTION_SIGNALS: frozenset[str] = frozenset({
+    "no,", "no.", "nope", "nah",
+    "actually", "that's wrong", "thats wrong", "that is wrong",
+    "not right", "not correct", "incorrect", "wrong",
+    "i meant", "i mean", "i said", "i asked for",
+    "that's not", "thats not", "that is not",
+    "you misunderstood", "you got it wrong", "you missed",
+    "not what i", "not what i wanted", "not what i asked",
+    "let me clarify", "to clarify", "to be clear",
+    "correction:", "correction —", "correcting you",
+})
+
+
+def _detect_correction(user_input: str) -> bool:
+    """Return True if the user input contains correction-signal keywords.
+
+    Implements FR-ORCH-031 — heuristic detection for CR-030 correction fast-path.
+    Case-insensitive; matches on word boundaries using lowercased token check.
+    """
+    lowered = user_input.lower().strip()
+    for signal in _CORRECTION_SIGNALS:
+        if signal in lowered:
+            return True
+    return False
+
+
+def _correction_preference_key(fact_text: str) -> str:
+    """Deterministic preference key derived from the first 80 chars of a correction fact.
+
+    Used by _store_correction_fact() to upsert recurring corrections into the
+    preferences table with a stable key. Implements NFR-ORCH-006.
+    """
+    prefix = fact_text[:80].lower().encode("utf-8", errors="ignore")
+    return "correction_" + hashlib.md5(prefix).hexdigest()[:12]
+
 
 class _TurnData:
     """A single turn queued for background review."""
 
-    __slots__ = ("user_input", "assistant_response", "project", "queued_at")
+    __slots__ = ("user_input", "assistant_response", "project", "queued_at", "is_correction")
 
-    def __init__(self, user_input: str, assistant_response: str, project: Optional[str]) -> None:
+    def __init__(
+        self,
+        user_input: str,
+        assistant_response: str,
+        project: Optional[str],
+        is_correction: bool = False,
+    ) -> None:
         self.user_input = user_input[:2000]           # cap to avoid huge LLM calls
         self.assistant_response = assistant_response[:1500]
         self.project = project
         self.queued_at = time.monotonic()
+        self.is_correction = is_correction
 
 
 class BackgroundReview:
@@ -144,13 +191,18 @@ class BackgroundReview:
         assistant_response: str,
         project: Optional[str] = None,
     ) -> None:
-        """Queue a completed turn for background review. Non-blocking."""
+        """Queue a completed turn for background review. Non-blocking.
+
+        Correction turns (FR-ORCH-031) are flagged so _process() can bypass
+        the rate limiter and store with elevated confidence.
+        """
         if not self._running:
             return
         # Skip turns that are too short to carry personality signal
         if len(user_input.strip()) < 8:
             return
-        turn = _TurnData(user_input, assistant_response, project)
+        is_corr = _detect_correction(user_input)
+        turn = _TurnData(user_input, assistant_response, project, is_correction=is_corr)
         try:
             self._queue.put_nowait(turn)
         except queue.Full:
@@ -189,9 +241,15 @@ class BackgroundReview:
                 self._queue.task_done()
 
     def _process(self, turn: _TurnData) -> None:
-        """Run both extraction passes and write findings to KB + structured DB."""
+        """Run both extraction passes and write findings to KB + structured DB.
+
+        CR-030: correction turns bypass _MIN_WRITE_INTERVAL_SECS so they are
+        always captured regardless of how recently a fact was last written.
+        Implements FR-ORCH-031.
+        """
         now = time.monotonic()
-        if (now - self._last_write_at) < _MIN_WRITE_INTERVAL_SECS:
+        # Correction turns skip the rate limit — they carry the highest signal.
+        if not turn.is_correction and (now - self._last_write_at) < _MIN_WRITE_INTERVAL_SECS:
             return
 
         observation = self._extract(turn)
@@ -200,7 +258,7 @@ class BackgroundReview:
         if not observation and not structured:
             return
 
-        self._write(observation, structured, turn.project)
+        self._write(observation, structured, turn.project, is_correction=turn.is_correction)
         self._last_write_at = time.monotonic()
 
     def _extract(self, turn: _TurnData) -> Optional[str]:
@@ -280,7 +338,68 @@ class BackgroundReview:
 
         return {"fact": fact, "category": category, "confidence": confidence}
 
-    def _write(self, observation: Optional[str], structured: Optional[dict], project: Optional[str]) -> None:
+    def _store_correction_fact(
+        self,
+        conn: object,
+        fact_text: str,
+        project: Optional[str],
+    ) -> None:
+        """Store a correction fact as a high-confidence preference; escalate
+        to the preferences table if this correction has been seen before.
+
+        Implements FR-ORCH-031 (confidence override) and NFR-ORCH-006 (escalation).
+        """
+        try:
+            from src import database as _db
+            import sqlite3
+            if not isinstance(conn, sqlite3.Connection):
+                return
+
+            _db._ensure_memory_facts_table(conn)  # type: ignore[attr-defined]
+
+            # Pre-check for near-duplicate (recurring correction)
+            existing = conn.execute(  # type: ignore[union-attr]
+                """SELECT id FROM memory_facts
+                   WHERE LOWER(SUBSTR(fact, 1, 80)) = LOWER(SUBSTR(?, 1, 80))
+                     AND superseded_by IS NULL
+                   LIMIT 1""",
+                (fact_text,),
+            ).fetchone()
+
+            # Store / update in memory_facts as a preference with high confidence
+            _db.upsert_memory_fact(
+                conn,
+                fact=fact_text,
+                category="preference",
+                confidence=0.9,
+                source="correction_detection",
+                project=project,
+            )
+
+            # NFR-ORCH-006: recurring correction → escalate to preferences table
+            if existing:
+                pref_key = _correction_preference_key(fact_text)
+                _db.upsert_preference(
+                    conn,
+                    {
+                        "scope": "global",
+                        "category": "communication",
+                        "preference_key": pref_key,
+                        "preference_value": fact_text,
+                        "source": "correction_pattern",
+                        "confidence": 0.95,
+                    },
+                )
+        except Exception as exc:
+            logger.debug("background_review: correction storage failed: %s", exc)
+
+    def _write(
+        self,
+        observation: Optional[str],
+        structured: Optional[dict],
+        project: Optional[str],
+        is_correction: bool = False,
+    ) -> None:
         """Write findings to KB (Tier 2), vector store (Tier 3), and structured DB."""
         try:
             from src.memory import KnowledgeBase, VectorMemory
@@ -354,3 +473,13 @@ class BackgroundReview:
                     )
             except Exception as exc:
                 logger.debug("background_review: structured DB write failed: %s", exc)
+
+        # ── CR-030: Correction fast-path — override category/confidence and
+        #    escalate to preferences table if this correction recurs (NFR-ORCH-006) ──
+        if is_correction and structured and structured.get("fact"):
+            try:
+                from src import database as _db
+                with _db.get_connection() as conn:
+                    self._store_correction_fact(conn, structured["fact"], project)
+            except Exception as exc:
+                logger.debug("background_review: correction fast-path failed: %s", exc)
