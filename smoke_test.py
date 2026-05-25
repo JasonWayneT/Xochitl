@@ -2231,6 +2231,70 @@ def t_initiative_dismissal_suppresses_after_3():
 test("Initiative: 3 dismissals suppress category permanently (AC-CR036-005)", t_initiative_dismissal_suppresses_after_3)
 
 
+# ── CR-037 — Safe Executor ────────────────────────────────────────────────────
+
+def t_governor_auto_for_read():
+    """AC-CR037-001: ActionGovernor.classify('read', ...) returns AUTO (FR-EXEC-001)."""
+    from src.executor import ActionGovernor, ActionTier
+    tier = ActionGovernor.classify("read", "src/chat.py")
+    assert tier == ActionTier.AUTO, \
+        f"'read' action must be AUTO, got: {tier}"
+test("Executor: classify('read', ...) returns AUTO (AC-CR037-001)", t_governor_auto_for_read)
+
+
+def t_governor_confirm_for_delete():
+    """AC-CR037-002: ActionGovernor.classify('delete', ...) returns CONFIRM (FR-EXEC-001)."""
+    from src.executor import ActionGovernor, ActionTier
+    tier = ActionGovernor.classify("delete", "output.txt")
+    assert tier == ActionTier.CONFIRM, \
+        f"'delete' action must be CONFIRM, got: {tier}"
+test("Executor: classify('delete', ...) returns CONFIRM (AC-CR037-002)", t_governor_confirm_for_delete)
+
+
+def t_governor_deny_on_path_traversal():
+    """AC-CR037-003: ActionGovernor.classify('exec', '../../etc/passwd') returns DENY (FR-EXEC-001)."""
+    from src.executor import ActionGovernor, ActionTier
+    tier = ActionGovernor.classify("exec", "../../etc/passwd")
+    assert tier == ActionTier.DENY, \
+        f"Path traversal target must be DENY, got: {tier}"
+test("Executor: classify DENY on path traversal (AC-CR037-003)", t_governor_deny_on_path_traversal)
+
+
+def t_executor_policy_violation_non_allowlisted():
+    """AC-CR037-004: SafeExecutor.run raises PolicyViolation for non-allowlisted command (FR-EXEC-003)."""
+    from src.executor import SafeExecutor, PolicyViolation
+    ex = SafeExecutor()
+    try:
+        ex.run("not_on_allowlist", [])
+        assert False, "SafeExecutor.run must raise PolicyViolation for unknown command"
+    except PolicyViolation:
+        pass  # expected
+test("Executor: PolicyViolation for non-allowlisted command (AC-CR037-004)", t_executor_policy_violation_non_allowlisted)
+
+
+def t_executor_output_truncated_at_cap():
+    """AC-CR037-005: SafeExecutor.run truncates output exceeding 64KB (FR-EXEC-002, NFR-EXEC-002)."""
+    import subprocess
+    from unittest.mock import patch, MagicMock
+    from src.executor import SafeExecutor, _OUTPUT_CAP_BYTES
+
+    big_output = b"x" * (_OUTPUT_CAP_BYTES + 1000)
+    mock_proc = MagicMock()
+    mock_proc.returncode = 0
+    mock_proc.stdout = big_output
+    mock_proc.stderr = b""
+
+    ex = SafeExecutor()
+    with patch("subprocess.run", return_value=mock_proc):
+        result = ex.run("git", ["status"], action_type="read", target=".")
+
+    assert result.truncated is True, \
+        "result.truncated must be True when output exceeds _OUTPUT_CAP_BYTES"
+    assert "[truncated]" in result.stdout, \
+        "Truncated output must contain '[truncated]' marker"
+test("Executor: output >64KB is truncated with [truncated] marker (AC-CR037-005)", t_executor_output_truncated_at_cap)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

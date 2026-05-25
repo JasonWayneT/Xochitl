@@ -659,6 +659,27 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR036-005` | `FR-INIT-002` | 3 dismissals suppress | `dismiss()` x3, then `submit()` high-confidence | — | `drain()` returns `[]` | implemented |
 | `AC-CR036-006` | All CR-036 | Smoke tests | `python smoke_test.py` | — | 124 passed, 0 failed | implemented |
 
+### Safe Executor (CR-037)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-EXEC-001` | functional | P1 | implemented | `ActionGovernor.classify(action_type, target) -> ActionTier` returns AUTO for _AUTO_TYPES, CONFIRM for _CONFIRM_TYPES, DENY for path traversal or unknown types; pure function (NFR-EXEC-001) | `AC-CR037-001`, `AC-CR037-002`, `AC-CR037-003` | `CR-037` | `src/executor.py` — `ActionGovernor.classify()`, `_AUTO_TYPES`, `_CONFIRM_TYPES`, path traversal check |
+| `FR-EXEC-002` | functional | P1 | implemented | `SafeExecutor.run(cmd, args)` calls governor first; AUTO proceeds via `subprocess.run(shell=False)`; CONFIRM raises `ConfirmationRequired`; DENY raises `PolicyViolation`; output capped at `_OUTPUT_CAP_BYTES (65536)` with `[truncated]` | `AC-CR037-004`, `AC-CR037-005` | `CR-037` | `src/executor.py` — `SafeExecutor.run()`, `_OUTPUT_CAP_BYTES=65536`, `ConfirmationRequired`, `PolicyViolation` |
+| `FR-EXEC-003` | functional | P1 | implemented | `SafeExecutor` only executes commands in `_ALLOWED_COMMANDS` frozenset; any other command raises `PolicyViolation` before governor runs | `AC-CR037-004` | `CR-037` | `src/executor.py` — `_ALLOWED_COMMANDS` frozenset, allowlist check in `run()` |
+| `NFR-EXEC-001` | non-functional | P1 | implemented | `subprocess.run()` never called with `shell=True`; `eval()` and `exec()` never called on generated/user-controlled input; `ActionGovernor.classify()` is a pure function with no side effects or I/O | `AC-CR037-001`, `AC-CR037-002`, `AC-CR037-003` | `CR-037` | `src/executor.py` — `shell=False` in `run()`; no `eval`/`exec` calls; `classify()` is a static method |
+| `NFR-EXEC-002` | non-functional | P1 | implemented | Output size-capped before returning; raw stdout/stderr never passed uncapped to LLM; governor always called before any `subprocess.run()` — no bypass path | `AC-CR037-005` | `CR-037` | `src/executor.py` — output cap logic in `run()` after `subprocess.run()`; governor check precedes subprocess call |
+
+### Acceptance criteria — Safe Executor (CR-037)
+
+| ID | Requirements | Scenario | Input | Pre-conditions | Expected | Status |
+|---|---|---|---|---|---|---|
+| `AC-CR037-001` | `FR-EXEC-001` | AUTO for read | `classify("read", "src/chat.py")` | — | `ActionTier.AUTO` | implemented |
+| `AC-CR037-002` | `FR-EXEC-001` | CONFIRM for delete | `classify("delete", "output.txt")` | — | `ActionTier.CONFIRM` | implemented |
+| `AC-CR037-003` | `FR-EXEC-001` | DENY path traversal | `classify("exec", "../../etc/passwd")` | — | `ActionTier.DENY` | implemented |
+| `AC-CR037-004` | `FR-EXEC-003` | PolicyViolation for unknown cmd | `SafeExecutor.run("not_on_allowlist", [])` | — | Raises `PolicyViolation` | implemented |
+| `AC-CR037-005` | `FR-EXEC-002`, `NFR-EXEC-002` | Output truncated | `run("git", ...)` with mocked stdout > 65536 bytes | subprocess mocked | `result.truncated=True`; stdout contains `[truncated]` | implemented |
+| `AC-CR037-006` | All CR-037 | Smoke tests | `python smoke_test.py` | — | 129 passed, 0 failed | implemented |
+
 ### Bounded Explorer (CR-023)
 
 | ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
