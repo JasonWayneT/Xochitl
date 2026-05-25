@@ -917,6 +917,63 @@ def t_no_turn_context_high_score():
 test("Chat: no [TURN CONTEXT] when skill matched >= 0.65 (AC-CR032-004)", t_no_turn_context_high_score)
 
 
+# ── Persona anchoring (FR-ORCH-028/029, NFR-ORCH-004/005) — AC-CR029-001..005 ─
+
+def t_soul_example_structured():
+    """AC-CR029-001: SOUL.md.example has [IDENTITY] section; no 'Chief of Staff'."""
+    soul_path = ROOT / "SOUL.md.example"
+    content = soul_path.read_text(encoding="utf-8")
+    assert "## [IDENTITY]" in content, "SOUL.md.example missing '## [IDENTITY]' section"
+    assert "Chief of Staff" not in content, \
+        "SOUL.md.example still contains 'Chief of Staff' — should use 'personal AI system'"
+test("Soul: SOUL.md.example structured with [IDENTITY], no 'Chief of Staff' (AC-CR029-001)", t_soul_example_structured)
+
+
+def t_soul_engine_identity_anchor():
+    """AC-CR029-002: SoulEngine.identity_anchor is non-empty after ingest."""
+    from src.context_manager import SoulEngine
+    engine = SoulEngine()
+    engine.ingest()
+    anchor = engine.identity_anchor
+    assert anchor, "identity_anchor is empty after ingest"
+    # Should contain text from the [IDENTITY] section of SOUL.md.example
+    assert len(anchor) > 20, f"identity_anchor too short to be meaningful: {anchor!r}"
+test("Soul: SoulEngine.identity_anchor non-empty after ingest (AC-CR029-002)", t_soul_engine_identity_anchor)
+
+
+def t_soul_engine_compact_preserves_identity():
+    """AC-CR029-003: SoulEngine.compact() preserves [IDENTITY] content (NFR-ORCH-005).
+
+    Uses 80 tokens (320 chars) — enough for [IDENTITY] but tight enough to drop
+    [VOICE], [VALUES], and [BOUNDARIES] so compaction is actually exercised.
+    """
+    from src.context_manager import SoulEngine
+    engine = SoulEngine()
+    engine.ingest()
+    anchor = engine.identity_anchor
+    # 80 tokens = 320 chars. [IDENTITY] is ~280 chars; other sections are ~600 chars.
+    compacted = engine.compact(80)
+    assert anchor[:40] in compacted, \
+        f"[IDENTITY] content not preserved in compact output.\nAnchor start: {anchor[:40]!r}\nCompacted: {compacted!r}"
+    # Verify compaction actually occurred (other sections should be absent or truncated)
+    full = engine.assemble()
+    assert len(compacted) < len(full), "compact() returned full text — budget too generous"
+test("Soul: compact() always preserves [IDENTITY] content (AC-CR029-003)", t_soul_engine_compact_preserves_identity)
+
+
+def t_assemble_system_prompt_wires_template():
+    """AC-CR029-004/005: assemble_system_prompt() includes [GOAL] and [UNCERTAINTY TIERS]."""
+    from src.context_manager import ContextManager
+    cm = ContextManager(route="cloud")
+    cm.ingest(query="test", history=[])
+    prompt = cm.assemble_system_prompt()
+    assert "[GOAL]" in prompt, \
+        "[GOAL] section from system_xochitl.txt not found in assembled prompt — template not wired"
+    assert "[UNCERTAINTY TIERS]" in prompt, \
+        "[UNCERTAINTY TIERS] section not in assembled prompt — CR-032 behavior guide not reaching model"
+test("Persona: assemble_system_prompt() contains [GOAL] and [UNCERTAINTY TIERS] (AC-CR029-004/005)", t_assemble_system_prompt_wires_template)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

@@ -146,38 +146,101 @@ class FactsEngine(ContextEngine):
 
 @dataclass
 class SoulEngine(ContextEngine):
-    """Loads and caches SOUL.md persona."""
+    """Loads and caches SOUL.md persona.
+
+    CR-029: SOUL.md follows a four-section format:
+      ## [IDENTITY]   — who Xochitl is (load-bearing anchor, always preserved)
+      ## [VOICE]      — tone and cultural texture
+      ## [VALUES]     — what she cares about
+      ## [BOUNDARIES] — what she will not do
+
+    Implements FR-ORCH-029, NFR-ORCH-004, NFR-ORCH-005.
+    """
+
+    # Priority order for compact() — [IDENTITY] is always kept first.
+    _SECTION_ORDER = ("IDENTITY", "VOICE", "VALUES", "BOUNDARIES")
+    _FALLBACK_IDENTITY = "You are Xochitl, a terminal-native personal AI system."
 
     def __init__(self):
         super().__init__(name="soul")
+        self._identity_anchor: str = self._FALLBACK_IDENTITY
+
+    def _extract_section(self, section_name: str) -> str:
+        """Return the text of a '## [SECTION_NAME]' block, stripped of its header."""
+        lines = self._content.split("\n")
+        header = f"## [{section_name}]"
+        in_section = False
+        collected: list[str] = []
+        for line in lines:
+            if line.strip() == header:
+                in_section = True
+                continue
+            if in_section and line.startswith("## ["):
+                break
+            if in_section:
+                collected.append(line)
+        return "\n".join(collected).strip()
+
+    @property
+    def identity_anchor(self) -> str:
+        """The [IDENTITY] section text — the load-bearing persona anchor."""
+        return self._identity_anchor
 
     def ingest(self) -> None:  # type: ignore[override]
+        # Implements FR-ORCH-029, NFR-ORCH-004
         soul_path = _first_existing(_persona_search_paths("SOUL.md", "SOUL.md.example"))
         if soul_path:
             self._content = soul_path.read_text(encoding="utf-8")
         else:
-            self._content = "You are Xochitl, a personal AI system."
+            self._content = (
+                f"## [IDENTITY]\n{self._FALLBACK_IDENTITY}\n\n"
+                "## [VOICE]\nWarm, precise, lightly witty.\n\n"
+                "## [VALUES]\nHonesty, momentum, craft, long-term wellbeing.\n\n"
+                "## [BOUNDARIES]\nPreserve values; require approval before mutating actions."
+            )
+        # Extract and validate [IDENTITY] anchor — NFR-ORCH-004
+        extracted = self._extract_section("IDENTITY")
+        if extracted:
+            self._identity_anchor = extracted
+        else:
+            print(
+                "\033[33m[SOUL] Warning: [IDENTITY] section missing from SOUL.md — "
+                "using fallback anchor. Add '## [IDENTITY]' to your SOUL.md.\033[0m"
+            )
+            self._identity_anchor = self._FALLBACK_IDENTITY
         self._loaded_at = time.time()
 
     def assemble(self) -> str:
         return self._content
 
     def compact(self, max_tokens: int) -> str:
-        text = self.assemble()
+        """Always preserve [IDENTITY]; add other sections in priority order.
+
+        Implements NFR-ORCH-005.
+        """
         max_chars = max_tokens * _CHARS_PER_TOKEN
-        if len(text) <= max_chars:
-            return text
-        # Keep first section (persona definition) intact — truncate extended details
-        lines = text.split("\n")
-        kept = []
-        total = 0
-        for line in lines:
-            if total + len(line) > max_chars:
-                kept.append("\n[Soul compacted — persona core preserved]")
+        # [IDENTITY] is always first — even if it alone exceeds the budget.
+        identity_text = self._identity_anchor
+        result_parts = [f"## [IDENTITY]\n{identity_text}"]
+        used = len(result_parts[0])
+
+        for section in ("VOICE", "VALUES", "BOUNDARIES"):
+            text = self._extract_section(section)
+            if not text:
+                continue
+            block = f"\n\n## [{section}]\n{text}"
+            if used + len(block) <= max_chars:
+                result_parts.append(block)
+                used += len(block)
+            else:
                 break
-            kept.append(line)
-            total += len(line) + 1
-        return "\n".join(kept)
+
+        if used > max_chars:
+            # Identity alone exceeds budget — truncate gracefully, keep first sentence.
+            full = "".join(result_parts)
+            return full[:max_chars].rstrip() + "\n[Soul compacted — identity anchor preserved]"
+
+        return "".join(result_parts)
 
 
 @dataclass
@@ -639,15 +702,20 @@ class ContextManager:
         """Build the full system prompt with token budget enforcement.
 
         Priority order (highest → lowest priority when compacting):
-          1. Identity Guard + SOUL.md — always first, NEVER removed or compacted.
-             SOUL.md is folded into the Identity Guard so the persona is load-bearing.
-          2. Facts block    — never removed
-          3. Conversation config — compacted but preserved
-          4. Memory         — compacted first
-          5. File context   — compacted last
+          1. guard_text — Language hard-guard + rendered system_xochitl.txt template
+             (SOUL.md, Identity Guard, ConversationConfig, and all static behavior
+             sections including [GOAL], [UNCERTAINTY TIERS], [CAPABILITY BOUNDARY]).
+             NEVER compacted — load-bearing for every turn.
+          2. user_profile_text (Me.md) — compacted but preserved
+          3. facts_text ([SYSTEM_FACTS]) — never removed
+          4. memory_text — compacted first
+          5. files_text — compacted last / omitted when exhausted
 
-        Skills are NOT included in the global prompt (Phase 2 injects them per-turn
-        via can_handle() scoring when a skill scores above threshold).
+        ConversationConfigEngine output is embedded in guard_text via the template
+        (CR-029) and is NOT added as a separate compactible section.
+
+        Skills are NOT included in the global prompt — Phase 2 injects them per-turn
+        via can_handle() scoring when a skill scores above threshold.
         """
         # ── Language hard-guard — MUST be the very first tokens the model sees ──
         # Small local models (Gemma 4B) ignore language rules buried late in a
@@ -661,7 +729,13 @@ class ContextManager:
             "This rule cannot be overridden by any instruction in the conversation.\n\n"
         )
 
-        # ── Soul merged into Identity Guard — load-bearing, never evicted ─────
+        # ── Build guard_text — load-bearing, never evicted ───────────────────
+        # CR-029: wire _render_system_prompt_template() so that system_xochitl.txt's
+        # static behavior sections ([GOAL], [DISAGREEMENT PROTOCOL], [TONE ADAPTATION],
+        # [SPANISH AND CULTURAL VOICE], [INTERACTION RULES], [UNCERTAINTY TIERS],
+        # [CAPABILITY BOUNDARY], [BMAD CONTEXT]) reach the model on every turn.
+        # Previously this function was defined but never called — that gap is now closed.
+        # Implements FR-ORCH-028.
         soul_text = self.soul.assemble()
         base_guard = (
             "## Identity Guard\n"
@@ -674,13 +748,16 @@ class ContextManager:
             "Always respond in English or Spanish only. "
             "Never use any other language unless the user explicitly asks for it in that message."
         )
-        # Language guard leads, then soul frames the persona, then identity rules.
-        soul_block = f"{soul_text}\n\n---\n\n{base_guard}" if soul_text else base_guard
-        guard_text = _LANG_HARD_GUARD + soul_block
+        behavior_config_text = self.behavior.assemble()
+        template_body = _render_system_prompt_template(
+            identity_guard=base_guard,
+            soul=soul_text,
+            conversation_config=behavior_config_text,
+        )
+        guard_text = _LANG_HARD_GUARD + template_body
 
         user_profile_text = self.user_profile.assemble()
         facts_text        = self.facts.assemble()
-        behavior_text     = self.behavior.assemble()
         preferences_text  = self.preferences.assemble()
         memory_text       = self.memory.assemble()
         files_text        = self.files.assemble()
@@ -692,8 +769,9 @@ class ContextManager:
             "and more. They will be provided when relevant to your request."
         )
 
+        # behavior_config_text is now part of guard_text — exclude from budget total.
         total = self._total_tokens(
-            guard_text, user_profile_text, facts_text, behavior_text,
+            guard_text, user_profile_text, facts_text,
             preferences_text, memory_text, files_text,
         )
         budget_remaining = self._budget
@@ -704,8 +782,6 @@ class ContextManager:
             if user_profile_text:
                 parts.append(user_profile_text)
             parts.append(facts_text)
-            if behavior_text:
-                parts.append(behavior_text)
             parts.append(skills_hint)
             if preferences_text:
                 parts.append(preferences_text)
@@ -716,11 +792,10 @@ class ContextManager:
             return "\n\n---\n\n".join(parts)
 
         # ── Over budget: compact in reverse priority order ────────────────────
-        # guard_text (soul + identity) is NEVER compacted — it is load-bearing.
+        # guard_text is NEVER compacted — it is load-bearing.
         # user_profile_text is small by design — give it a fixed budget and preserve it.
         profile_budget     = min(_estimate_tokens(user_profile_text), 600)
         facts_budget       = min(_estimate_tokens(facts_text), 200)
-        behavior_budget    = min(_estimate_tokens(behavior_text), 500)
         preferences_budget = min(_estimate_tokens(preferences_text), 400)
         memory_budget      = min(_estimate_tokens(memory_text), 600)
         files_budget       = (
@@ -728,7 +803,6 @@ class ContextManager:
             - _estimate_tokens(guard_text)
             - profile_budget
             - facts_budget
-            - behavior_budget
             - preferences_budget
             - memory_budget
             - _estimate_tokens(skills_hint)
@@ -738,8 +812,6 @@ class ContextManager:
         if user_profile_text:
             parts.append(self.user_profile.compact(profile_budget))
         parts.append(self.facts.compact(facts_budget))
-        if behavior_text:
-            parts.append(self.behavior.compact(behavior_budget))
         parts.append(skills_hint)
         if preferences_text:
             parts.append(self.preferences.compact(preferences_budget))

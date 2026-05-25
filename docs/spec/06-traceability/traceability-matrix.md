@@ -30,6 +30,10 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-ORCH-026` | `CR-032` | `CR-032` | `AC-CR032-001`, `AC-CR032-005` | `TASK-ORCH-032` | `prompts/system_xochitl.txt` (`[UNCERTAINTY TIERS]` section) | smoke (AC-CR032-001) | implemented |
 | `FR-ORCH-027` | `CR-032` | `CR-032` | `AC-CR032-002`, `AC-CR032-005` | `TASK-ORCH-032` | `prompts/system_xochitl.txt` (`[CAPABILITY BOUNDARY]` section) | smoke (AC-CR032-002) | implemented |
 | `NFR-ORCH-003` | `CR-032` | `CR-032` | `AC-CR032-003`, `AC-CR032-004` | `TASK-ORCH-032` | `src/chat.py` (`_OPEN_ENDED_SCORE_THRESHOLD`, `_agent_loop` `[TURN CONTEXT]` injection) | smoke (AC-CR032-003, AC-CR032-004) + code inspection | implemented |
+| `FR-ORCH-028` | `CR-029` | `CR-029` | `AC-CR029-004`, `AC-CR029-005` | `TASK-ORCH-029` | `src/context_manager.py` (`assemble_system_prompt` — `_render_system_prompt_template()` call), `prompts/system_xochitl.txt` | smoke (AC-CR029-004, AC-CR029-005) | implemented |
+| `FR-ORCH-029` | `CR-029` | `CR-029` | `AC-CR029-001` | `TASK-ORCH-029` | `SOUL.md.example` (four-section structured format, no "Chief of Staff") | smoke (AC-CR029-001) | implemented |
+| `NFR-ORCH-004` | `CR-029` | `CR-029` | `AC-CR029-002` | `TASK-ORCH-029` | `src/context_manager.py` (`SoulEngine._extract_section`, `identity_anchor` property, `ingest` warning) | smoke (AC-CR029-002) | implemented |
+| `NFR-ORCH-005` | `CR-029` | `CR-029` | `AC-CR029-003` | `TASK-ORCH-029` | `src/context_manager.py` (`SoulEngine.compact` — section-aware, [IDENTITY] always preserved) | smoke (AC-CR029-003) | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |

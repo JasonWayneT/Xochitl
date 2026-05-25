@@ -380,6 +380,26 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR032-004` | `NFR-ORCH-003` | High-score no injection | `top_score >= 0.65` (skill matched) | — | No `[TURN CONTEXT]` note injected | implemented |
 | `AC-CR032-005` | `FR-ORCH-026`, `FR-ORCH-027` | Smoke test | `python smoke_test.py` runs | — | Both sections confirmed present in prompt file | implemented |
 
+### Orchestration — Persona Anchoring and SOUL.md Restructure (CR-029)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-028` | functional | P0 | implemented | `assemble_system_prompt()` calls `_render_system_prompt_template()` so the static behavior sections from `prompts/system_xochitl.txt` — including `[GOAL]`, `[DISAGREEMENT PROTOCOL]`, `[TONE ADAPTATION]`, `[SPANISH AND CULTURAL VOICE]`, `[INTERACTION RULES]`, `[UNCERTAINTY TIERS]`, `[CAPABILITY BOUNDARY]`, and `[BMAD CONTEXT]` — are included in the system prompt on every turn | `AC-CR029-004`, `AC-CR029-005` | `CR-029` | Previously `_render_system_prompt_template()` was defined but never called |
+| `FR-ORCH-029` | functional | P1 | implemented | `SOUL.md.example` follows a structured four-section format (`## [IDENTITY]`, `## [VOICE]`, `## [VALUES]`, `## [BOUNDARIES]`); the `[IDENTITY]` section is the load-bearing persona anchor; "Chief of Staff" identity language is removed | `AC-CR029-001` | `CR-029` | `SOUL.md.example` |
+| `NFR-ORCH-004` | non-functional | P1 | implemented | `SoulEngine.ingest()` extracts the `[IDENTITY]` section as `identity_anchor`; if the section is absent from SOUL.md, a yellow warning is printed and a fallback anchor is used | `AC-CR029-002` | `CR-029` | `SoulEngine._extract_section()`, `identity_anchor` property |
+| `NFR-ORCH-005` | non-functional | P1 | implemented | `SoulEngine.compact()` always preserves the `[IDENTITY]` section content regardless of the `max_tokens` budget; `[VOICE]`, `[VALUES]`, `[BOUNDARIES]` are included in that order until the budget is exhausted | `AC-CR029-003` | `CR-029` | Section-aware compact replaces naive line-by-line truncation |
+
+### Acceptance criteria — Persona Anchoring and SOUL.md Restructure (CR-029)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR029-001` | `FR-ORCH-029` | Soul structure | `SOUL.md.example` is read | — | File contains `## [IDENTITY]` section; does not contain "Chief of Staff" | implemented |
+| `AC-CR029-002` | `NFR-ORCH-004` | Identity anchor | `SoulEngine.ingest()` runs | — | `soul.identity_anchor` is non-empty and contains text from the `[IDENTITY]` section | implemented |
+| `AC-CR029-003` | `NFR-ORCH-005` | Compact preserves identity | `SoulEngine.compact(80)` called | — | Compacted output contains first 40 chars of `identity_anchor`; output is shorter than full soul text | implemented |
+| `AC-CR029-004` | `FR-ORCH-028` | Template wired — behavior | `ContextManager.assemble_system_prompt()` called | — | Output contains `[GOAL]` (confirming behavior template sections reach model) | implemented |
+| `AC-CR029-005` | `FR-ORCH-028` | Template wired — uncertainty | `ContextManager.assemble_system_prompt()` called | — | Output contains `[UNCERTAINTY TIERS]` (confirming CR-032 vocabulary reaches model) | implemented |
+| `AC-CR029-006` | All CR-029 | Smoke tests | `python smoke_test.py` runs | — | 58 passed, 0 failed | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.
