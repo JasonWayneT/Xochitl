@@ -2092,6 +2092,53 @@ def t_decay_and_prune_prunes_below_threshold():
 test("Pref: decay_and_prune() prunes rows below 0.30 threshold (AC-CR034-005)", t_decay_and_prune_prunes_below_threshold)
 
 
+# ── CR-035 — Progressive Personalization Milestones ───────────────────────────
+
+def t_milestone_m1_sessions_1_to_5():
+    """AC-CR035-001: get_milestone() returns M1 for sessions 1-5 (FR-PREF-004)."""
+    from src.milestones import get_milestone, Milestone
+    assert get_milestone(1) == Milestone.M1, "session 1 must be M1"
+    assert get_milestone(5) == Milestone.M1, "session 5 must be M1 (boundary)"
+test("Milestone: get_milestone() returns M1 for sessions 1-5 (AC-CR035-001)", t_milestone_m1_sessions_1_to_5)
+
+
+def t_milestone_m2_sessions_6_to_20():
+    """AC-CR035-002: get_milestone() returns M2 for sessions 6-20 (FR-PREF-004)."""
+    from src.milestones import get_milestone, Milestone
+    assert get_milestone(6) == Milestone.M2, "session 6 must be M2 (first M2)"
+    assert get_milestone(20) == Milestone.M2, "session 20 must be M2 (boundary)"
+test("Milestone: get_milestone() returns M2 for sessions 6-20 (AC-CR035-002)", t_milestone_m2_sessions_6_to_20)
+
+
+def t_milestone_m3_sessions_21_plus():
+    """AC-CR035-003: get_milestone() returns M3 for sessions 21+ (FR-PREF-004)."""
+    from src.milestones import get_milestone, Milestone
+    assert get_milestone(21) == Milestone.M3, "session 21 must be M3 (first M3)"
+    assert get_milestone(100) == Milestone.M3, "session 100 must be M3 (no upper bound)"
+test("Milestone: get_milestone() returns M3 for sessions 21+ (AC-CR035-003)", t_milestone_m3_sessions_21_plus)
+
+
+def t_milestone_m1_empty_block():
+    """AC-CR035-004: milestone_context_block(M1) returns empty string (FR-PREF-005)."""
+    from src.milestones import milestone_context_block, Milestone
+    block = milestone_context_block(Milestone.M1)
+    assert block == "", \
+        f"M1 context block must be empty (no extra block for new users), got: {block!r}"
+test("Milestone: milestone_context_block(M1) returns empty string (AC-CR035-004)", t_milestone_m1_empty_block)
+
+
+def t_milestone_m2_m3_nonempty_blocks():
+    """AC-CR035-005: M2 and M3 context blocks are non-empty (FR-PREF-005)."""
+    from src.milestones import milestone_context_block, Milestone
+    m2_block = milestone_context_block(Milestone.M2)
+    m3_block = milestone_context_block(Milestone.M3)
+    assert len(m2_block) > 0, "M2 context block must be non-empty"
+    assert len(m3_block) > 0, "M3 context block must be non-empty"
+    assert "Personalization" in m2_block, "M2 block must contain 'Personalization' header"
+    assert "Personalization" in m3_block, "M3 block must contain 'Personalization' header"
+test("Milestone: M2 and M3 context blocks are non-empty (AC-CR035-005)", t_milestone_m2_m3_nonempty_blocks)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

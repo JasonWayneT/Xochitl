@@ -620,6 +620,25 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR034-005` | `FR-PREF-003` | Pruned below threshold | `decay_and_prune` on implicit preference with `confidence=0.29` | In-memory SQLite | Row deleted; `pruned_count >= 1` | implemented |
 | `AC-CR034-006` | All CR-034 | Smoke tests | `python smoke_test.py` | — | 114 passed, 0 failed | implemented |
 
+### Progressive Personalization Milestones (CR-035)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-PREF-004` | functional | P1 | implemented | `get_milestone(session_count: int) -> Milestone` returns `Milestone.M1` for sessions 1–5, `Milestone.M2` for sessions 6–20, `Milestone.M3` for sessions 21+; pure function, no DB access | `AC-CR035-001`, `AC-CR035-002`, `AC-CR035-003` | `CR-035` | `src/milestones.py` — `Milestone` enum, `get_milestone()`, `_M1_MAX_SESSIONS=5`, `_M2_MAX_SESSIONS=20` |
+| `FR-PREF-005` | functional | P1 | implemented | `ContextManager.assemble_system_prompt()` injects `milestone_context_block(milestone)` when non-empty; M1 returns `""` (no injection); M2 and M3 inject personalization guidance blocks | `AC-CR035-004`, `AC-CR035-005` | `CR-035` | `src/milestones.py` — `milestone_context_block()`, `_MILESTONE_BLOCKS`; `src/context_manager.py` — `milestone_block` param in `__init__()`, injection in `assemble_system_prompt()` |
+| `NFR-PREF-002` | non-functional | P1 | implemented | Milestone transitions are silent — logged internally at DEBUG only; never surfaced to user; `XochitlChat.start()` computes milestone and logs it; `_milestone_block` used per-turn; no user-facing announcement ever written | `AC-CR035-001` through `AC-CR035-005` | `CR-035` | `src/chat.py` — `logger.debug()` only; try/except wrapper around milestone computation; `getattr(self, "_milestone_block", "")` fallback in `_agent_loop()` |
+
+### Acceptance criteria — Progressive Personalization Milestones (CR-035)
+
+| ID | Requirements | Scenario | Input | Pre-conditions | Expected | Status |
+|---|---|---|---|---|---|---|
+| `AC-CR035-001` | `FR-PREF-004` | M1 boundary | `get_milestone(1)` and `get_milestone(5)` | — | Both return `Milestone.M1` | implemented |
+| `AC-CR035-002` | `FR-PREF-004` | M2 boundary | `get_milestone(6)` and `get_milestone(20)` | — | Both return `Milestone.M2` | implemented |
+| `AC-CR035-003` | `FR-PREF-004` | M3 boundary | `get_milestone(21)` and `get_milestone(100)` | — | Both return `Milestone.M3` | implemented |
+| `AC-CR035-004` | `FR-PREF-005` | M1 empty block | `milestone_context_block(Milestone.M1)` | — | Returns empty string | implemented |
+| `AC-CR035-005` | `FR-PREF-005` | M2/M3 blocks non-empty | `milestone_context_block(Milestone.M2)`, `milestone_context_block(Milestone.M3)` | — | Both return non-empty strings with `## Personalization` header | implemented |
+| `AC-CR035-006` | All CR-035 | Smoke tests | `python smoke_test.py` | — | 119 passed, 0 failed | implemented |
+
 ### Bounded Explorer (CR-023)
 
 | ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |

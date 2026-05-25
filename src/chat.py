@@ -498,6 +498,22 @@ class XochitlChat:
         except Exception:
             pass  # decay must never crash session start (NFR-PREF-001)
 
+        # CR-035: compute personalization milestone once at session start (FR-PREF-004)
+        self._milestone_block: str = ""
+        try:
+            from src.milestones import get_milestone, milestone_context_block
+            import logging as _logging
+            _ms_logger = _logging.getLogger(__name__)
+            with db.get_connection() as conn:
+                session_count = db.get_session_count(conn)
+            milestone = get_milestone(session_count)
+            _ms_logger.debug(
+                "milestone: %s (total sessions: %d)", milestone.value, session_count
+            )
+            self._milestone_block = milestone_context_block(milestone)
+        except Exception:
+            pass  # milestone must never crash session start (NFR-PREF-002)
+
         console.print(
             "[dim]Type 'quit' or Ctrl+C to exit. "
             "Ctrl+C while thinking cancels. "
@@ -698,7 +714,12 @@ class XochitlChat:
             return self._record(preference_resp)
 
         route = "cloud" if self.force_cloud else "local"
-        cm = ContextManager(route=route, skills=self.skills)
+        # CR-035: pass milestone block so assemble_system_prompt() can inject it (FR-PREF-005)
+        cm = ContextManager(
+            route=route,
+            skills=self.skills,
+            milestone_block=getattr(self, "_milestone_block", ""),
+        )
         cm.ingest(
             query=user_input,
             history=self._clean_history(),

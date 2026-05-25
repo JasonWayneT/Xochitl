@@ -667,11 +667,18 @@ class ContextManager:
         messages = cm.assemble_messages(conversation_history, user_query)
     """
 
-    def __init__(self, route: str = "local", skills: list | None = None):
+    def __init__(
+        self,
+        route: str = "local",
+        skills: list | None = None,
+        milestone_block: str = "",
+    ):
         self._route = route
         self._token_limit = _LOCAL_TOKEN_LIMIT if route == "local" else _CLOUD_TOKEN_LIMIT
         self._budget = int(self._token_limit * _BUDGET_RATIO)
         self._skills_list = skills or []
+        # CR-035: milestone context block for progressive personalization (FR-PREF-005)
+        self._milestone_block: str = milestone_block
 
         # Initialize engines
         self.facts        = FactsEngine()
@@ -811,6 +818,11 @@ class ContextManager:
                 parts.append(memory_text)
             if files_text:
                 parts.append(files_text)
+            # CR-035: milestone personalization block (FR-PREF-005).
+            # Appended last — near-recency bias strengthens its effect on local models.
+            # Empty string for M1 (new users) — no block injected.
+            if self._milestone_block:
+                parts.append(self._milestone_block)
             if _rmode_block:
                 parts.append(_rmode_block)
             return "\n\n---\n\n".join(parts)
@@ -845,6 +857,9 @@ class ContextManager:
             parts.append(self.files.compact(files_budget))
         else:
             parts.append("[File context omitted — token budget exhausted]")
+        # CR-035: milestone block is small (~30 tokens) — always include even over budget.
+        if self._milestone_block:
+            parts.append(self._milestone_block)
         if _rmode_block:
             parts.append(_rmode_block)
 

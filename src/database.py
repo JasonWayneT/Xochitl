@@ -336,6 +336,22 @@ def get_session(conn: sqlite3.Connection, session_id: int) -> Optional[sqlite3.R
     return conn.execute("SELECT * FROM sessions WHERE id=?", (session_id,)).fetchone()
 
 
+def get_session_count(conn: sqlite3.Connection) -> int:
+    """Return the total number of sessions ever started (FR-PREF-004).
+
+    Used by the milestone engine to determine the current personalization tier.
+    Includes the current session — count is checked after create_session().
+
+    Args:
+        conn: Active SQLite connection to the Xochitl database.
+
+    Returns:
+        Total row count of the sessions table; 0 if the table is empty.
+    """
+    row = conn.execute("SELECT COUNT(*) FROM sessions").fetchone()
+    return int(row[0]) if row else 0
+
+
 def update_session_conversation(
     conn: sqlite3.Connection, session_id: int, messages: list
 ) -> None:
