@@ -579,6 +579,27 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR028-005` | `FR-CONV-004` | Natural framing | Source inspection of `PreferenceEngine.assemble()` | — | Output contains `[BACKGROUND CONTEXT]` block; old `[scope/category]` format absent | implemented |
 | `AC-CR028-006` | All CR-028 | Smoke tests | `python smoke_test.py` runs | — | 98 passed, 0 failed | implemented |
 
+### Persona Drift Detection (CR-033)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-042` | functional | P1 | implemented | `BackgroundReview` tracks `_turn_count` and `_correction_turns` per session; `_should_run_drift_check()` returns `True` when `_turn_count % _DRIFT_CHECK_INTERVAL == 0` OR `_correction_turns >= 2`; after each check `_correction_turns` resets to 0 | `AC-CR033-004`, `AC-CR033-005` | `CR-033` | `src/background_review.py` — `_DRIFT_CHECK_INTERVAL=12`, `_should_run_drift_check()`, drift tracking in `_process()` |
+| `FR-ORCH-043` | functional | P1 | implemented | When `BackgroundReview.drift_detected` is `True` at the start of a turn, `_agent_loop()` appends `_DRIFT_IDENTITY_REMINDER` to the system prompt and immediately calls `clear_drift()` | `AC-CR033-003`, `AC-CR033-006` | `CR-033` | `src/chat.py` — `_DRIFT_IDENTITY_REMINDER` constant; drift injection between `assemble_system_prompt()` and Phase 2 skill scoring |
+| `NFR-ORCH-016` | non-functional | P1 | implemented | Drift judge uses `call_local` with `ROUTER_MODEL` (local model); prompt capped at `_DRIFT_PROMPT_MAX_CHARS=800`; only asked "DRIFT or OK"; result parsed case-insensitively for "DRIFT" | `AC-CR033-001`, `AC-CR033-002` | `CR-033` | `src/background_review.py` — `_DRIFT_JUDGE_PROMPT`, `_check_drift_with_identity()`, `_DRIFT_PROMPT_MAX_CHARS` |
+| `NFR-ORCH-017` | non-functional | P1 | implemented | Drift flag read/write are thread-safe via `_drift_lock`; all exceptions in `_check_drift_with_identity()` are swallowed silently; `_get_identity_anchor()` returns empty string on any failure | `AC-CR033-003` | `CR-033` | `src/background_review.py` — `_drift_lock`, try/except in `_run_drift_check()` and `_get_identity_anchor()` |
+
+### Acceptance criteria — Persona Drift Detection (CR-033)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR033-001` | `FR-ORCH-042`, `NFR-ORCH-016` | DRIFT response | `_check_drift_with_identity(identity)` with `call_local` returning `"DRIFT"` | — | `drift_detected` becomes `True` | implemented |
+| `AC-CR033-002` | `FR-ORCH-042`, `NFR-ORCH-016` | OK response | Same setup, `call_local` returns `"OK"` | — | `drift_detected` stays `False` | implemented |
+| `AC-CR033-003` | `FR-ORCH-043`, `NFR-ORCH-017` | clear_drift | Set `_drift_detected=True`, call `clear_drift()` | — | `drift_detected` is `False` | implemented |
+| `AC-CR033-004` | `FR-ORCH-042` | Interval trigger | `_turn_count=_DRIFT_CHECK_INTERVAL`, `_correction_turns=0` | — | `_should_run_drift_check()` returns `True` | implemented |
+| `AC-CR033-005` | `FR-ORCH-042` | Correction pressure | `_turn_count=1`, `_correction_turns=2` | — | `_should_run_drift_check()` returns `True` | implemented |
+| `AC-CR033-006` | `FR-ORCH-043` | Reminder constant | `from src.chat import _DRIFT_IDENTITY_REMINDER` | — | Non-empty string; contains "IDENTITY REMINDER" | implemented |
+| `AC-CR033-007` | All CR-033 | Smoke tests | `python smoke_test.py` | — | 109 passed, 0 failed | implemented |
+
 ### Bounded Explorer (CR-023)
 
 | ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |

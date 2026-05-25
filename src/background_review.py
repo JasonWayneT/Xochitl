@@ -33,6 +33,21 @@ _MIN_WRITE_INTERVAL_SECS = 30
 # If the model's extraction is shorter than this it's probably noise
 _MIN_OBSERVATION_CHARS = 12
 
+# ── CR-033: Persona drift detection ──────────────────────────────────────────
+# Midpoint of 10–15 from planning doc. Every N completed turns a lightweight
+# LLM-as-judge call compares recent assistant responses against SOUL.md identity.
+_DRIFT_CHECK_INTERVAL: int = 12
+# Rolling buffer of recent assistant responses kept for the drift judge.
+_DRIFT_RESPONSE_BUFFER: int = 3
+# Max chars sent to the drift judge (keeps the prompt ~100 tokens — NFR-ORCH-016).
+_DRIFT_PROMPT_MAX_CHARS: int = 800
+
+_DRIFT_JUDGE_PROMPT = """\
+Identity: {identity}
+Recent responses:{responses}
+Does the language in these responses sound like a different, more generic AI \
+rather than the defined personality? Answer only: DRIFT or OK."""
+
 # Sentinel values the model uses to signal "nothing to extract"
 _NO_EXTRACT_VALUES = {
     "none", "n/a", "nothing", "nothing new", "no new information",
@@ -170,6 +185,12 @@ class BackgroundReview:
         self._thread: Optional[threading.Thread] = None
         self._last_write_at: float = 0.0
         self._running = False
+        # CR-033: persona drift detection state (FR-ORCH-042, NFR-ORCH-017)
+        self._turn_count: int = 0
+        self._correction_turns: int = 0
+        self._recent_responses: list[str] = []
+        self._drift_detected: bool = False
+        self._drift_lock: threading.Lock = threading.Lock()
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -220,6 +241,27 @@ class BackgroundReview:
         if self._thread:
             self._thread.join(timeout=timeout)
 
+    # ── CR-033: Persona drift public API ─────────────────────────────────────
+
+    @property
+    def drift_detected(self) -> bool:
+        """True if the last drift check found persona drift (FR-ORCH-042).
+
+        Thread-safe: reads under _drift_lock.
+        """
+        with self._drift_lock:
+            return self._drift_detected
+
+    def clear_drift(self) -> None:
+        """Reset the drift flag after the identity reminder has been injected.
+
+        Called by _agent_loop() immediately after appending
+        _DRIFT_IDENTITY_REMINDER to the system prompt (FR-ORCH-043).
+        Thread-safe: writes under _drift_lock.
+        """
+        with self._drift_lock:
+            self._drift_detected = False
+
     # ── Worker ────────────────────────────────────────────────────────────────
 
     def _worker(self) -> None:
@@ -241,12 +283,28 @@ class BackgroundReview:
                 self._queue.task_done()
 
     def _process(self, turn: _TurnData) -> None:
-        """Run both extraction passes and write findings to KB + structured DB.
+        """Run drift check, then both extraction passes, then write to KB + DB.
 
         CR-030: correction turns bypass _MIN_WRITE_INTERVAL_SECS so they are
         always captured regardless of how recently a fact was last written.
         Implements FR-ORCH-031.
+
+        CR-033: update turn counter and correction tracker; fire drift check
+        when interval or correction-pressure conditions are met (FR-ORCH-042).
         """
+        # CR-033: update rolling buffers (FR-ORCH-042)
+        self._turn_count += 1
+        if turn.is_correction:
+            self._correction_turns += 1
+        self._recent_responses = (
+            self._recent_responses + [turn.assistant_response[:200]]
+        )[-_DRIFT_RESPONSE_BUFFER:]
+
+        # CR-033: drift check on regular interval or correction pressure
+        if self._should_run_drift_check():
+            self._correction_turns = 0  # reset correction counter after check
+            self._run_drift_check()
+
         now = time.monotonic()
         # Correction turns skip the rate limit — they carry the highest signal.
         if not turn.is_correction and (now - self._last_write_at) < _MIN_WRITE_INTERVAL_SECS:
@@ -260,6 +318,85 @@ class BackgroundReview:
 
         self._write(observation, structured, turn.project, is_correction=turn.is_correction)
         self._last_write_at = time.monotonic()
+
+    # ── CR-033: Persona drift detection helpers ───────────────────────────────
+
+    def _should_run_drift_check(self) -> bool:
+        """Return True when drift check trigger conditions are met.
+
+        Implements FR-ORCH-042 trigger logic (named method for testability).
+        Two conditions:
+          - Regular interval: turn_count is a non-zero multiple of _DRIFT_CHECK_INTERVAL
+          - Correction pressure: 2+ correction turns accumulated since last check
+        """
+        regular = self._turn_count > 0 and (self._turn_count % _DRIFT_CHECK_INTERVAL == 0)
+        pressure = self._correction_turns >= 2
+        return regular or pressure
+
+    def _run_drift_check(self) -> None:
+        """Get identity anchor and run the drift judge (FR-ORCH-042).
+
+        Swallows all exceptions — drift check must never disrupt the thread.
+        """
+        try:
+            identity = self._get_identity_anchor()
+            self._check_drift_with_identity(identity)
+        except Exception as exc:
+            logger.debug("background_review: drift check error: %s", exc)
+
+    def _check_drift_with_identity(self, identity: str) -> None:
+        """LLM-judge drift check using the provided identity anchor.
+
+        Separated from _run_drift_check() for testability (NFR-ORCH-016).
+        Uses call_local (local model) with a capped prompt (~100 tokens).
+        Sets _drift_detected=True when response contains "DRIFT".
+
+        Args:
+            identity: The [IDENTITY] anchor text from SOUL.md.
+        """
+        if not identity or len(self._recent_responses) < 2:
+            return
+        try:
+            from src.llm_interface import call_local, ROUTER_MODEL
+        except ImportError:
+            return
+        excerpts = "\n".join(
+            f"\n[R{i + 1}] {r[:150]}"
+            for i, r in enumerate(self._recent_responses)
+        )
+        prompt = _DRIFT_JUDGE_PROMPT.format(
+            identity=identity[:200],
+            responses=excerpts,
+        )[:_DRIFT_PROMPT_MAX_CHARS]
+        try:
+            result = call_local(
+                messages=[{"role": "user", "content": prompt}],
+                model=ROUTER_MODEL,
+            )
+        except Exception as exc:
+            logger.debug("background_review: drift LLM call failed: %s", exc)
+            return
+        if result.error:
+            return
+        answer = (result.content or "").strip().upper()
+        if "DRIFT" in answer:
+            with self._drift_lock:
+                self._drift_detected = True
+            logger.debug("background_review: persona drift detected")
+
+    def _get_identity_anchor(self) -> str:
+        """Load the [IDENTITY] section from SOUL.md via SoulEngine.
+
+        Returns empty string on any failure — drift check simply skips
+        when no identity anchor is available (NFR-ORCH-017).
+        """
+        try:
+            from src.context_manager import SoulEngine
+            soul = SoulEngine()
+            soul.ingest()
+            return soul.identity_anchor or ""
+        except Exception:
+            return ""
 
     def _extract(self, turn: _TurnData) -> Optional[str]:
         """Call the local model and return a cleaned observation, or None."""

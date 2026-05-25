@@ -1889,6 +1889,117 @@ def t_explorer_skill_registration():
 test("Explorer: ExplorerSkill registered in XochitlChat._builtin_skills (AC-CR023-006)", t_explorer_skill_registration)
 
 
+# ── CR-033 — Persona Drift Detection ─────────────────────────────────────────
+
+def t_drift_flag_set_by_drift_response():
+    """AC-CR033-001: _check_drift_with_identity() sets drift_detected=True on DRIFT (NFR-ORCH-016)."""
+    from unittest.mock import MagicMock, patch
+    from src.background_review import BackgroundReview
+
+    br = BackgroundReview()
+    br._recent_responses = ["response one", "response two", "response three"]
+
+    mock_result = MagicMock()
+    mock_result.error = None
+    mock_result.content = "DRIFT"
+
+    with patch("src.llm_interface.call_local", return_value=mock_result):
+        br._check_drift_with_identity("Xochitl is warm, direct, and culturally grounded.")
+
+    assert br.drift_detected is True, \
+        "drift_detected must be True after _check_drift_with_identity() returns DRIFT"
+test("Drift: DRIFT response sets drift_detected=True (AC-CR033-001)", t_drift_flag_set_by_drift_response)
+
+
+def t_drift_flag_clear_for_ok_response():
+    """AC-CR033-002: _check_drift_with_identity() leaves drift_detected=False on OK (NFR-ORCH-016)."""
+    from unittest.mock import MagicMock, patch
+    from src.background_review import BackgroundReview
+
+    br = BackgroundReview()
+    br._recent_responses = ["response one", "response two", "response three"]
+
+    mock_result = MagicMock()
+    mock_result.error = None
+    mock_result.content = "OK — voice consistent"
+
+    with patch("src.llm_interface.call_local", return_value=mock_result):
+        br._check_drift_with_identity("Xochitl is warm, direct, and culturally grounded.")
+
+    assert br.drift_detected is False, \
+        "drift_detected must remain False when _check_drift_with_identity() returns OK"
+test("Drift: OK response leaves drift_detected=False (AC-CR033-002)", t_drift_flag_clear_for_ok_response)
+
+
+def t_drift_clear_resets_flag():
+    """AC-CR033-003: clear_drift() resets drift_detected to False (NFR-ORCH-017)."""
+    from src.background_review import BackgroundReview
+
+    br = BackgroundReview()
+    with br._drift_lock:
+        br._drift_detected = True
+    assert br.drift_detected is True, "Pre-condition: drift_detected should be True"
+    br.clear_drift()
+    assert br.drift_detected is False, \
+        "clear_drift() must reset drift_detected to False (FR-ORCH-043)"
+test("Drift: clear_drift() resets drift_detected flag (AC-CR033-003)", t_drift_clear_resets_flag)
+
+
+def t_drift_interval_trigger():
+    """AC-CR033-004: _should_run_drift_check() triggers at _DRIFT_CHECK_INTERVAL (FR-ORCH-042)."""
+    from src.background_review import BackgroundReview, _DRIFT_CHECK_INTERVAL
+
+    br = BackgroundReview()
+
+    # Exactly at interval — should trigger
+    br._turn_count = _DRIFT_CHECK_INTERVAL
+    br._correction_turns = 0
+    assert br._should_run_drift_check() is True, \
+        f"must return True when _turn_count == _DRIFT_CHECK_INTERVAL ({_DRIFT_CHECK_INTERVAL})"
+
+    # One before interval — should NOT trigger
+    br._turn_count = _DRIFT_CHECK_INTERVAL - 1
+    assert br._should_run_drift_check() is False, \
+        "must return False when _turn_count is one below interval"
+
+    # Turn 0 (no turns yet) — must NOT trigger (zero-turn guard)
+    br._turn_count = 0
+    assert br._should_run_drift_check() is False, \
+        "must return False when _turn_count == 0 (zero-turn guard)"
+test("Drift: _should_run_drift_check() triggers at _DRIFT_CHECK_INTERVAL (AC-CR033-004)", t_drift_interval_trigger)
+
+
+def t_drift_correction_pressure_trigger():
+    """AC-CR033-005: _should_run_drift_check() triggers on >=2 correction turns (FR-ORCH-042)."""
+    from src.background_review import BackgroundReview
+
+    br = BackgroundReview()
+    br._turn_count = 1  # not at regular interval
+
+    # Two corrections — pressure trigger
+    br._correction_turns = 2
+    assert br._should_run_drift_check() is True, \
+        "must return True when _correction_turns >= 2 (correction pressure)"
+
+    # One correction — not enough pressure
+    br._correction_turns = 1
+    assert br._should_run_drift_check() is False, \
+        "must return False when _correction_turns == 1 (below pressure threshold)"
+test("Drift: _should_run_drift_check() triggers on correction pressure >=2 (AC-CR033-005)", t_drift_correction_pressure_trigger)
+
+
+def t_drift_reminder_constant_defined():
+    """AC-CR033-006: _DRIFT_IDENTITY_REMINDER is defined in chat.py (FR-ORCH-043)."""
+    from src.chat import _DRIFT_IDENTITY_REMINDER
+    assert isinstance(_DRIFT_IDENTITY_REMINDER, str), \
+        "_DRIFT_IDENTITY_REMINDER must be a str"
+    assert len(_DRIFT_IDENTITY_REMINDER) > 0, \
+        "_DRIFT_IDENTITY_REMINDER must not be empty"
+    assert "IDENTITY REMINDER" in _DRIFT_IDENTITY_REMINDER, \
+        "_DRIFT_IDENTITY_REMINDER must contain 'IDENTITY REMINDER' marker"
+test("Drift: _DRIFT_IDENTITY_REMINDER constant defined in chat.py (AC-CR033-006)", t_drift_reminder_constant_defined)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

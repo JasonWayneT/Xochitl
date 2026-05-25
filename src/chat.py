@@ -296,6 +296,17 @@ _SKILL_INJECT_THRESHOLD = 0.65
 # model to apply calibrated [UNCERTAINTY TIERS] vocabulary for this turn.
 _OPEN_ENDED_SCORE_THRESHOLD = 0.2
 
+# CR-033: identity reminder injected into system prompt when drift is detected.
+# Placed at prompt end so transformer recency bias amplifies its effect (FR-ORCH-043).
+_DRIFT_IDENTITY_REMINDER: str = (
+    "\n\n---\n"
+    "[IDENTITY REMINDER]\n"
+    "You are Xochitl, not a generic assistant. "
+    "Reconnect with your established voice: warm, direct, culturally grounded. "
+    "No filler openers. No over-explanation.\n"
+    "---"
+)
+
 
 def _format_active_skill_block(defn: dict) -> str:
     """Format one skill's tool_definition() as a focused per-turn system prompt block.
@@ -797,6 +808,13 @@ class XochitlChat:
 
         system_prompt = cm.assemble_system_prompt(mode=_new_mode)
         messages = cm.assemble_messages(self._clean_history(), user_input, tag_provenance=True)
+
+        # CR-033: inject identity reminder when BackgroundReview detected persona drift
+        # (FR-ORCH-043). Appended after assemble_system_prompt() so it appears at the
+        # end of the prompt — transformer recency bias amplifies the effect.
+        if getattr(self, "_background_review", None) and self._background_review.drift_detected:
+            system_prompt += _DRIFT_IDENTITY_REMINDER
+            self._background_review.clear_drift()
 
         # ── Phase 2: deterministic skill scoring pre-turn ─────────────────────
         # Score every loaded skill against the user's message BEFORE the LLM
