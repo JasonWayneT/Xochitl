@@ -579,6 +579,28 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR028-005` | `FR-CONV-004` | Natural framing | Source inspection of `PreferenceEngine.assemble()` | — | Output contains `[BACKGROUND CONTEXT]` block; old `[scope/category]` format absent | implemented |
 | `AC-CR028-006` | All CR-028 | Smoke tests | `python smoke_test.py` runs | — | 98 passed, 0 failed | implemented |
 
+### Bounded Explorer (CR-023)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-039` | functional | P1 | implemented | `ExplorerSkill.can_handle()` returns ≥ 0.85 for queries containing investigative keywords ("investigate", "research", "explore", "analyze", "dig into", "look into", etc.); returns 0.70 for multi-hop indicators; returns 0.0 for plain lookup queries | `AC-CR023-002` | `CR-023` | `src/skills/explorer_skill.py` — `ExplorerSkill.can_handle()`; keyword tuples `_INVESTIGATIVE_KEYWORDS`, `_MULTI_HOP_INDICATORS` |
+| `FR-ORCH-040` | functional | P1 | implemented | `ExplorerSkill.execute()` runs a bounded multi-step investigation loop: (1) form subquestion, (2) convergence check via action hash, (3) gather evidence via `WebLookupSkill`, (4) score heuristic confidence (no LLM call), (5) stop if confidence > 0.85, (6) escalate if confidence < 0.30 at step ≥ 3, (7) synthesize at budget exhaustion | `AC-CR023-003`, `AC-CR023-004`, `AC-CR023-005` | `CR-023` | `src/skills/explorer_skill.py` — `ExplorerSkill.execute()` and private helpers |
+| `FR-ORCH-041` | functional | P1 | implemented | `ExplorerSkill` is registered in `XochitlChat._builtin_skills` and present in the `skills` property alongside all other built-in skills | `AC-CR023-006` | `CR-023` | `src/chat.py` — `ExplorerSkill()` appended to `_builtin_skills` list |
+| `NFR-ORCH-014` | non-functional | P1 | implemented | Hard step budget is `_MAX_STEPS = 6` (named constant); repeat action-hash = loop detected → stop immediately before budget; on budget exhaustion `_synthesize()` is called with notes containing "Step budget exhausted" | `AC-CR023-003`, `AC-CR023-004` | `CR-023` | `src/skills/explorer_skill.py` — `_MAX_STEPS`, `seen_hashes` set, post-loop `_synthesize()` call |
+| `NFR-ORCH-015` | non-functional | P1 | implemented | Confidence evaluation is a pure heuristic (no LLM call per step); sub-question generation steps 2+ use `force_route="simple_qa"`; final synthesis uses `force_route="general"` | `AC-CR023-003`, `AC-CR023-004`, `AC-CR023-005` | `CR-023` | `src/skills/explorer_skill.py` — `_score_confidence()` has no router import; `_form_subquestion()` and `_synthesize()` use explicit `force_route` |
+
+### Acceptance criteria — Bounded Explorer (CR-023)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR023-001` | `FR-ORCH-039`, `FR-ORCH-040` | Import | `from src.skills.explorer_skill import ExplorerSkill` | — | `can_handle()`, `execute()`, `suggest()`, `tool_definition()` all callable | implemented |
+| `AC-CR023-002` | `FR-ORCH-039` | Keyword scoring | `ExplorerSkill().can_handle("investigate the history of Python", {})` | — | Returns ≥ 0.65 (above `_SKILL_INJECT_THRESHOLD`); plain queries return 0.0 | implemented |
+| `AC-CR023-003` | `FR-ORCH-040`, `NFR-ORCH-014` | Loop detection | `execute()` with `_form_subquestion` patched to always return the same string | — | Loop detected at step 2; `_synthesize()` called with notes containing "loop"; gather calls < `_MAX_STEPS` | implemented |
+| `AC-CR023-004` | `FR-ORCH-040`, `NFR-ORCH-014` | Budget exhaustion | `execute()` with medium-quality evidence (confidence stays 0.30–0.85 through all steps) | — | After `_MAX_STEPS` steps `_synthesize()` called with notes containing "budget exhausted" | implemented |
+| `AC-CR023-005` | `FR-ORCH-040`, `NFR-ORCH-015` | High-confidence stop | `execute()` with rich evidence (420-char snippets → confidence > 0.85 at step 3) | — | Stops before `_MAX_STEPS`; `_synthesize()` called without budget note | implemented |
+| `AC-CR023-006` | `FR-ORCH-041` | Registration | `XochitlChat.__new__` with `_builtin_skills=None` then inspect `.skills` | — | `ExplorerSkill` instance present in list | implemented |
+| `AC-CR023-007` | All CR-023 | Smoke tests | `python smoke_test.py` | — | 103 passed, 0 failed | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

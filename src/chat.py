@@ -411,7 +411,8 @@ class XochitlChat:
             from src.skills.weather_skill import WeatherSkill
             from src.skills.web_lookup_skill import WebLookupSkill
             from src.skills.zettelkasten_skill import ZettelkastenSkill
-            self._builtin_skills = [BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill(), WeatherSkill(), WebLookupSkill(), ZettelkastenSkill()]
+            from src.skills.explorer_skill import ExplorerSkill  # FR-ORCH-041
+            self._builtin_skills = [BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill(), WeatherSkill(), WebLookupSkill(), ZettelkastenSkill(), ExplorerSkill()]
 
         from src.skills.dynamic_skill import load_dynamic_skills
         return (self._builtin_skills or []) + load_dynamic_skills(self.current_project)

@@ -1746,6 +1746,149 @@ def t_preference_engine_natural_framing():
 test("Conversation A4: PreferenceEngine.assemble() uses [BACKGROUND CONTEXT] framing (AC-CR028-005)", t_preference_engine_natural_framing)
 
 
+# ── CR-023 — Bounded Explorer ─────────────────────────────────────────────────
+
+def t_explorer_skill_can_handle_scoring():
+    """AC-CR023-002: investigative keywords → ≥0.65; plain queries → 0.0 (FR-ORCH-039)."""
+    from src.skills.explorer_skill import ExplorerSkill
+    skill = ExplorerSkill()
+    ctx: dict = {}
+    # Investigative keywords → above _SKILL_INJECT_THRESHOLD (0.65)
+    assert skill.can_handle("Investigate the history of Python", ctx) >= 0.65, \
+        "can_handle must return ≥0.65 for 'investigate' keyword"
+    assert skill.can_handle("research quantum computing trends", ctx) >= 0.65, \
+        "can_handle must return ≥0.65 for 'research' keyword"
+    assert skill.can_handle("analyze the impact of streaming on latency", ctx) >= 0.65, \
+        "can_handle must return ≥0.65 for 'analyze' keyword"
+    # Plain queries → no investigative score
+    assert skill.can_handle("what's the weather today", ctx) == 0.0, \
+        "can_handle must return 0.0 for plain weather query"
+    assert skill.can_handle("hello", ctx) == 0.0, \
+        "can_handle must return 0.0 for greeting"
+test("Explorer: can_handle() scores investigative keywords >=0.65, plain 0.0 (AC-CR023-002)", t_explorer_skill_can_handle_scoring)
+
+
+def t_explorer_skill_loop_detection():
+    """AC-CR023-003: repeat subquestion hash → stops before _MAX_STEPS with loop note (NFR-ORCH-014)."""
+    from unittest.mock import patch
+    from src.skills.explorer_skill import ExplorerSkill, _MAX_STEPS
+
+    gather_calls: list[int] = []
+    synth_notes: list[str] = []
+
+    def always_same_subq(self_inner, query: str, step: int, evidence: list) -> str:
+        return "identical subquestion every step"
+
+    def counting_gather(self_inner, subquestion: str, context: dict) -> str:
+        gather_calls.append(1)
+        return "some evidence about the topic for testing purposes"
+
+    def capture_synthesize(self_inner, query: str, evidence: list, notes: str = "") -> str:
+        synth_notes.append(notes)
+        return "synthesized result"
+
+    with patch.object(ExplorerSkill, "_form_subquestion", always_same_subq):
+        with patch.object(ExplorerSkill, "_gather", counting_gather):
+            with patch.object(ExplorerSkill, "_synthesize", capture_synthesize):
+                result = ExplorerSkill().execute(
+                    "investigate something", {}, {"query": "investigate something"}
+                )
+
+    assert len(gather_calls) < _MAX_STEPS, \
+        f"Loop detection must stop before _MAX_STEPS; got {len(gather_calls)} gathers"
+    assert synth_notes, "_synthesize must be called on loop detection"
+    assert any("loop" in n.lower() for n in synth_notes), \
+        f"_synthesize notes must contain 'loop'; got: {synth_notes}"
+    assert result == "synthesized result", "execute() must return _synthesize() result"
+test("Explorer: loop detection stops before _MAX_STEPS with loop note (AC-CR023-003)", t_explorer_skill_loop_detection)
+
+
+def t_explorer_skill_budget_exhaustion():
+    """AC-CR023-004: 6 steps of medium evidence → budget exhausted note (NFR-ORCH-014)."""
+    from unittest.mock import patch
+    from src.skills.explorer_skill import ExplorerSkill, _MAX_STEPS
+
+    synth_notes: list[str] = []
+
+    def unique_subq(self_inner, query: str, step: int, evidence: list) -> str:
+        # Unique per step → no hash collision → no loop detection
+        return f"unique question for investigation step {step}"
+
+    def medium_gather(self_inner, subquestion: str, context: dict) -> str:
+        # 120-char snippet: quality=+0.20 (len>100), total with depth=0.65 — never >0.85
+        return "A " * 60
+
+    def capture_synthesize(self_inner, query: str, evidence: list, notes: str = "") -> str:
+        synth_notes.append(notes)
+        return "budget result"
+
+    with patch.object(ExplorerSkill, "_form_subquestion", unique_subq):
+        with patch.object(ExplorerSkill, "_gather", medium_gather):
+            with patch.object(ExplorerSkill, "_synthesize", capture_synthesize):
+                result = ExplorerSkill().execute(
+                    "research something", {}, {"query": "research something"}
+                )
+
+    assert synth_notes, "_synthesize must be called after budget exhaustion"
+    budget_note = synth_notes[-1]
+    assert "budget" in budget_note.lower() or "exhausted" in budget_note.lower(), \
+        f"Budget-exhaustion notes must contain 'budget' or 'exhausted'; got: {budget_note!r}"
+    assert result == "budget result", "execute() must return _synthesize() result"
+test("Explorer: 6 medium-evidence steps -> budget exhausted note in _synthesize (AC-CR023-004)", t_explorer_skill_budget_exhaustion)
+
+
+def t_explorer_skill_high_confidence_stops_early():
+    """AC-CR023-005: rich evidence (420-char snippets) → confidence >0.85 at step 3 (NFR-ORCH-015)."""
+    from unittest.mock import patch
+    from src.skills.explorer_skill import ExplorerSkill, _MAX_STEPS
+
+    gather_calls: list[int] = []
+    synth_notes: list[str] = []
+
+    def unique_subq(self_inner, query: str, step: int, evidence: list) -> str:
+        return f"rich investigation step {step} unique"
+
+    def rich_gather(self_inner, subquestion: str, context: dict) -> str:
+        gather_calls.append(1)
+        # 420-char snippet: quality = +0.20 (>100) +0.15 (>250) +0.15 (>400) = 0.50
+        # step 3: depth=0.45 + quality=0.50 = 0.95 > 0.85 → stop
+        return "B " * 210
+
+    def capture_synthesize(self_inner, query: str, evidence: list, notes: str = "") -> str:
+        synth_notes.append(notes)
+        return "early answer"
+
+    with patch.object(ExplorerSkill, "_form_subquestion", unique_subq):
+        with patch.object(ExplorerSkill, "_gather", rich_gather):
+            with patch.object(ExplorerSkill, "_synthesize", capture_synthesize):
+                result = ExplorerSkill().execute(
+                    "explore X", {}, {"query": "explore X"}
+                )
+
+    assert len(gather_calls) < _MAX_STEPS, \
+        f"High-confidence stop must fire before _MAX_STEPS; got {len(gather_calls)} gathers"
+    assert synth_notes, "_synthesize must be called on high-confidence stop"
+    budget_note = synth_notes[-1]
+    assert "budget" not in budget_note.lower() and "exhausted" not in budget_note.lower(), \
+        f"High-confidence stop must NOT emit budget note; got: {budget_note!r}"
+    assert result == "early answer", "execute() must return _synthesize() result"
+test("Explorer: rich evidence stops loop early without budget note (AC-CR023-005)", t_explorer_skill_high_confidence_stops_early)
+
+
+def t_explorer_skill_registration():
+    """AC-CR023-006: ExplorerSkill present in XochitlChat.skills list (FR-ORCH-041)."""
+    from src.skills.explorer_skill import ExplorerSkill
+    from src.chat import XochitlChat
+    chat = XochitlChat.__new__(XochitlChat)
+    chat._builtin_skills = None  # type: ignore[attr-defined]
+    chat._skills = None          # type: ignore[attr-defined]
+    chat.current_project = None  # type: ignore[attr-defined]
+    skills = chat.skills
+    assert any(isinstance(s, ExplorerSkill) for s in skills), \
+        "ExplorerSkill must be present in XochitlChat.skills (FR-ORCH-041)"
+test("Explorer: ExplorerSkill registered in XochitlChat._builtin_skills (AC-CR023-006)", t_explorer_skill_registration)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
