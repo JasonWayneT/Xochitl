@@ -60,6 +60,10 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-ORCH-038` | `CR-019` | `CR-019` | `AC-CR019-004`, `AC-CR019-005` | `TASK-ORCH-019` | `src/critic.py` (`critique()`, `_parse_critic_response()`); `src/chat.py` (`_maybe_critique()` — correction loop + convergence guard) | smoke (AC-CR019-004–005) | implemented |
 | `NFR-ORCH-012` | `CR-019` | `CR-019` | — | `TASK-ORCH-019` | `src/critic.py` (`force_route="simple_qa"`); `src/chat.py` (`range(_MAX_CRITIC_ITERATIONS)`) | source inspection | implemented |
 | `NFR-ORCH-013` | `CR-019` | `CR-019` | — | `TASK-ORCH-019` | `src/chat.py` (`_maybe_critique()` — streaming returns before call; full try/except wrapper) | source inspection | implemented |
+| `FR-EVAL-001` | `CR-022` | `CR-022` | `AC-CR022-001`, `AC-CR022-002` | `TASK-EVAL-022` | `src/eval/golden_set.py` (34 `GoldenExample` instances — all 8 skills + no-skill cases + adversarials) | smoke (AC-CR022-001–002) | implemented |
+| `FR-EVAL-002` | `CR-022` | `CR-022` | `AC-CR022-003`, `AC-CR022-004` | `TASK-EVAL-022` | `src/eval/harness.py` (`run_eval()` → `EvalReport` with per-skill P/R/F1, accuracy, gaps) | smoke (AC-CR022-003–004) | implemented |
+| `FR-EVAL-003` | `CR-022` | `CR-022` | `AC-CR022-005` | `TASK-EVAL-022` | `src/eval/harness.py` (`_load_baseline()`, regression gate); `eval_harness.py` (`--save-baseline` CLI) | smoke (AC-CR022-005) | implemented |
+| `NFR-EVAL-001` | `CR-022` | `CR-022` | — | `TASK-EVAL-022` | `src/eval/harness.py` (`_score_example()` — `can_handle()` only, no router calls) | source inspection | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |

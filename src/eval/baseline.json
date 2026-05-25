@@ -1,0 +1,17 @@
+{
+  "accuracy": 0.9411764705882353,
+  "total": 34,
+  "correct": 32,
+  "per_skill_f1": {
+    "BMADSkill": 0.8,
+    "SDDSkill": 0.0,
+    "CodeSkill": 0.0,
+    "NotionSkill": 1.0,
+    "OrchestratorSkill": 1.0,
+    "WeatherSkill": 1.0,
+    "WebLookupSkill": 1.0,
+    "ZettelkastenSkill": 0.6667
+  },
+  "saved_at": "2026-05-25T02:56:13.497719+00:00",
+  "golden_set_size": 34
+}

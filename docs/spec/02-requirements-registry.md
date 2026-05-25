@@ -537,6 +537,26 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR019-005` | `FR-ORCH-037`, `NFR-ORCH-012` | Integration | Source inspection of `chat.py` | — | `_maybe_critique` and `_MAX_CRITIC_ITERATIONS` both present | implemented |
 | `AC-CR019-006` | All CR-019 | Smoke tests | `python smoke_test.py` runs | — | 88 passed, 0 failed | implemented |
 
+### Evaluation — Eval Harness (CR-022)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-EVAL-001` | functional | P1 | implemented | `src/eval/golden_set.py` defines `GOLDEN_SET` of ≥30 `GoldenExample` instances covering all 8 built-in skills and ≥5 no-skill cases; ≥6 adversarial examples documenting routing gaps | `AC-CR022-001`, `AC-CR022-002` | `CR-022` | `src/eval/golden_set.py` — 34 examples; initial baseline 94.1% (32/34) |
+| `FR-EVAL-002` | functional | P1 | implemented | `run_eval()` returns `EvalReport` with per-skill precision, recall, F1; overall accuracy; and list of failing utterances | `AC-CR022-003`, `AC-CR022-004` | `CR-022` | `src/eval/harness.py` — `run_eval()`, `EvalReport`, `SkillMetrics` |
+| `FR-EVAL-003` | functional | P1 | implemented | `run_eval()` loads `src/eval/baseline.json` (if present) and sets `regression=True` when accuracy drops > 5pp from baseline; `--save-baseline` flag overwrites baseline | `AC-CR022-005` | `CR-022` | `src/eval/harness.py` — `_load_baseline()`, `_save_baseline()`; `eval_harness.py` — CLI flag |
+| `NFR-EVAL-001` | non-functional | P1 | implemented | Harness runs without LLM calls (`can_handle()` only); full 34-example golden set completes in < 2 s | — | `CR-022` | `src/eval/harness.py` — `_score_example()` calls only `skill.can_handle()` |
+
+### Acceptance criteria — Eval Harness (CR-022)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR022-001` | `FR-EVAL-001`, `FR-EVAL-002` | Import | `from src.eval.harness import run_eval, EvalReport` | — | Both importable | implemented |
+| `AC-CR022-002` | `FR-EVAL-001` | Coverage | Inspect `GOLDEN_SET` | — | ≥30 examples, all 8 skills covered, ≥5 no-skill cases | implemented |
+| `AC-CR022-003` | `FR-EVAL-002` | Fields | Inspect `EvalReport` dataclass fields | — | `accuracy`, `per_skill`, `regression`, `gaps`, `total`, `correct` all present | implemented |
+| `AC-CR022-004` | `FR-EVAL-002`, `NFR-EVAL-001` | Run | `run_eval()` with temp baseline path | — | Returns `EvalReport`; `total ≥ 30`; `accuracy ≥ 80%` | implemented |
+| `AC-CR022-005` | `FR-EVAL-003` | Regression | Inject baseline 100%, run eval | — | `regression=True`; `baseline_accuracy=1.0` | implemented |
+| `AC-CR022-006` | All CR-022 | Smoke tests | `python smoke_test.py` runs | — | 93 passed, 0 failed | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

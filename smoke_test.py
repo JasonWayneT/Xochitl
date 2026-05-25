@@ -1475,6 +1475,76 @@ def t_maybe_critique_in_chat():
 test("Critic: chat.py defines _maybe_critique with _MAX_CRITIC_ITERATIONS cap (AC-CR019-005)", t_maybe_critique_in_chat)
 
 
+# ── CR-022 — Eval Harness ─────────────────────────────────────────────────────
+
+def t_eval_harness_importable():
+    """AC-CR022-001: src.eval.harness importable; run_eval() callable, returns EvalReport."""
+    from src.eval.harness import run_eval, EvalReport
+    assert callable(run_eval), "run_eval must be callable (FR-EVAL-002)"
+    assert EvalReport is not None, "EvalReport dataclass must be importable (FR-EVAL-002)"
+test("Eval: src.eval.harness importable; run_eval() and EvalReport defined (AC-CR022-001)", t_eval_harness_importable)
+
+
+def t_golden_set_coverage():
+    """AC-CR022-002: GOLDEN_SET >= 30 examples covering all 8 built-in skills + 5 no-skill."""
+    from src.eval.golden_set import GOLDEN_SET
+    assert len(GOLDEN_SET) >= 30, \
+        f"Golden set must have >= 30 examples (has {len(GOLDEN_SET)}) (FR-EVAL-001)"
+
+    skill_names = {e.expected_skill for e in GOLDEN_SET if e.expected_skill is not None}
+    required = {"WeatherSkill", "WebLookupSkill", "ZettelkastenSkill",
+                "BMADSkill", "SDDSkill", "CodeSkill", "NotionSkill", "OrchestratorSkill"}
+    missing = required - skill_names
+    assert not missing, f"Golden set missing coverage for: {missing} (FR-EVAL-001)"
+
+    no_skill = [e for e in GOLDEN_SET if e.expected_skill is None]
+    assert len(no_skill) >= 5, \
+        f"Golden set must include >= 5 no-skill cases (has {len(no_skill)}) (FR-EVAL-001)"
+test("Eval: GOLDEN_SET >= 30 examples covering all 8 skills and no-skill cases (AC-CR022-002)", t_golden_set_coverage)
+
+
+def t_eval_report_fields():
+    """AC-CR022-003: EvalReport has accuracy, per_skill, regression, and gaps fields."""
+    from src.eval.harness import EvalReport, SkillMetrics
+    import dataclasses
+    field_names = {f.name for f in dataclasses.fields(EvalReport)}
+    for required in ("accuracy", "per_skill", "regression", "gaps", "total", "correct"):
+        assert required in field_names, \
+            f"EvalReport missing field '{required}' (FR-EVAL-002)"
+test("Eval: EvalReport has accuracy, per_skill, regression, gaps fields (AC-CR022-003)", t_eval_report_fields)
+
+
+def t_eval_run_clean():
+    """AC-CR022-004: run_eval() returns EvalReport without LLM calls; accuracy >= 80%."""
+    from src.eval.harness import run_eval, EvalReport
+    # Pass a mock baseline path so we don't read/write the real baseline
+    import tempfile, pathlib
+    tmp = pathlib.Path(tempfile.mkdtemp()) / "baseline.json"
+    report = run_eval(baseline_path=tmp)
+    assert isinstance(report, EvalReport), "run_eval() must return EvalReport (FR-EVAL-002)"
+    assert report.total >= 30, \
+        f"EvalReport.total must be >= 30 (is {report.total}) (FR-EVAL-001)"
+    assert report.accuracy >= 0.80, \
+        f"Eval accuracy must be >= 80% (is {report.accuracy:.1%}) — routing quality floor (FR-EVAL-002)"
+    assert isinstance(report.gaps, list), "EvalReport.gaps must be a list (FR-EVAL-002)"
+test("Eval: run_eval() returns EvalReport without LLM calls; accuracy >= 80% (AC-CR022-004)", t_eval_run_clean)
+
+
+def t_eval_regression_detection():
+    """AC-CR022-005: regression=True when injected baseline is 5pp above current accuracy."""
+    from src.eval.harness import run_eval
+    import tempfile, pathlib, json
+    tmp = pathlib.Path(tempfile.mkdtemp()) / "baseline.json"
+    # Inject an artificially high baseline (1.0 = 100%) to force regression detection
+    tmp.write_text(json.dumps({"accuracy": 1.0}), encoding="utf-8")
+    report = run_eval(baseline_path=tmp)
+    assert report.regression is True, \
+        "regression must be True when accuracy drops > 5pp from baseline (FR-EVAL-003)"
+    assert report.baseline_accuracy == 1.0, \
+        "EvalReport.baseline_accuracy must match loaded baseline (FR-EVAL-003)"
+test("Eval: regression=True when accuracy drops > 5pp from injected baseline (AC-CR022-005)", t_eval_regression_detection)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
