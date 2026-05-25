@@ -600,6 +600,26 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR033-006` | `FR-ORCH-043` | Reminder constant | `from src.chat import _DRIFT_IDENTITY_REMINDER` | — | Non-empty string; contains "IDENTITY REMINDER" | implemented |
 | `AC-CR033-007` | All CR-033 | Smoke tests | `python smoke_test.py` | — | 109 passed, 0 failed | implemented |
 
+### Implicit Preference Learning (CR-034)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-PREF-001` | functional | P1 | implemented | `is_rephrased_query(prev, curr) -> bool` — pure heuristic; returns `True` when (a) strings are not identical AND (b) shared non-stopword count >= `_REPHRASE_MIN_SHARED_WORDS (2)` AND (c) Jaccard similarity on all tokens >= `_REPHRASE_SIMILARITY_THRESHOLD (0.30)` | `AC-CR034-001`, `AC-CR034-002`, `AC-CR034-003` | `CR-034` | `src/preference_learning.py` — `is_rephrased_query()`, `_STOPWORDS`, `_REPHRASE_MIN_SHARED_WORDS`, `_REPHRASE_SIMILARITY_THRESHOLD` |
+| `FR-PREF-002` | functional | P1 | implemented | `BackgroundReview` tracks `_prev_user_input`; after each turn if `is_rephrased_query(prev, curr)` is `True`, stores a `memory_facts` entry with `category="preference"`, `source="implicit_rephrase_detection"`, `confidence=0.65` | `AC-CR034-001` | `CR-034` | `src/background_review.py` — `_prev_user_input`, `_maybe_store_rephrase()`, rephrase hook in `_process()` |
+| `FR-PREF-003` | functional | P1 | implemented | `decay_and_prune(conn) -> tuple[int, int]` applies `confidence *= 0.95` to implicit preferences; deletes rows where `confidence < 0.30`; called once at session start from `XochitlChat.start()`; returns `(decayed_count, pruned_count)` | `AC-CR034-004`, `AC-CR034-005` | `CR-034` | `src/preference_learning.py` — `decay_and_prune()`; `src/chat.py` — try/except call in `start()` |
+| `NFR-PREF-001` | non-functional | P1 | implemented | `is_rephrased_query` is a pure function (no LLM call, no DB access); `decay_and_prune` wrapped in try/except at call site; `_maybe_store_rephrase` wrapped in try/except — none may raise to caller | `AC-CR034-001` through `AC-CR034-005` | `CR-034` | `src/preference_learning.py`, `src/background_review.py`, `src/chat.py` |
+
+### Acceptance criteria — Implicit Preference Learning (CR-034)
+
+| ID | Requirements | Scenario | Input | Pre-conditions | Expected | Status |
+|---|---|---|---|---|---|---|
+| `AC-CR034-001` | `FR-PREF-001` | Rephrase detected | `is_rephrased_query("What tasks are in my Notion queue?", "Which Notion tasks are pending?")` | — | `True` | implemented |
+| `AC-CR034-002` | `FR-PREF-001` | Different topic | `is_rephrased_query("What tasks are in my Notion queue?", "What is the weather today?")` | — | `False` | implemented |
+| `AC-CR034-003` | `FR-PREF-001` | Identical strings | `is_rephrased_query("Investigate Python", "Investigate Python")` | — | `False` | implemented |
+| `AC-CR034-004` | `FR-PREF-003` | Decay applied | `decay_and_prune` on implicit preference with `confidence=0.80` | In-memory SQLite | `confidence` becomes `0.76`; row not pruned | implemented |
+| `AC-CR034-005` | `FR-PREF-003` | Pruned below threshold | `decay_and_prune` on implicit preference with `confidence=0.29` | In-memory SQLite | Row deleted; `pruned_count >= 1` | implemented |
+| `AC-CR034-006` | All CR-034 | Smoke tests | `python smoke_test.py` | — | 114 passed, 0 failed | implemented |
+
 ### Bounded Explorer (CR-023)
 
 | ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |

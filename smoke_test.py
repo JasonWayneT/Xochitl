@@ -2000,6 +2000,98 @@ def t_drift_reminder_constant_defined():
 test("Drift: _DRIFT_IDENTITY_REMINDER constant defined in chat.py (AC-CR033-006)", t_drift_reminder_constant_defined)
 
 
+# ── CR-034 — Implicit Preference Learning ─────────────────────────────────────
+
+def t_rephrased_query_detected():
+    """AC-CR034-001: is_rephrased_query() returns True for same-topic rephrases (FR-PREF-001)."""
+    from src.preference_learning import is_rephrased_query
+    result = is_rephrased_query(
+        "What tasks are in my Notion queue?",
+        "Which Notion tasks are pending?",
+    )
+    assert result is True, \
+        "is_rephrased_query must return True for same-topic rephrases (FR-PREF-001)"
+test("Pref: is_rephrased_query() True for same-topic rephrase (AC-CR034-001)", t_rephrased_query_detected)
+
+
+def t_rephrased_query_different_topic():
+    """AC-CR034-002: is_rephrased_query() returns False for different topics (FR-PREF-001)."""
+    from src.preference_learning import is_rephrased_query
+    result = is_rephrased_query(
+        "What tasks are in my Notion queue?",
+        "What is the weather today?",
+    )
+    assert result is False, \
+        "is_rephrased_query must return False when topics diverge (FR-PREF-001)"
+test("Pref: is_rephrased_query() False for different topic (AC-CR034-002)", t_rephrased_query_different_topic)
+
+
+def t_rephrased_query_identical_returns_false():
+    """AC-CR034-003: is_rephrased_query() returns False for identical strings (FR-PREF-001)."""
+    from src.preference_learning import is_rephrased_query
+    result = is_rephrased_query("Investigate Python", "Investigate Python")
+    assert result is False, \
+        "identical strings must return False — retry, not rephrase (FR-PREF-001)"
+test("Pref: is_rephrased_query() False for identical strings (AC-CR034-003)", t_rephrased_query_identical_returns_false)
+
+
+def t_decay_and_prune_applies_decay():
+    """AC-CR034-004: decay_and_prune() multiplies confidence by 0.95 for above-threshold rows."""
+    import sqlite3
+    from src.preference_learning import decay_and_prune
+    from src import database as _db
+
+    conn = sqlite3.connect(":memory:")
+    _db._ensure_preferences_table(conn)
+    conn.execute(
+        "INSERT INTO preferences (preference_key, preference_value, source, confidence)"
+        " VALUES (?, ?, ?, ?)",
+        ("pref_decay_test", "some preference", "implicit_preference", 0.80),
+    )
+    conn.commit()
+
+    decayed, pruned = decay_and_prune(conn)
+
+    row = conn.execute(
+        "SELECT confidence FROM preferences WHERE preference_key = ?", ("pref_decay_test",)
+    ).fetchone()
+    conn.close()
+
+    assert row is not None, "row must survive decay (confidence still above threshold)"
+    assert pruned == 0, "row must not be pruned (confidence 0.76 >= 0.30)"
+    assert decayed >= 1, "decayed_count must be >= 1"
+    assert abs(row[0] - 0.76) < 0.01, \
+        f"confidence must decay to ~0.76 (0.80 * 0.95), got {row[0]}"
+test("Pref: decay_and_prune() applies 0.95 decay to above-threshold rows (AC-CR034-004)", t_decay_and_prune_applies_decay)
+
+
+def t_decay_and_prune_prunes_below_threshold():
+    """AC-CR034-005: decay_and_prune() deletes rows whose confidence is below 0.30."""
+    import sqlite3
+    from src.preference_learning import decay_and_prune
+    from src import database as _db
+
+    conn = sqlite3.connect(":memory:")
+    _db._ensure_preferences_table(conn)
+    conn.execute(
+        "INSERT INTO preferences (preference_key, preference_value, source, confidence)"
+        " VALUES (?, ?, ?, ?)",
+        ("pref_prune_test", "stale preference", "implicit_preference", 0.29),
+    )
+    conn.commit()
+
+    _decayed, pruned = decay_and_prune(conn)
+
+    row = conn.execute(
+        "SELECT confidence FROM preferences WHERE preference_key = ?", ("pref_prune_test",)
+    ).fetchone()
+    conn.close()
+
+    assert row is None, "row must be deleted when confidence < 0.30 (FR-PREF-003)"
+    assert pruned >= 1, f"pruned_count must be >= 1, got {pruned}"
+test("Pref: decay_and_prune() prunes rows below 0.30 threshold (AC-CR034-005)", t_decay_and_prune_prunes_below_threshold)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

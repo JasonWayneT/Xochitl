@@ -191,6 +191,8 @@ class BackgroundReview:
         self._recent_responses: list[str] = []
         self._drift_detected: bool = False
         self._drift_lock: threading.Lock = threading.Lock()
+        # CR-034: implicit rephrase detection — previous user input buffer (FR-PREF-002)
+        self._prev_user_input: str = ""
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -305,6 +307,11 @@ class BackgroundReview:
             self._correction_turns = 0  # reset correction counter after check
             self._run_drift_check()
 
+        # CR-034: rephrase detection (FR-PREF-002)
+        if self._prev_user_input:
+            self._maybe_store_rephrase(self._prev_user_input, turn.user_input, turn.project)
+        self._prev_user_input = turn.user_input
+
         now = time.monotonic()
         # Correction turns skip the rate limit — they carry the highest signal.
         if not turn.is_correction and (now - self._last_write_at) < _MIN_WRITE_INTERVAL_SECS:
@@ -383,6 +390,38 @@ class BackgroundReview:
             with self._drift_lock:
                 self._drift_detected = True
             logger.debug("background_review: persona drift detected")
+
+    # ── CR-034: Implicit rephrase detection ──────────────────────────────────
+
+    def _maybe_store_rephrase(self, prev: str, curr: str, project: Optional[str]) -> None:
+        """Store a memory fact when curr appears to rephrase prev (FR-PREF-002).
+
+        Wrapped entirely in try/except — must never raise (NFR-PREF-001).
+
+        Args:
+            prev: Previous user input from the last processed turn.
+            curr: Current user input from this turn.
+            project: Active project slug, forwarded to upsert_memory_fact.
+        """
+        try:
+            from src.preference_learning import is_rephrased_query
+            if not is_rephrased_query(prev, curr):
+                return
+            from src import database as _db
+            with _db.get_connection() as conn:
+                _db.upsert_memory_fact(
+                    conn,
+                    fact=(
+                        f"User rephrased '{prev[:60]}' as '{curr[:60]}'"
+                        " — second framing preferred."
+                    ),
+                    category="preference",
+                    confidence=0.65,
+                    source="implicit_rephrase_detection",
+                    project=project,
+                )
+        except Exception as exc:
+            logger.debug("background_review: rephrase storage failed: %s", exc)
 
     def _get_identity_anchor(self) -> str:
         """Load the [IDENTITY] section from SOUL.md via SoulEngine.

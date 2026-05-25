@@ -490,6 +490,14 @@ class XochitlChat:
         with db.get_connection() as conn:
             self.session_id = db.create_session(conn)
 
+        # CR-034: decay implicit preferences on session start (FR-PREF-003)
+        try:
+            from src.preference_learning import decay_and_prune
+            with db.get_connection() as conn:
+                decay_and_prune(conn)
+        except Exception:
+            pass  # decay must never crash session start (NFR-PREF-001)
+
         console.print(
             "[dim]Type 'quit' or Ctrl+C to exit. "
             "Ctrl+C while thinking cancels. "
