@@ -1545,6 +1545,207 @@ def t_eval_regression_detection():
 test("Eval: regression=True when accuracy drops > 5pp from injected baseline (AC-CR022-005)", t_eval_regression_detection)
 
 
+# ── CR-028 — Conversation Design A1–A5 ───────────────────────────────────────
+
+def t_strip_filler_opener_removes_and_passes():
+    """AC-CR028-001: strip_filler_opener() removes known fillers; clean text passes through."""
+    from src.conversation import strip_filler_opener
+
+    # Known filler phrases must be stripped (A1 — FR-CONV-001)
+    filler_cases = [
+        ("Certainly! Here is the answer.", "Here is the answer."),
+        ("Great question! Let me explain.", "Let me explain."),
+        ("Of course, I can help.", "I can help."),
+        ("Absolutely! Here you go.", "Here you go."),
+        ("I'd be happy to help! Let me check.", "Let me check."),
+    ]
+    for raw, expected in filler_cases:
+        result = strip_filler_opener(raw)
+        assert result == expected, (
+            f"strip_filler_opener({raw!r}) => {result!r}; expected {expected!r}"
+        )
+
+    # Clean text must pass through unchanged
+    clean_cases = [
+        "The file exists at that path.",
+        "Run `xochitl today` to refresh the queue.",
+        "Sure, here is a mid-sentence use.",  # 'sure' without punctuation — not a filler
+    ]
+    for raw in clean_cases:
+        result = strip_filler_opener(raw)
+        assert result == raw, (
+            f"strip_filler_opener({raw!r}) mutated clean text => {result!r}"
+        )
+
+    # Entire filler with no remainder returns original (not empty string)
+    result = strip_filler_opener("Certainly!")
+    assert result == "Certainly!", f"All-filler response should return original: {result!r}"
+test("Conversation A1: strip_filler_opener removes fillers, passes clean text (AC-CR028-001)", t_strip_filler_opener_removes_and_passes)
+
+
+def t_uncertainty_hedge_three_tiers():
+    """AC-CR028-002: uncertainty_hedge() applies correct tier for each confidence bracket."""
+    from src.conversation import uncertainty_hedge
+
+    # High tier: > 0.85 → unchanged (FR-CONV-005)
+    result = uncertainty_hedge(0.90, "The meeting is tomorrow at 3pm.")
+    assert result == "The meeting is tomorrow at 3pm.", \
+        f"High confidence should return text unchanged: {result!r}"
+    result = uncertainty_hedge(0.86, "Task is in the WIP queue.")
+    assert result == "Task is in the WIP queue.", \
+        f"Just-above-0.85 should be unchanged: {result!r}"
+
+    # Mid tier: 0.60 ≤ confidence ≤ 0.85 → "I think …"
+    result = uncertainty_hedge(0.72, "The meeting is at 3pm.")
+    assert result.startswith("I think "), \
+        f"Mid confidence (0.72) should start with 'I think': {result!r}"
+
+    result = uncertainty_hedge(0.60, "It is in the Projects folder.")
+    assert result.startswith("I think "), \
+        f"At lower mid boundary (0.60) should start with 'I think': {result!r}"
+
+    # Low tier: < 0.60 → explicit uncertainty + resolution offer
+    result = uncertainty_hedge(0.45, "The deadline is Friday.")
+    assert result.startswith("I'm not certain, but "), \
+        f"Low confidence (0.45) should start with explicit prefix: {result!r}"
+    assert "want me to look this up?" in result, \
+        f"Low confidence should include resolution offer: {result!r}"
+
+    # Edge: empty text raises ValueError
+    try:
+        uncertainty_hedge(0.5, "")
+        assert False, "Empty text should raise ValueError"
+    except ValueError:
+        pass
+test("Conversation A5: uncertainty_hedge applies correct tier per confidence bracket (AC-CR028-002)", t_uncertainty_hedge_three_tiers)
+
+
+def t_anticipation_gate_signals():
+    """AC-CR028-003: AnticipationGate.check() fires with >=2 signals; None with <2."""
+    from src.anticipation import AnticipationGate
+    from unittest.mock import patch
+
+    gate = AnticipationGate()
+
+    # Exactly 2 signals: wip=1 + recency=10h → should fire (FR-CONV-002)
+    # Patch datetime.now to an off-peak hour (e.g. 14:00 — not morning/evening)
+    from datetime import datetime, timezone
+
+    class _FakeDateTime:
+        @staticmethod
+        def now(tz=None):
+            return datetime(2026, 5, 25, 14, 0, 0, tzinfo=timezone.utc)
+
+    with patch("src.anticipation.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 5, 25, 14, 0, 0, tzinfo=timezone.utc)
+        mock_dt.fromisoformat = datetime.fromisoformat
+        result = gate.check(wip_count=1, last_session_age_hours=10.0)
+    assert result is not None, \
+        "wip=1 + recency=10h should fire (2 signals >= _MIN_SIGNALS=2) (FR-CONV-002)"
+    assert "task" in result.lower() or "queue" in result.lower(), \
+        f"Hint should mention tasks: {result!r}"
+
+    # Only 1 signal: wip=0, recency=None, hour=14 → None
+    with patch("src.anticipation.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 5, 25, 14, 0, 0, tzinfo=timezone.utc)
+        result_none = gate.check(wip_count=0, last_session_age_hours=None)
+    assert result_none is None, \
+        f"0 signals should return None (FR-CONV-002): got {result_none!r}"
+
+    # 3 signals: wip=2 + morning=08:00 + recency=8h → should fire
+    with patch("src.anticipation.datetime") as mock_dt:
+        mock_dt.now.return_value = datetime(2026, 5, 25, 8, 0, 0, tzinfo=timezone.utc)
+        result_tri = gate.check(wip_count=2, last_session_age_hours=8.0)
+    assert result_tri is not None, \
+        "3 signals (wip + morning + recency) should fire (FR-CONV-002)"
+    assert "Good morning" in result_tri, \
+        f"Morning signal should add 'Good morning': {result_tri!r}"
+test("Conversation A2: AnticipationGate fires with >=2 signals, None with <2 (AC-CR028-003)", t_anticipation_gate_signals)
+
+
+def t_build_structured_brief_sections():
+    """AC-CR028-004: build_structured_brief() contains expected section headers when data present."""
+    from src.brief import build_structured_brief
+    from unittest.mock import patch
+    import datetime
+
+    queue = [
+        {"description": "Implement FR-CONV-003 structured brief"},
+        {"description": "Write smoke tests for CR-028"},
+    ]
+    notion_pending = [
+        {"title": "Review product roadmap"},
+    ]
+
+    # Patch subprocess.run to simulate a stale git commit for the Awareness section
+    fake_ts = "2026-05-24T10:00:00+00:00"
+    with patch("src.brief.subprocess.run") as mock_run:
+        mock_proc = mock_run.return_value
+        mock_proc.returncode = 0
+        mock_proc.stdout = fake_ts
+        brief = build_structured_brief(queue, notion_pending)
+
+    # Section: Priorities must appear
+    assert "**Priorities**" in brief, \
+        "build_structured_brief() missing **Priorities** section (FR-CONV-003)"
+    # Task descriptions must appear
+    assert "FR-CONV-003" in brief, \
+        "Priority task description missing from brief (FR-CONV-003)"
+    # Section: Async queue must appear (notion_pending provided)
+    assert "**Async queue**" in brief, \
+        "build_structured_brief() missing **Async queue** section (FR-CONV-003)"
+    # Section: Temporal context must appear
+    assert "**" in brief and ("Monday" in brief or "Sunday" in brief or "Tuesday" in brief
+                               or "Wednesday" in brief or "Thursday" in brief
+                               or "Friday" in brief or "Saturday" in brief), \
+        "Temporal context (day name) missing from brief (FR-CONV-003)"
+
+    # Empty queue + empty notion → brief still returns something (no exception)
+    empty_brief = build_structured_brief([], [])
+    assert isinstance(empty_brief, str), \
+        "build_structured_brief() must return str even when both args empty"
+test("Conversation A3: build_structured_brief() contains expected section headers (AC-CR028-004)", t_build_structured_brief_sections)
+
+
+def t_preference_engine_natural_framing():
+    """AC-CR028-005: PreferenceEngine.assemble() uses [BACKGROUND CONTEXT] block (FR-CONV-004)."""
+    import sqlite3
+    from src.context_manager import PreferenceEngine
+
+    engine = PreferenceEngine()
+    # Inject rows directly to bypass DB (test in isolation)
+    engine._rows = [
+        {
+            "id": 1,
+            "scope": "global",
+            "project_id": None,
+            "category": "communication",
+            "preference_value": "I prefer concise responses",
+        }
+    ]
+    output = engine.assemble()
+
+    # Must use [BACKGROUND CONTEXT] wrapper (AC-CR028-005)
+    assert "[BACKGROUND CONTEXT]" in output, \
+        "PreferenceEngine.assemble() must use [BACKGROUND CONTEXT] block (FR-CONV-004)"
+    assert "[/BACKGROUND CONTEXT]" in output, \
+        "PreferenceEngine.assemble() must close [BACKGROUND CONTEXT] block (FR-CONV-004)"
+    # Must NOT use old raw [scope/category] format
+    assert "[global/communication]" not in output, \
+        "PreferenceEngine.assemble() must not use old [scope/category] format (FR-CONV-004)"
+    # Must include the preference value
+    assert "I prefer concise responses" in output, \
+        "Preference value must appear in assembled output (FR-CONV-004)"
+    # Natural instruction must be present
+    assert "do not cite" in output.lower(), \
+        "assemble() must instruct model not to cite preferences explicitly (FR-CONV-004)"
+    # Empty rows → empty string (no block)
+    engine._rows = []
+    assert engine.assemble() == "", \
+        "PreferenceEngine.assemble() with no rows must return empty string"
+test("Conversation A4: PreferenceEngine.assemble() uses [BACKGROUND CONTEXT] framing (AC-CR028-005)", t_preference_engine_natural_framing)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

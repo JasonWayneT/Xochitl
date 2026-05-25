@@ -473,16 +473,24 @@ class PreferenceEngine(ContextEngine):
         self._loaded_at = time.time()
 
     def assemble(self) -> str:
+        """Return preferences as natural background context.
+
+        Implements FR-CONV-004 (A4 — natural memory reference). Frames stored
+        preferences as silently-applied background context rather than raw
+        ``[scope/category] value`` data. The instruction "do not cite them
+        explicitly" prevents the model from producing "I see in your preferences
+        that…" patterns (AC-CR028-005).
+        """
         if not self._rows:
             return ""
-        lines = ["## User Preferences"]
+        lines = [
+            "[BACKGROUND CONTEXT]",
+            "Apply these user preferences silently — do not cite them explicitly:",
+        ]
         for row in self._rows:
-            scope = row["scope"]
-            project = row["project_id"]
-            scope_label = f"project:{project}" if scope == "project" and project else scope
-            lines.append(
-                f"- [{scope_label}/{row['category']}] {row['preference_value']}"
-            )
+            category = str(row["category"]).capitalize()
+            lines.append(f"- {category}: {row['preference_value']}")
+        lines.append("[/BACKGROUND CONTEXT]")
         return "\n".join(lines)
 
     def compact(self, max_tokens: int) -> str:

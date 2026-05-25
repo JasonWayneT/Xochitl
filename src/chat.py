@@ -210,6 +210,17 @@ def _print_boot_banner(con: Console) -> None:
             con.print(f"  [dim]WIP 0/{limit} — queue empty. Run[/dim] [bold]xochitl today[/bold] [dim]to fill it.[/dim]")
     except Exception:
         pass  # never crash startup over a dashboard read failure
+
+    # A2 — Anticipation gate: surface a one-line hint when ≥2 signals converge.
+    # Implements FR-CONV-002. Informational only — never takes action (NFR-CONV-001).
+    try:
+        from src.anticipation import AnticipationGate
+        _hint = AnticipationGate().check_from_db()
+        if _hint:
+            con.print(f"  [dim]{_hint}[/dim]")
+            con.print()
+    except Exception:
+        pass  # never crash startup over an anticipation gate failure
     con.print()
 
 
@@ -1715,9 +1726,21 @@ class XochitlChat:
         if verb == "/budget":
             return self._governor.budget_detail()
 
+        # A3 — structured daily brief (FR-CONV-003).
+        # Pull-only: never surfaced unsolicited (alert-fatigue risk).
+        if verb == "/brief":
+            try:
+                from src.brief import build_structured_brief
+                from src import database as _db
+                with _db.get_connection() as conn:
+                    _queue = _db.get_queue(conn)
+                return build_structured_brief(_queue, notion_pending=[])
+            except Exception as exc:
+                return f"[dim]{_FYI} — couldn't build brief: {exc}[/dim]"
+
         available = (
             "/next <msg>  /retry  /authorize  /revoke  "
-            "/registry  /audit  /review  /research  /adversarial  /budget"
+            "/registry  /audit  /review  /research  /adversarial  /budget  /brief"
         )
         return f"[dim]{_FYI} — unknown command: {verb}\nAvailable: {available}[/dim]"
 
@@ -1729,6 +1752,9 @@ class XochitlChat:
         Implements FR-ORCH-009 (partial) — strips stray <skill_call> tags
         that survived to the visible response (BUG-CHAT-003 coverage) and
         strips other LLM-hallucinated tool-call syntax.
+        Also implements FR-CONV-001 (A1 — filler opener stripping): removes
+        sycophantic openers ("Certainly!", "Great question!", etc.) before
+        the response reaches the user.
         """
         # Strip any <execute_tool>...</execute_tool> blocks (BUG-CHAT-003)
         response = re.sub(
@@ -1739,6 +1765,12 @@ class XochitlChat:
         ).strip()
         # Strip any stray <skill_call> tags that weren't caught in _agent_loop
         response = _SKILL_CALL_RE.sub("", response).strip()
+        # A1 — strip sycophantic filler openers (FR-CONV-001)
+        try:
+            from src.conversation import strip_filler_opener
+            response = strip_filler_opener(response)
+        except Exception:
+            pass  # filler stripping must never crash the main loop
 
         self.session_history.append({
             "role": "assistant",

@@ -557,6 +557,28 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR022-005` | `FR-EVAL-003` | Regression | Inject baseline 100%, run eval | — | `regression=True`; `baseline_accuracy=1.0` | implemented |
 | `AC-CR022-006` | All CR-022 | Smoke tests | `python smoke_test.py` runs | — | 93 passed, 0 failed | implemented |
 
+### Conversation Design — A1–A5 (CR-028)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-CONV-001` | functional | P1 | implemented | `strip_filler_opener(response: str) -> str` removes sycophantic filler phrases ("Certainly!", "Great question!", "I'd be happy to help!", etc.) from the start of each LLM response; applied in `XochitlChat._record()` | `AC-CR028-001` | `CR-028` | `src/conversation.py` — one-pass compiled regex; re-capitalises remainder |
+| `FR-CONV-002` | functional | P1 | implemented | `AnticipationGate.check()` evaluates four contextual signals (wip, recency ≥4h, morning 06–10, evening 17–21) at session start and returns a one-line informational hint when ≥2 signals converge; never fires mid-session and never takes action | `AC-CR028-003` | `CR-028` | `src/anticipation.py` — `AnticipationGate`; called from `_print_boot_banner()` in `chat.py` |
+| `FR-CONV-003` | functional | P1 | implemented | `build_structured_brief(queue, notion_pending) -> str` returns a five-section Markdown brief (temporal context, priorities, async queue, awareness); each section is skipped when empty; accessible via `/brief` slash command; never pushed unsolicited | `AC-CR028-004` | `CR-028` | `src/brief.py`; `/brief` command in `chat.py` |
+| `FR-CONV-004` | functional | P1 | implemented | `PreferenceEngine.assemble()` frames stored preferences as natural background context (`[BACKGROUND CONTEXT] … [/BACKGROUND CONTEXT]`) with explicit instruction not to cite them; replaces old raw `[scope/category] value` format | `AC-CR028-005` | `CR-028` | `src/context_manager.py` — `PreferenceEngine.assemble()` |
+| `FR-CONV-005` | functional | P1 | implemented | `uncertainty_hedge(confidence: float, text: str) -> str` applies calibrated framing per three-tier model: `>0.85` direct, `0.60–0.85` → `"I think …"`, `<0.60` → `"I'm not certain, but … — want me to look this up?"` | `AC-CR028-002` | `CR-028` | `src/conversation.py` — exported utility for skill `execute()` methods |
+| `NFR-CONV-001` | non-functional | P1 | implemented | All five CR-028 functions are pure/heuristic — no LLM calls; `strip_filler_opener()` and `uncertainty_hedge()` are synchronous pure functions; `AnticipationGate.check()` reads only DB + wall clock; `build_structured_brief()` reads only caller-supplied data + git | `AC-CR028-001` through `AC-CR028-005` | `CR-028` | Verified by test isolation — no router import |
+
+### Acceptance criteria — Conversation Design (CR-028)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR028-001` | `FR-CONV-001` | Filler stripped | `strip_filler_opener("Certainly! Here is the answer.")` | — | Returns `"Here is the answer."` | implemented |
+| `AC-CR028-002` | `FR-CONV-005` | Three tiers | `uncertainty_hedge(confidence, text)` at each bracket boundary | — | Correct tier applied per boundary; `ValueError` on empty text | implemented |
+| `AC-CR028-003` | `FR-CONV-002` | Gate fires | `AnticipationGate.check(wip_count=1, last_session_age_hours=10)` at hour 14 | — | Non-None hint string returned (wip + recency = 2 signals) | implemented |
+| `AC-CR028-004` | `FR-CONV-003` | Sections present | `build_structured_brief(queue=[…], notion_pending=[…])` | — | String contains `**Priorities**`, `**Async queue**`, and day name | implemented |
+| `AC-CR028-005` | `FR-CONV-004` | Natural framing | Source inspection of `PreferenceEngine.assemble()` | — | Output contains `[BACKGROUND CONTEXT]` block; old `[scope/category]` format absent | implemented |
+| `AC-CR028-006` | All CR-028 | Smoke tests | `python smoke_test.py` runs | — | 98 passed, 0 failed | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.
