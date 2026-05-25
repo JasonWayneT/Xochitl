@@ -481,6 +481,22 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR025-006` | `FR-ORCH-033` | No block for conversational | `assemble_system_prompt()` with default mode | — | Output does NOT contain `[RESPONSE MODE:` | implemented |
 | `AC-CR025-007` | All CR-025 | Smoke tests | `python smoke_test.py` runs | — | 75 passed, 0 failed | implemented |
 
+### Orchestration — Capability Boundary Communication (CR-036)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-034` | functional | P1 | implemented | `_agent_loop()` distinguishes three skill-score zones and injects differentiated `[TURN CONTEXT]` per zone: skill-matched (`≥ 0.65`) = no extra context; near-miss (`0.20–0.65`) = skill name + partial-coverage guidance + no-silent-reduction prohibition; complete-miss (`< 0.20`) = capability boundary note + forward-path instruction | `AC-CR036-001`, `AC-CR036-002`, `AC-CR036-003` | `CR-036` | `src/chat.py` — three-zone if/elif/else replacing two-zone if |
+| `NFR-ORCH-009` | non-functional | P1 | implemented | Near-miss and complete-miss [TURN CONTEXT] notes injected without any additional LLM call; information comes from existing `can_handle()` scores | `AC-CR036-001`, `AC-CR036-002`, `AC-CR036-003` | `CR-036` | No new imports or modules — targeted if/elif/else in `_agent_loop()` |
+
+### Acceptance criteria — Capability Boundary Communication (CR-036)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR036-001` | `FR-ORCH-034` | Complete miss | `top_score < 0.20` (source inspection) | — | `[TURN CONTEXT]` contains `[CAPABILITY BOUNDARY]` reference and forward-path instruction | implemented |
+| `AC-CR036-002` | `FR-ORCH-034` | Near-miss | `0.20 ≤ top_score < 0.65` (source inspection) | — | `[TURN CONTEXT]` contains skill name, near-miss note, and no-silent-reduction prohibition | implemented |
+| `AC-CR036-003` | `FR-ORCH-034` | Skill matched | `top_score ≥ 0.65` (source inspection) | — | Skill-matched zone uses `pass` — no `[TURN CONTEXT]` injected | implemented |
+| `AC-CR036-004` | All CR-036 | Smoke tests | `python smoke_test.py` runs | — | 78 passed, 0 failed | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

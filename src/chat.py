@@ -798,16 +798,41 @@ class XochitlChat:
             if _status:
                 _status.update(f"skill ready: {defn.get('name', type(top_skill).__name__)}")
 
-        # ── CR-032: Per-turn uncertainty tier signal (FR-ORCH-026, NFR-ORCH-003) ──
-        # When no skill scores above _OPEN_ENDED_SCORE_THRESHOLD the turn is
-        # open-ended (general knowledge, casual conversation, ambiguous query).
-        # Append a brief [TURN CONTEXT] note so the model has an explicit per-turn
-        # reminder to apply calibrated [UNCERTAINTY TIERS] vocabulary.
-        if top_skill is None or top_score < _OPEN_ENDED_SCORE_THRESHOLD:
+        # ── CR-032 + CR-036: Per-turn capability context (FR-ORCH-026, FR-ORCH-034) ──
+        # Three scoring zones determine what [TURN CONTEXT] is injected:
+        #
+        #  ≥ 0.65  SKILL MATCHED   — skill schema already injected; no [TURN CONTEXT]
+        #  0.20–0.65  NEAR-MISS    — skill partially matched; inject near-miss note
+        #  < 0.20  COMPLETE MISS   — no skill matched; inject capability boundary note
+        #
+        # All non-skill turns retain the [UNCERTAINTY TIERS] reminder (CR-032).
+        if top_skill is not None and top_score >= _SKILL_INJECT_THRESHOLD:
+            pass  # skill schema handles context — no extra [TURN CONTEXT] needed
+
+        elif top_skill is not None and top_score >= _OPEN_ENDED_SCORE_THRESHOLD:
+            # Near-miss: a skill partially matched but didn't cross the inject threshold.
+            # Tell the model which skill came closest so it can reason about partial coverage.
+            # Implements FR-ORCH-034 (CR-036).
+            skill_label = type(top_skill).__name__.replace("Skill", "").strip() or "Unknown"
             system_prompt = (
                 system_prompt
-                + "\n\n[TURN CONTEXT: No specific task skill matched — "
-                "open-ended or general knowledge turn. "
+                + f"\n\n[TURN CONTEXT: Near-match — '{skill_label}' skill scored "
+                f"{top_score:.2f} (below injection threshold of {_SKILL_INJECT_THRESHOLD}). "
+                "State clearly what this skill can and cannot cover for the current request. "
+                "Do NOT silently deliver a reduced version — if partial handling is possible, "
+                "say so explicitly. Apply [UNCERTAINTY TIERS] vocabulary as appropriate.]\n"
+            )
+
+        else:
+            # Complete miss: no skill scored above the open-ended threshold.
+            # Direct the model to consult [CAPABILITY BOUNDARY] and offer a specific forward path.
+            # Implements FR-ORCH-026 (CR-032) and FR-ORCH-034 (CR-036).
+            system_prompt = (
+                system_prompt
+                + "\n\n[TURN CONTEXT: No specific skill matched this request "
+                f"(top score {top_score:.2f}, threshold {_OPEN_ENDED_SCORE_THRESHOLD}). "
+                "If this request falls outside Xochitl's capabilities, state specifically "
+                "what is missing and offer the nearest available forward path — see [CAPABILITY BOUNDARY]. "
                 "Apply [UNCERTAINTY TIERS] vocabulary as appropriate.]\n"
             )
 

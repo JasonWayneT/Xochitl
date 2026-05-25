@@ -895,25 +895,31 @@ test("Prompt: [CAPABILITY BOUNDARY] section present (AC-CR032-002)", t_capabilit
 
 
 def t_turn_context_injection_low_score():
-    """AC-CR032-003: open-ended turns inject [TURN CONTEXT] when score < 0.2."""
+    """AC-CR032-003 / AC-CR036-001: complete-miss turns inject [TURN CONTEXT] with capability guidance."""
     import src.chat as chat_mod
     assert chat_mod._OPEN_ENDED_SCORE_THRESHOLD == 0.2
-    src = Path(chat_mod.__file__).read_text(encoding="utf-8")
-    assert "[TURN CONTEXT:" in src
-    assert "top_score < _OPEN_ENDED_SCORE_THRESHOLD" in src
+    src_text = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    assert "[TURN CONTEXT:" in src_text, "[TURN CONTEXT: not found in chat.py"
+    # CR-036: complete-miss branch references [CAPABILITY BOUNDARY] (AC-CR036-001)
+    assert "[CAPABILITY BOUNDARY]" in src_text, \
+        "Complete-miss [TURN CONTEXT] should reference [CAPABILITY BOUNDARY] (FR-ORCH-034)"
+    # Three-zone logic present (CR-036)
+    assert "_OPEN_ENDED_SCORE_THRESHOLD" in src_text
+    assert "Near-match" in src_text, \
+        "Near-miss [TURN CONTEXT] block missing from chat.py (FR-ORCH-034)"
 test("Chat: [TURN CONTEXT] injected for low skill scores (AC-CR032-003)", t_turn_context_injection_low_score)
 
 
 def t_no_turn_context_high_score():
-    """AC-CR032-004: matched skills (>= 0.65) skip [TURN CONTEXT] injection."""
+    """AC-CR032-004 / AC-CR036-003: matched skills (>= 0.65) skip [TURN CONTEXT] injection."""
     import src.chat as chat_mod
     assert chat_mod._SKILL_INJECT_THRESHOLD == 0.65
-    src = Path(chat_mod.__file__).read_text(encoding="utf-8")
-    assert "top_score >= _SKILL_INJECT_THRESHOLD" in src
-    # Injection only runs in the else branch (below threshold), not after skill match block.
-    skill_block_end = src.index("if top_skill is None or top_score < _OPEN_ENDED_SCORE_THRESHOLD:")
-    skill_match_block = src[:skill_block_end]
-    assert "[TURN CONTEXT:" not in skill_match_block
+    src_text = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    assert "top_score >= _SKILL_INJECT_THRESHOLD" in src_text
+    # The skill-matched branch must be followed by 'pass' (no [TURN CONTEXT] injected)
+    # CR-036 three-zone structure: top branch is 'pass' when skill matched
+    assert "pass  # skill schema handles context" in src_text, \
+        "Skill-matched zone should use 'pass' — no [TURN CONTEXT] injected (FR-ORCH-034)"
 test("Chat: no [TURN CONTEXT] when skill matched >= 0.65 (AC-CR032-004)", t_no_turn_context_high_score)
 
 
@@ -1280,6 +1286,43 @@ def t_assemble_no_mode_block_conversational():
     assert "[RESPONSE MODE:" not in prompt_default, \
         "assemble_system_prompt() with default mode should not inject a mode block"
 test("ResponseMode: no mode block for conversational (AC-CR025-006)", t_assemble_no_mode_block_conversational)
+
+
+# ── CR-036 Capability Boundary Communication ──────────────────────────────────
+
+def t_capability_boundary_complete_miss():
+    """AC-CR036-001: complete-miss [TURN CONTEXT] references [CAPABILITY BOUNDARY]."""
+    import src.chat as chat_mod
+    src_text = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    # Verify the complete-miss branch exists and contains the capability boundary reference
+    assert "[CAPABILITY BOUNDARY]" in src_text, \
+        "Complete-miss [TURN CONTEXT] must reference [CAPABILITY BOUNDARY] (FR-ORCH-034)"
+    assert "nearest available forward path" in src_text, \
+        "Complete-miss [TURN CONTEXT] must instruct model to offer a forward path (FR-ORCH-034)"
+test("CapBoundary: complete-miss [TURN CONTEXT] references [CAPABILITY BOUNDARY] (AC-CR036-001)", t_capability_boundary_complete_miss)
+
+
+def t_capability_boundary_near_miss():
+    """AC-CR036-002: near-miss [TURN CONTEXT] names the skill and prohibits silent reduction."""
+    import src.chat as chat_mod
+    src_text = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    assert "Near-match" in src_text, \
+        "Near-miss [TURN CONTEXT] block missing from chat.py (FR-ORCH-034)"
+    assert "NOT silently deliver a reduced version" in src_text or \
+           "Do NOT silently deliver" in src_text, \
+        "Near-miss block must prohibit silent capability reduction (FR-ORCH-034)"
+    assert "skill_label" in src_text, \
+        "Near-miss block must reference the matched skill name (FR-ORCH-034)"
+test("CapBoundary: near-miss [TURN CONTEXT] names skill and prohibits silent reduction (AC-CR036-002)", t_capability_boundary_near_miss)
+
+
+def t_capability_boundary_skill_matched_pass():
+    """AC-CR036-003: skill-matched zone uses 'pass' — no capability [TURN CONTEXT]."""
+    import src.chat as chat_mod
+    src_text = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    assert "pass  # skill schema handles context" in src_text, \
+        "Skill-matched zone must use 'pass' (no [TURN CONTEXT]) — FR-ORCH-034"
+test("CapBoundary: skill-matched zone has no capability [TURN CONTEXT] (AC-CR036-003)", t_capability_boundary_skill_matched_pass)
 
 
 # ── Print results ─────────────────────────────────────────────────────────────

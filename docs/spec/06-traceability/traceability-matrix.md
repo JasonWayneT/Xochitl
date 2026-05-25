@@ -50,6 +50,8 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-ORCH-033` | `CR-025` | `CR-025` | `AC-CR025-005`, `AC-CR025-006` | `TASK-ORCH-025` | `src/context_manager.py` (`assemble_system_prompt(mode=...)` — mode block appended after skills hint) | smoke (AC-CR025-005–006) | implemented |
 | `NFR-ORCH-007` | `CR-025` | `CR-025` | — | `TASK-ORCH-025` | `src/chat.py` (`_agent_loop` — `self._current_mode` tracking, dim transition line) | manual | implemented |
 | `NFR-ORCH-008` | `CR-025` | `CR-025` | `AC-CR025-002` through `AC-CR025-004` | `TASK-ORCH-025` | `src/response_mode.py` (regex + frozenset only, no LLM call) | smoke (AC-CR025-002–004) | implemented |
+| `FR-ORCH-034` | `CR-036` | `CR-036` | `AC-CR036-001`, `AC-CR036-002`, `AC-CR036-003` | `TASK-ORCH-036` | `src/chat.py` (`_agent_loop` — three-zone if/elif/else for [TURN CONTEXT] injection) | smoke (AC-CR036-001–003) | implemented |
+| `NFR-ORCH-009` | `CR-036` | `CR-036` | `AC-CR036-001`, `AC-CR036-002`, `AC-CR036-003` | `TASK-ORCH-036` | `src/chat.py` (no new LLM call — uses existing `can_handle()` scores) | source inspection | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |
