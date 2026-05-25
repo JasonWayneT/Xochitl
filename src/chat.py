@@ -27,6 +27,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from src.action_disclosure import (
+    build_why_expansion,
+    format_compact_result,
+    infer_action_label,
+    is_why_request,
+)
+from src.terminal_output import format_skill_output
+
 try:
     from rich.console import Console
     from rich.live import Live
@@ -387,7 +395,7 @@ class XochitlChat:
         self._background_review = BackgroundReview()
         self._background_review.start()
 
-        # CR-036: controlled initiative engine (FR-INIT-001)
+        # CR-038: controlled initiative engine (FR-INIT-001)
         try:
             from src.initiative import InitiativeEngine
             self._initiative = InitiativeEngine()
@@ -431,7 +439,12 @@ class XochitlChat:
             from src.skills.web_lookup_skill import WebLookupSkill
             from src.skills.zettelkasten_skill import ZettelkastenSkill
             from src.skills.explorer_skill import ExplorerSkill  # FR-ORCH-041
-            self._builtin_skills = [BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill(), WeatherSkill(), WebLookupSkill(), ZettelkastenSkill(), ExplorerSkill()]
+            from src.skills.workflow_skill import WorkflowSkill  # FR-MEM-014 / CR-042
+            self._builtin_skills = [
+                BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill(),
+                WeatherSkill(), WebLookupSkill(), ZettelkastenSkill(), ExplorerSkill(),
+                WorkflowSkill(),
+            ]
 
         from src.skills.dynamic_skill import load_dynamic_skills
         return (self._builtin_skills or []) + load_dynamic_skills(self.current_project)
@@ -687,6 +700,13 @@ class XochitlChat:
             "timestamp": datetime.now().isoformat(),
         })
 
+        if is_why_request(user_input):
+            expansion = build_why_expansion(
+                self.session_history,
+                self.current_context.get("last_skill_name"),
+            )
+            return self._record(expansion)
+
         # ── 1. Handle pending permission response (yes/no for file ops) ──────
         if "pending_file_operation" in self.current_context:
             perm = self._handle_permission_response(user_input)
@@ -734,6 +754,8 @@ class XochitlChat:
             project=self.current_project,
             local_mode=(route == "local"),
         )
+        # CR-042: workflow executor needs live skill instances (FR-MEM-014)
+        self.current_context["_chat_skills"] = self.skills
 
         # ── 5. Dispatch: one keyword pass, then agent loop ────────────────────
         # The old triple-classification system (intent.py → _classify_intent →
@@ -770,6 +792,7 @@ class XochitlChat:
             response = self._agent_loop(user_input, cm, _status, _stream=_stream)
 
         response = self._maybe_offer_skill_creation(user_input, response)
+        response = self._maybe_offer_workflow_save(user_input, response)
         final = self._record(response)
 
         # Phase 3: queue this turn for passive background learning.
@@ -782,6 +805,12 @@ class XochitlChat:
 
         return final
 
+
+    def _emit_action_line(self, label: str) -> None:
+        from src.action_disclosure import action_summary
+        use_rich = not (os.environ.get("TERM") == "dumb" or getattr(self, "_no_rich", False))
+        console.print(action_summary(label), markup=use_rich)
+
     def _handle_web_lookup(self, user_input: str) -> str:
         """Run read-only web lookup directly without extra confirmation."""
         from src.skills.web_lookup_skill import WebLookupSkill
@@ -793,6 +822,7 @@ class XochitlChat:
         """Run structured weather first, then generic web lookup if the API fails."""
         from src.skills.weather_skill import WeatherSkill
 
+        self._emit_action_line(infer_action_label(user_input, "WeatherSkill"))
         result = WeatherSkill().execute(user_input, self.current_context, {"query": user_input})
         self.current_context["last_skill_name"] = "WeatherSkill"
         if self.current_context.get("last_skill_success") is False and self.current_context.get("weather_error_type") == "api":
@@ -853,7 +883,7 @@ class XochitlChat:
             system_prompt += _DRIFT_IDENTITY_REMINDER
             self._background_review.clear_drift()
 
-        # CR-036: drain pending proactive signals and inject as system hint (FR-INIT-001)
+        # CR-038: drain pending proactive signals and inject as system hint (FR-INIT-001)
         try:
             if getattr(self, "_initiative", None):
                 signals = self._initiative.drain()
@@ -866,6 +896,29 @@ class XochitlChat:
                         f"{sig.action_hint}\n"
                         "---"
                     )
+        except Exception:
+            pass
+
+        # CR-041: recall procedural workflow by intent (FR-MEM-010)
+        self.current_context.pop("active_workflow_id", None)
+        self.current_context.pop("active_workflow_name", None)
+        try:
+            from src.workflows import format_workflow_block, search_workflows_by_intent
+
+            _wf = search_workflows_by_intent(
+                user_input,
+                project=self.current_project,
+            )
+            if _wf:
+                system_prompt += (
+                    "\n\n---\n"
+                    + format_workflow_block(_wf)
+                    + "\n---"
+                )
+                self.current_context["active_workflow_id"] = _wf["id"]
+                self.current_context["active_workflow_name"] = _wf["name"]
+                if _status:
+                    _status.update(f"workflow: {_wf['name']}")
         except Exception:
             pass
 
@@ -1041,9 +1094,21 @@ class XochitlChat:
                 _events.emit("skill_started", {"skill": skill_name, "params": list(params.keys())})
                 if _status:
                     _status.update(f"running skill: {skill_name}")
+                self._emit_action_line(infer_action_label(user_input, skill_name))
                 tool_result = skill.execute(user_input, self.current_context, params)
                 _events.emit("skill_complete", {"skill": skill_name, "success": True})
                 _tool_calls_made = True
+                formatted = format_skill_output(tool_result)
+                self.current_context["last_skill_name"] = skill_name
+                self.current_context["last_action_summary"] = infer_action_label(user_input, skill_name)
+                # CR-041: record procedural workflow usage (FR-MEM-008)
+                _wf_id = self.current_context.get("active_workflow_id")
+                if _wf_id:
+                    try:
+                        from src.workflows import record_match_usage
+                        record_match_usage(int(_wf_id), success=True)
+                    except Exception:
+                        pass
 
                 # Implements FR-ORCH-009 — persist tool turn in session history
                 self.session_history.append({
@@ -1053,7 +1118,11 @@ class XochitlChat:
                     "timestamp": datetime.now().isoformat(),
                 })
 
-                _final = f"{visible}\n\n{tool_result}" if visible else tool_result
+                body = formatted or tool_result
+                if visible:
+                    _final = f"{visible}\n\n{format_compact_result(self.current_context['last_action_summary'], body)}"
+                else:
+                    _final = format_compact_result(self.current_context['last_action_summary'], body)
             else:
                 _final = visible or response_text
         else:
@@ -1178,6 +1247,19 @@ class XochitlChat:
         self.current_context["skill_creation_offered"] = True
         from src.skills.dynamic_skill import build_skill_creation_offer
         return response.rstrip() + build_skill_creation_offer(user_input, self.current_context)
+
+    def _maybe_offer_workflow_save(self, user_input: str, response: str) -> str:
+        """Offer saving a procedural workflow after multi-step tool use (FR-MEM-011)."""
+        if self.current_context.get("workflow_save_offered"):
+            return response
+        if self.current_context.get("last_skill_success") is False:
+            return response
+        tool_turns = sum(1 for msg in self.session_history if msg.get("role") == "tool")
+        if tool_turns < 2:
+            return response
+        self.current_context["workflow_save_offered"] = True
+        from src.workflows import build_workflow_save_offer
+        return response.rstrip() + build_workflow_save_offer(user_input)
 
     def _find_skill_by_name(self, name: str) -> Optional[Skill]:
         """Look up a skill by its class name or tool_definition name."""
@@ -1798,7 +1880,7 @@ class XochitlChat:
         if verb == "/budget":
             return self._governor.budget_detail()
 
-        # CR-036: dismiss a proactive signal category (FR-INIT-002)
+        # CR-038: dismiss a proactive signal category (FR-INIT-002)
         if verb == "/dismiss":
             try:
                 from src.initiative import InitiativeCategory
@@ -1817,6 +1899,61 @@ class XochitlChat:
             except Exception as exc:
                 return f"[dim]Dismiss failed: {exc}[/dim]"
 
+        # CR-041: procedural memory slash commands (FR-MEM-011)
+        if verb == "/workflows":
+            from src.workflows import list_workflows_formatted
+            return list_workflows_formatted(project=self.current_project)
+
+        if verb == "/workflow":
+            from src.workflows import (
+                execute_workflow,
+                get_workflow_by_name,
+                list_workflows_formatted,
+                save_workflow_from_session,
+            )
+            if not arg:
+                return (
+                    "Usage: /workflow save <name>  |  /workflow run <name>  |  /workflows\n"
+                    + list_workflows_formatted(project=self.current_project)
+                )
+            if arg.lower().startswith("save "):
+                wf_name = arg[5:].strip()
+                if not wf_name:
+                    return "Usage: /workflow save <name>"
+                trigger = self._last_user_message() or wf_name
+                try:
+                    wf_id = save_workflow_from_session(
+                        wf_name,
+                        trigger[:240],
+                        self.session_history,
+                        project=self.current_project,
+                        source="distilled",
+                        use_llm_distill=True,
+                    )
+                    return (
+                        f"Saved workflow **{wf_name}** (id {wf_id}, LLM-distilled). "
+                        f"Recall: mention '{trigger[:80]}' or `/workflow run {wf_name}`"
+                    )
+                except ValueError as exc:
+                    return f"[dim]Could not save workflow: {exc}[/dim]"
+                except Exception as exc:
+                    return f"[dim]Save failed: {exc}[/dim]"
+            if arg.lower().startswith("run "):
+                wf_name = arg[4:].strip()
+                if not wf_name:
+                    return "Usage: /workflow run <name>"
+                wf = get_workflow_by_name(wf_name)
+                if not wf:
+                    return f"No workflow named '{wf_name}'. Use `/workflows` to list."
+                self.current_context["_chat_skills"] = self.skills
+                return execute_workflow(
+                    wf,
+                    self._last_user_message() or wf_name,
+                    self.skills,
+                    self.current_context,
+                )
+            return f"[dim]Unknown /workflow subcommand. Use: save or run[/dim]"
+
         # A3 — structured daily brief (FR-CONV-003).
         # Pull-only: never surfaced unsolicited (alert-fatigue risk).
         if verb == "/brief":
@@ -1831,11 +1968,19 @@ class XochitlChat:
 
         available = (
             "/next <msg>  /retry  /authorize  /revoke  "
-            "/registry  /audit  /review  /research  /adversarial  /budget  /brief  /dismiss"
+            "/registry  /audit  /review  /research  /adversarial  /budget  /brief  "
+            "/dismiss  /workflows  /workflow save <name>  /workflow run <name>"
         )
         return f"[dim]{_FYI} — unknown command: {verb}\nAvailable: {available}[/dim]"
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _last_user_message(self) -> str:
+        """Return the most recent user message text in this session."""
+        for msg in reversed(self.session_history):
+            if msg.get("role") == "user":
+                return str(msg.get("content") or "")
+        return ""
 
     def _record(self, response: str) -> str:
         """Append response to session history and persist.

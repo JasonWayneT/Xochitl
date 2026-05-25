@@ -2139,10 +2139,10 @@ def t_milestone_m2_m3_nonempty_blocks():
 test("Milestone: M2 and M3 context blocks are non-empty (AC-CR035-005)", t_milestone_m2_m3_nonempty_blocks)
 
 
-# ── CR-036 — Controlled Initiative ───────────────────────────────────────────
+# ── CR-038 — Controlled Initiative ───────────────────────────────────────────
 
 def t_initiative_off_rejects_all():
-    """AC-CR036-001: ProactiveMode.OFF rejects signals regardless of category/confidence (FR-INIT-001)."""
+    """AC-CR038-001: ProactiveMode.OFF rejects signals regardless of category/confidence (FR-INIT-001)."""
     from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
     engine = InitiativeEngine(mode=ProactiveMode.OFF)
     engine.submit(ProactiveSignal(
@@ -2153,11 +2153,11 @@ def t_initiative_off_rejects_all():
     ))
     result = engine.drain()
     assert result == [], f"OFF mode must reject all signals, got: {result}"
-test("Initiative: OFF mode rejects all signals (AC-CR036-001)", t_initiative_off_rejects_all)
+test("Initiative: OFF mode rejects all signals (AC-CR038-001)", t_initiative_off_rejects_all)
 
 
 def t_initiative_errors_only_allows_system_failure():
-    """AC-CR036-002: ERRORS_ONLY allows SYSTEM_FAILURE signals above threshold (FR-INIT-001)."""
+    """AC-CR038-002: ERRORS_ONLY allows SYSTEM_FAILURE signals above threshold (FR-INIT-001)."""
     from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
     engine = InitiativeEngine(mode=ProactiveMode.ERRORS_ONLY)
     signal = ProactiveSignal(
@@ -2170,11 +2170,11 @@ def t_initiative_errors_only_allows_system_failure():
     result = engine.drain()
     assert len(result) == 1, f"ERRORS_ONLY must queue SYSTEM_FAILURE, got: {result}"
     assert result[0].category == InitiativeCategory.SYSTEM_FAILURE
-test("Initiative: ERRORS_ONLY allows SYSTEM_FAILURE above threshold (AC-CR036-002)", t_initiative_errors_only_allows_system_failure)
+test("Initiative: ERRORS_ONLY allows SYSTEM_FAILURE above threshold (AC-CR038-002)", t_initiative_errors_only_allows_system_failure)
 
 
 def t_initiative_errors_only_rejects_followup():
-    """AC-CR036-003: ERRORS_ONLY rejects IN_SESSION_FOLLOWUP (FR-INIT-001)."""
+    """AC-CR038-003: ERRORS_ONLY rejects IN_SESSION_FOLLOWUP (FR-INIT-001)."""
     from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
     engine = InitiativeEngine(mode=ProactiveMode.ERRORS_ONLY)
     engine.submit(ProactiveSignal(
@@ -2185,11 +2185,11 @@ def t_initiative_errors_only_rejects_followup():
     ))
     result = engine.drain()
     assert result == [], f"ERRORS_ONLY must reject IN_SESSION_FOLLOWUP, got: {result}"
-test("Initiative: ERRORS_ONLY rejects IN_SESSION_FOLLOWUP (AC-CR036-003)", t_initiative_errors_only_rejects_followup)
+test("Initiative: ERRORS_ONLY rejects IN_SESSION_FOLLOWUP (AC-CR038-003)", t_initiative_errors_only_rejects_followup)
 
 
 def t_initiative_low_confidence_rejected():
-    """AC-CR036-004: Signal below 0.80 confidence threshold is rejected (FR-INIT-001)."""
+    """AC-CR038-004: Signal below 0.80 confidence threshold is rejected (FR-INIT-001)."""
     from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
     engine = InitiativeEngine(mode=ProactiveMode.FULL)
     engine.submit(ProactiveSignal(
@@ -2200,11 +2200,11 @@ def t_initiative_low_confidence_rejected():
     ))
     result = engine.drain()
     assert result == [], f"Confidence 0.75 < 0.80 must be rejected, got: {result}"
-test("Initiative: below-threshold confidence (0.75) rejected (AC-CR036-004)", t_initiative_low_confidence_rejected)
+test("Initiative: below-threshold confidence (0.75) rejected (AC-CR038-004)", t_initiative_low_confidence_rejected)
 
 
 def t_initiative_dismissal_suppresses_after_3():
-    """AC-CR036-005: 3 dismissals suppress the category permanently (FR-INIT-002)."""
+    """AC-CR038-005: 3 dismissals suppress the category permanently (FR-INIT-002)."""
     from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
     engine = InitiativeEngine(mode=ProactiveMode.FULL)
     signal = ProactiveSignal(
@@ -2228,7 +2228,7 @@ def t_initiative_dismissal_suppresses_after_3():
     post_suppress = engine.drain()
     assert post_suppress == [], \
         f"After 3 dismissals, SYSTEM_FAILURE must be suppressed, got: {post_suppress}"
-test("Initiative: 3 dismissals suppress category permanently (AC-CR036-005)", t_initiative_dismissal_suppresses_after_3)
+test("Initiative: 3 dismissals suppress category permanently (AC-CR038-005)", t_initiative_dismissal_suppresses_after_3)
 
 
 # ── CR-037 — Safe Executor ────────────────────────────────────────────────────
@@ -2293,6 +2293,282 @@ def t_executor_output_truncated_at_cap():
     assert "[truncated]" in result.stdout, \
         "Truncated output must contain '[truncated]' marker"
 test("Executor: output >64KB is truncated with [truncated] marker (AC-CR037-005)", t_executor_output_truncated_at_cap)
+
+
+
+
+# -- CR-039 Terminal visual grammar --------------------------------------------
+
+def t_terminal_format_line_wrap():
+    from src.terminal_output import wrap_text
+    long = "word " * 30
+    lines = wrap_text(long, 40)
+    assert all(len(line) <= 42 for line in lines)
+
+def t_terminal_prefixes_plain():
+    from src.terminal_output import TerminalStatus, format_line
+    assert "-> " in format_line(TerminalStatus.ACTION, "test", rich=False)
+    assert "[ok] " in format_line(TerminalStatus.DONE, "done", rich=False)
+
+def t_terminal_format_step():
+    from src.terminal_output import format_step
+    s = format_step(1, 3, "Fetch", rich=False)
+    assert "[1/3]" in s
+
+def t_cli_json_today():
+    from click.testing import CliRunner
+    from src.cli import cli
+    import json
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--json", "today"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["command"] == "today"
+    assert "queue" in data["data"]
+
+test("Terminal: wrap_text respects width (AC-CR039-001)", t_terminal_format_line_wrap)
+test("Terminal: plain prefixes for done and action (AC-CR039-002)", t_terminal_prefixes_plain)
+test("Terminal: format_step includes n/m (AC-CR039-003)", t_terminal_format_step)
+test("CLI: today --json returns structured payload (AC-CR039-004)", t_cli_json_today)
+
+
+def t_cli_json_status():
+    from click.testing import CliRunner
+    from src.cli import cli
+    import json
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--json", "status"])
+    assert result.exit_code == 0
+    data = json.loads(result.output)
+    assert data["command"] == "status"
+    assert "projects" in data["data"]
+
+test("CLI: status --json returns projects and queue (AC-CR039-005)", t_cli_json_status)
+
+
+def t_cli_json_chat_interactive_only():
+    from click.testing import CliRunner
+    from src.cli import cli
+    import json
+    runner = CliRunner()
+    result = runner.invoke(cli, ["--json", "chat"])
+    data = json.loads(result.output)
+    assert data["command"] == "chat"
+    assert data["ok"] is False
+
+test("CLI: chat --json reports interactive_only (AC-CR039-006)", t_cli_json_chat_interactive_only)
+
+
+# -- CR-040 Compact reasoning disclosure ---------------------------------------
+
+def t_why_request_detected():
+    from src.action_disclosure import is_why_request
+    assert is_why_request("Why?")
+    assert is_why_request("how did you get that?")
+    assert not is_why_request("what is the weather")
+
+def t_action_summary_ascii():
+    from src.action_disclosure import action_summary
+    s = action_summary("Checking weather")
+    assert "Checking weather" in s
+
+def t_format_compact_result():
+    from src.action_disclosure import format_compact_result
+    out = format_compact_result("Checking weather", "72F and sunny")
+    assert "Checking weather" in out
+    assert "72F" in out
+
+test("Disclosure: is_why_request detects explicit why (AC-CR040-001)", t_why_request_detected)
+test("Disclosure: action_summary contains label (AC-CR040-002)", t_action_summary_ascii)
+test("Disclosure: format_compact_result includes action and body (AC-CR040-003)", t_format_compact_result)
+
+
+# -- CR-041 Procedural memory -------------------------------------------------
+
+def t_workflow_upsert_roundtrip():
+    import sqlite3
+    import json
+    from src.database import _ensure_workflows_table, upsert_workflow, get_workflow
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    _ensure_workflows_table(conn)
+    steps = [{"type": "skill", "skill": "NotionSkill", "description": "Sync inbox"}]
+    wid = upsert_workflow(conn, "weekly-review", "weekly review notion", steps)
+    row = get_workflow(conn, "weekly-review")
+    assert row is not None
+    assert int(row["id"]) == wid
+    assert json.loads(row["steps_json"])[0]["skill"] == "NotionSkill"
+
+def t_workflow_search_intent():
+    import sqlite3
+    from src.database import _ensure_workflows_table, upsert_workflow
+    from src.workflows import search_workflows_by_intent
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    _ensure_workflows_table(conn)
+    upsert_workflow(
+        conn,
+        "weekly-review",
+        "weekly review notion inbox triage",
+        [{"type": "skill", "description": "step1"}, {"type": "skill", "description": "step2"}],
+    )
+    conn.commit()
+    # Patch get_connection for this test by passing rows directly - search uses db.get_connection
+    # So seed real DB path is heavy; test score + search with monkeypatch
+    import src.workflows as wf_mod
+    fake = {
+        "id": 1,
+        "name": "weekly-review",
+        "trigger_pattern": "weekly review notion inbox triage",
+        "steps_json": "[]",
+        "expected_outputs": None,
+        "failure_modes": None,
+        "project": None,
+        "source": "user_defined",
+        "confidence": 0.8,
+        "last_used_at": None,
+        "success_count": 0,
+        "failure_count": 0,
+    }
+    class _Row:
+        def __getitem__(self, k):
+            return fake[k]
+    def _fake_list(conn, project=None, limit=50):
+        return [_Row()]
+    wf_mod.db.list_workflows = _fake_list
+    match = search_workflows_by_intent("run my weekly review")
+    assert match is not None
+    assert match["name"] == "weekly-review"
+
+def t_workflow_format_block_cap():
+    from src.workflows import format_workflow_block
+    wf = {
+        "name": "big",
+        "trigger_pattern": "x",
+        "steps": [{"description": "s" * 500} for _ in range(20)],
+    }
+    block = format_workflow_block(wf)
+    assert len(block) <= 2000
+
+def t_workflow_distill_steps():
+    from src.workflows import distill_steps_from_history
+    hist = [
+        {"role": "user", "content": "triage"},
+        {"role": "tool", "skill": "A", "content": "ok"},
+        {"role": "tool", "skill": "B", "content": "done"},
+    ]
+    steps = distill_steps_from_history(hist)
+    assert len(steps) >= 2
+
+test("Workflow: upsert and get round-trip (AC-CR041-001)", t_workflow_upsert_roundtrip)
+test("Workflow: search_workflows_by_intent match (AC-CR041-002)", t_workflow_search_intent)
+test("Workflow: format_workflow_block under cap (AC-CR041-003)", t_workflow_format_block_cap)
+test("Workflow: distill_steps_from_history (AC-CR041-004)", t_workflow_distill_steps)
+
+
+# -- CR-042 Procedural memory phase 2 -----------------------------------------
+
+def t_workflow_llm_distill():
+    from unittest.mock import patch
+    from src.workflows import distill_workflow_trajectory
+    hist = [
+        {"role": "user", "content": "weekly review"},
+        {"role": "tool", "skill": "NotionSkill", "content": "synced"},
+        {"role": "tool", "skill": "WeatherSkill", "content": "sunny"},
+    ]
+    class _Resp:
+        error = None
+        content = (
+            '{"trigger_pattern": "weekly review", "steps": ['
+            '{"skill": "NotionSkill", "description": "sync"}, '
+            '{"skill": "WeatherSkill", "description": "forecast"}], '
+            '"expected_outputs": "inbox clear", "failure_modes": "api down"}'
+        )
+    with patch("src.llm_interface.call_local", return_value=_Resp()):
+        out = distill_workflow_trajectory(hist, use_llm=True)
+    assert out.get("source") == "llm"
+    assert len(out.get("steps") or []) >= 2
+    assert "weekly" in (out.get("trigger_pattern") or "")
+
+def t_workflow_execute_order():
+    from src.workflows import execute_workflow
+    calls = []
+
+    class _Skill:
+        def __init__(self, name):
+            self._name = name
+        def execute(self, user_input, context, params=None):
+            calls.append(self._name)
+            return f"ok-{self._name}"
+        def tool_definition(self):
+            return {"name": self._name}
+
+    wf = {
+        "id": 9,
+        "name": "demo",
+        "steps": [
+            {"skill": "AlphaSkill", "description": "first"},
+            {"skill": "BetaSkill", "description": "second"},
+        ],
+    }
+    skills = [_Skill("AlphaSkill"), _Skill("BetaSkill")]
+    text = execute_workflow(wf, "run demo", skills, {})
+    assert calls == ["AlphaSkill", "BetaSkill"]
+    assert "demo" in text
+    assert "successfully" in text.lower()
+
+def t_workflow_hybrid_embed_boost():
+    import src.workflows as wf_mod
+    fake = {
+        "id": 7,
+        "name": "inbox-zero",
+        "trigger_pattern": "xyz obscure phrase",
+        "steps_json": "[]",
+        "expected_outputs": None,
+        "failure_modes": None,
+        "project": None,
+        "source": "distilled",
+        "confidence": 0.8,
+        "last_used_at": None,
+        "success_count": 0,
+        "failure_count": 0,
+    }
+    class _Row:
+        def __getitem__(self, k):
+            return fake[k]
+    def _fake_list(conn, project=None, limit=50):
+        return [_Row()]
+    class _Idx:
+        def search(self, query, project=None, limit=20):
+            return [{"workflow_id": 7, "name": "inbox-zero", "score": 0.92}]
+    wf_mod.db.list_workflows = _fake_list
+    from unittest.mock import patch
+    with patch("src.workflow_vector.WorkflowVectorIndex", _Idx):
+        match = wf_mod.search_workflows_by_intent(
+            "clear my email inbox",
+            use_embeddings=True,
+        )
+    assert match is not None
+    assert match["name"] == "inbox-zero"
+    assert match["match_score"] >= 0.5
+
+def t_workflow_vector_index_mock():
+    from unittest.mock import patch, MagicMock
+    from src.workflow_vector import WorkflowVectorIndex
+    idx = WorkflowVectorIndex()
+    with patch.object(idx, "_embed", return_value=[0.1, 0.2, 0.3]):
+        with patch("lancedb.connect") as mock_connect:
+            mock_db = MagicMock()
+            mock_connect.return_value = mock_db
+            mock_db.table_names.return_value = []
+            mock_db.create_table = MagicMock()
+            ok = idx.index_workflow(3, "test-wf", "run test workflow")
+    assert ok is True
+
+test("Workflow: LLM distill parses JSON (AC-CR042-002)", t_workflow_llm_distill)
+test("Workflow: execute_workflow step order (AC-CR042-003)", t_workflow_execute_order)
+test("Workflow: hybrid embed boosts recall (AC-CR042-004)", t_workflow_hybrid_embed_boost)
+test("Workflow: vector index upsert mocked (AC-CR042-001)", t_workflow_vector_index_mock)
 
 
 # ── Print results ─────────────────────────────────────────────────────────────

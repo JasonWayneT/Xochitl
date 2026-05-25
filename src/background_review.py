@@ -193,7 +193,7 @@ class BackgroundReview:
         self._drift_lock: threading.Lock = threading.Lock()
         # CR-034: implicit rephrase detection — previous user input buffer (FR-PREF-002)
         self._prev_user_input: str = ""
-        # CR-036: controlled initiative engine reference (FR-INIT-001)
+        # CR-038: controlled initiative engine reference (FR-INIT-001)
         # Set by XochitlChat after both objects are constructed.
         self._initiative_engine: Optional[object] = None
 
@@ -267,7 +267,7 @@ class BackgroundReview:
         with self._drift_lock:
             self._drift_detected = False
 
-    # ── CR-036: Controlled initiative public API ──────────────────────────────
+    # ── CR-038: Controlled initiative public API ──────────────────────────────
 
     def submit_initiative(self, signal: object) -> None:
         """Forward a ProactiveSignal to the initiative engine (FR-INIT-001).

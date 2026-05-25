@@ -1,7 +1,7 @@
 # TEST-INIT-001 — Controlled Initiative
 
 **Status**: implemented
-**CR**: CR-036
+**CR**: CR-038
 **Requirements covered**: FR-INIT-001, FR-INIT-002, FR-INIT-003, NFR-INIT-001
 
 ---
@@ -16,7 +16,7 @@ suppression), dismissal tracking, and drain semantics.
 
 ## Test cases
 
-### TC-INIT-001-001 — OFF mode rejects all (AC-CR036-001)
+### TC-INIT-001-001 — OFF mode rejects all (AC-CR038-001)
 
 **Method**: `InitiativeEngine.submit` with `mode=OFF`
 **Input**: High-confidence `SYSTEM_FAILURE` signal (confidence=0.90)
@@ -27,7 +27,7 @@ regardless of category or confidence.
 
 ---
 
-### TC-INIT-001-002 — ERRORS_ONLY allows SYSTEM_FAILURE (AC-CR036-002)
+### TC-INIT-001-002 — ERRORS_ONLY allows SYSTEM_FAILURE (AC-CR038-002)
 
 **Method**: `InitiativeEngine.submit` with `mode=ERRORS_ONLY`
 **Input**: `SYSTEM_FAILURE` signal with confidence=0.90
@@ -38,7 +38,7 @@ at adequate confidence. The signal must survive all gates.
 
 ---
 
-### TC-INIT-001-003 — ERRORS_ONLY rejects IN_SESSION_FOLLOWUP (AC-CR036-003)
+### TC-INIT-001-003 — ERRORS_ONLY rejects IN_SESSION_FOLLOWUP (AC-CR038-003)
 
 **Method**: `InitiativeEngine.submit` with `mode=ERRORS_ONLY`
 **Input**: `IN_SESSION_FOLLOWUP` signal with confidence=0.90
@@ -49,7 +49,7 @@ signal, even with high confidence, is silently discarded.
 
 ---
 
-### TC-INIT-001-004 — Low confidence signal rejected (AC-CR036-004)
+### TC-INIT-001-004 — Low confidence signal rejected (AC-CR038-004)
 
 **Method**: `InitiativeEngine.submit` with `mode=FULL`
 **Input**: `SYSTEM_FAILURE` signal with confidence=0.75 (< 0.80 threshold)
@@ -60,7 +60,7 @@ signals are logged at DEBUG only, never queued.
 
 ---
 
-### TC-INIT-001-005 — Dismissal auto-suppresses after 3 (AC-CR036-005)
+### TC-INIT-001-005 — Dismissal auto-suppresses after 3 (AC-CR038-005)
 
 **Method**: `InitiativeEngine.dismiss` x3, then `submit`
 **Setup**: `mode=FULL`, `SYSTEM_FAILURE`, confidence=0.90

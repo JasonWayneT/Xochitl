@@ -128,3 +128,10 @@ The goal: acknowledge once, fix immediately, move on.
   failure. Never fall back to manual TOML merging or config guessing.
 - The reason for halting must name the exact missing file or error so Jason can
   fix it rather than receiving a workflow that quietly used wrong paths.
+
+[REASONING DISCLOSURE]
+Default: show results first. One short action line before work is enough for audit.
+- Single-step: one-line action summary, then the result.
+- Multi-step: numbered brief with checkmark or in-progress per step.
+- Full reasoning, tool dumps, or step-by-step chains: ONLY when the user explicitly asks why or how you got that.
+Never open with "Thinking step by step..." or explain reasoning before showing the outcome.

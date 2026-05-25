@@ -40,9 +40,9 @@ The trade-off here is real and worth being honest about: a 14-billion-parameter 
 
 ---
 
-## How She Remembers: Three Kinds of Memory
+## How She Remembers: Four Kinds of Memory
 
-This is where Xochitl differs most sharply from typical AI assistants. There are three distinct memory systems, each solving a different problem.
+This is where Xochitl differs most sharply from typical AI assistants. There are four distinct memory systems, each solving a different problem.
 
 ### Layer 1 — Preferences
 
@@ -52,7 +52,7 @@ This isn't magic. It's a simple database row. But the effect, in practice, feels
 
 ### Layer 2 — Semantic Memory
 
-After conversations, a background process reviews what was said and writes observations to a vector database. A vector database stores ideas as mathematical coordinates — think of every concept as a point in a vast abstract space where similar ideas cluster near each other. "I like concise answers" and "keep it brief" would be nearby points even though they share no words.
+After conversations, a background process reviews what was said and writes observations to a **LanceDB** vector store at `~/.xochitl/lancedb/` (table `memories`). A vector database stores ideas as mathematical coordinates — think of every concept as a point in a vast abstract space where similar ideas cluster near each other. "I like concise answers" and "keep it brief" would be nearby points even though they share no words.
 
 When you start a new session and ask about your fitness app, Xochitl searches that space for nearby points — past decisions, design choices, preferences — and quietly injects the relevant ones into her thinking before she responds. She's not looking for exact keywords. She's finding similar *meaning*.
 
@@ -61,6 +61,20 @@ The most recent improvement here (called HyDE) solves a subtle problem: your per
 ### Layer 3 — Structured Facts
 
 The newest layer. A second pass in the background learning system extracts structured facts from conversations and stores them with a category (preference, project detail, constraint, goal, skill) and a confidence score from 0–100%. Low-confidence facts are stored but not acted on. High-confidence facts get proactively injected into context. This gives Xochitl a queryable knowledge base — not just a pile of text — so facts can be filtered, searched, and superseded when you change your mind.
+
+### Layer 4 — Procedural Memory (Workflows)
+
+Semantic memory answers *what you know*. Procedural memory answers *how you do things repeatedly*.
+
+When you complete a useful multi-step routine — triaging Notion, a weekly review, a research pass — Xochitl can offer to save it as a **workflow**: a named sequence of steps with a trigger phrase, expected outputs, and known failure modes. Workflows live in SQLite (`workflows` table). Recall uses **hybrid search**: keyword overlap plus a **separate** LanceDB table (`workflow_intents`) so workflow triggers are not mixed with personal facts.
+
+In chat:
+
+- Mentioning a trigger can inject a `[PROCEDURAL WORKFLOW]` block into her thinking (guidance, not silent auto-run).
+- `/workflow save <name>` distills the current session (local LLM when available, mechanical fallback otherwise).
+- `/workflow run <name>` executes each step through the matching skill, with visible step progress.
+
+This is the difference between remembering a fact ("I use PARA") and remembering a procedure ("every Monday I sync inbox, then queue, then brief").
 
 ---
 
@@ -94,7 +108,22 @@ Skills are discrete capabilities Xochitl invokes when a conversation calls for t
 
 **Notion Sync.** Two-way sync with your Notion workspace using the PARA methodology — Projects, Areas, Resources, Archive — for task organization that scales.
 
-**Dynamic Skills.** You can teach Xochitl new workflows, and she'll remember them as reusable skills in a local folder. If a multi-step process keeps repeating, she'll offer to turn it into a skill automatically.
+**Dynamic Skills.** You can teach Xochitl new one-off capabilities, and she'll persist them as reusable skills under `.xochitl/skills/`. If a multi-step process keeps repeating, she may offer to turn it into a dynamic skill — separate from procedural workflows, which are stored as named multi-step routines (see Layer 4).
+
+**Workflow execution.** `WorkflowSkill` runs saved procedures step-by-step when you use `/workflow run` or ask to run a saved routine with a strong intent match.
+
+**Bounded exploration.** `ExplorerSkill` chains read-only file reads and searches with strict step and loop limits — useful for "figure out how this repo is organized" without write permission on every step.
+
+---
+
+## How She Talks in the Terminal
+
+Recent work made the CLI easier to scan and safer to pipe:
+
+- **Visual grammar** — Lines use plain prefixes (`done`, `action`, `warn`, `fail`) and wrap near 80 columns so logs stay readable in narrow terminals.
+- **Compact disclosure** — Before a tool runs, you often see one line summarizing the action; results pair that label with the body. Ask "why did you…?" for a fuller expansion without dumping raw tool JSON by default.
+- **JSON mode** — `xochitl --json today` (and similar) emit structured output for scripts; interactive `chat` still requires a normal session.
+- **Session budget** — A token governor can shift routing toward local-only models as a long session grows, and warn before hard stop.
 
 ---
 
@@ -105,6 +134,10 @@ Xochitl applies one rule consistently: **reads are automatic, writes require you
 She can freely read files, search your codebase, and inspect directories without asking. The moment an action would change something — write a file, delete something, run a mutating command — she stops, presents a plan, and waits for your explicit go-ahead. No surprises.
 
 Path sandboxing adds another layer. She can only access directories you've explicitly authorized. Your SSH keys, your `.env` files with API credentials, your home directory — none of these are reachable unless you specifically grant access. The boundaries are intentional and firm.
+
+**Action governor.** Beyond chat-level approval, mutating shell commands go through an allowlist executor: reads may be automatic, deletes and non-allowlisted commands are denied or require confirmation. Path traversal in targets is rejected outright.
+
+**Controlled initiative.** She can surface proactive alerts (errors, follow-ups) when enabled, but categories you dismiss repeatedly are suppressed — so helpful nudges do not become notification spam.
 
 ---
 
@@ -129,3 +162,16 @@ The event bus added recently exists specifically to make a web interface transit
 When the web UI arrives, it subscribes to that channel and renders status indicators, tool call cards, and approval prompts in real time — without needing to reach into the terminal's internals. The terminal interface is just the current subscriber to a system that was designed from the start to serve more.
 
 The architecture is web-ready. The terminal is where she lives today.
+
+---
+
+## Related docs
+
+| Doc | Purpose |
+|---|---|
+| [README.md](README.md) | Architecture reference, commands, project layout |
+| [CAPABILITIES.md](CAPABILITIES.md) | Checklist of verified capabilities |
+| [docs/spec/02-requirements-registry.md](docs/spec/02-requirements-registry.md) | Formal `FR-*` requirements |
+| [AGENTS.md](AGENTS.md) | SDD rules for contributors and agents |
+
+**Verification (May 2026):** `python smoke_test.py` — 146 passed, 0 failed.

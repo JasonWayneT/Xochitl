@@ -153,6 +153,27 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_agent_traces_ts
                 ON agent_traces(ts DESC);
+
+            CREATE TABLE IF NOT EXISTS workflows (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                trigger_pattern TEXT NOT NULL,
+                steps_json TEXT NOT NULL,
+                expected_outputs TEXT,
+                failure_modes TEXT,
+                project TEXT,
+                source TEXT NOT NULL DEFAULT 'user_defined'
+                    CHECK(source IN ('user_defined', 'distilled')),
+                confidence REAL DEFAULT 0.8
+                    CHECK(confidence BETWEEN 0.0 AND 1.0),
+                last_used_at TIMESTAMP,
+                success_count INTEGER DEFAULT 0,
+                failure_count INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                superseded_by INTEGER REFERENCES workflows(id)
+            );
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_name_active
+                ON workflows(name) WHERE superseded_by IS NULL;
         """)
 
 
@@ -630,6 +651,165 @@ def get_memory_facts(
            ORDER BY confidence DESC, last_seen_at DESC LIMIT ?""",
         (min_confidence, limit),
     ).fetchall()
+
+
+# ── Procedural memory (workflows) — CR-041 ───────────────────────────────────
+
+def _ensure_workflows_table(conn: sqlite3.Connection) -> None:
+    """Create workflows table for upgraded databases (FR-MEM-008)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS workflows (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            trigger_pattern TEXT NOT NULL,
+            steps_json TEXT NOT NULL,
+            expected_outputs TEXT,
+            failure_modes TEXT,
+            project TEXT,
+            source TEXT NOT NULL DEFAULT 'user_defined'
+                CHECK(source IN ('user_defined', 'distilled')),
+            confidence REAL DEFAULT 0.8
+                CHECK(confidence BETWEEN 0.0 AND 1.0),
+            last_used_at TIMESTAMP,
+            success_count INTEGER DEFAULT 0,
+            failure_count INTEGER DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            superseded_by INTEGER REFERENCES workflows(id)
+        )
+    """)
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_name_active
+            ON workflows(name) WHERE superseded_by IS NULL
+    """)
+
+
+def upsert_workflow(
+    conn: sqlite3.Connection,
+    name: str,
+    trigger_pattern: str,
+    steps: list[dict],
+    *,
+    expected_outputs: Optional[str] = None,
+    failure_modes: Optional[str] = None,
+    project: Optional[str] = None,
+    source: str = "user_defined",
+    confidence: float = 0.8,
+) -> int:
+    """Insert or update an active workflow by name (FR-MEM-008).
+
+    Args:
+        conn: SQLite connection.
+        name: Unique workflow slug/display name.
+        trigger_pattern: Phrases that should recall this workflow.
+        steps: Ordered step dicts (skill/tool descriptions).
+        expected_outputs: Optional expected outcome text.
+        failure_modes: Optional known failure notes.
+        project: Optional project scope.
+        source: ``user_defined`` or ``distilled``.
+        confidence: Match confidence prior (0-1).
+
+    Returns:
+        Row id of the workflow.
+    """
+    _ensure_workflows_table(conn)
+    steps_json = json.dumps(steps, ensure_ascii=False)
+    existing = conn.execute(
+        "SELECT id FROM workflows WHERE LOWER(name)=LOWER(?) AND superseded_by IS NULL",
+        (name,),
+    ).fetchone()
+    if existing:
+        conn.execute(
+            """UPDATE workflows SET trigger_pattern=?, steps_json=?,
+               expected_outputs=?, failure_modes=?, project=?, source=?,
+               confidence=?
+               WHERE id=?""",
+            (
+                trigger_pattern,
+                steps_json,
+                expected_outputs,
+                failure_modes,
+                project,
+                source,
+                confidence,
+                existing["id"],
+            ),
+        )
+        return int(existing["id"])
+    cursor = conn.execute(
+        """INSERT INTO workflows
+           (name, trigger_pattern, steps_json, expected_outputs, failure_modes,
+            project, source, confidence)
+           VALUES (?,?,?,?,?,?,?,?)""",
+        (
+            name,
+            trigger_pattern,
+            steps_json,
+            expected_outputs,
+            failure_modes,
+            project,
+            source,
+            confidence,
+        ),
+    )
+    return int(cursor.lastrowid)
+
+
+def get_workflow(conn: sqlite3.Connection, name: str) -> Optional[sqlite3.Row]:
+    """Fetch an active workflow by name (FR-MEM-008)."""
+    _ensure_workflows_table(conn)
+    return conn.execute(
+        "SELECT * FROM workflows WHERE LOWER(name)=LOWER(?) AND superseded_by IS NULL",
+        (name,),
+    ).fetchone()
+
+
+def list_workflows(
+    conn: sqlite3.Connection,
+    project: Optional[str] = None,
+    limit: int = 50,
+) -> list[sqlite3.Row]:
+    """List active workflows, optionally filtered by project (FR-MEM-008)."""
+    _ensure_workflows_table(conn)
+    if project:
+        return conn.execute(
+            """SELECT * FROM workflows WHERE superseded_by IS NULL AND project=?
+               ORDER BY last_used_at IS NULL, last_used_at DESC, name ASC LIMIT ?""",
+            (project, limit),
+        ).fetchall()
+    return conn.execute(
+        """SELECT * FROM workflows WHERE superseded_by IS NULL
+           ORDER BY last_used_at IS NULL, last_used_at DESC, name ASC LIMIT ?""",
+        (limit,),
+    ).fetchall()
+
+
+def record_workflow_run(
+    conn: sqlite3.Connection,
+    workflow_id: int,
+    *,
+    success: bool,
+) -> None:
+    """Increment success or failure count and touch last_used_at (FR-MEM-008)."""
+    _ensure_workflows_table(conn)
+    col = "success_count" if success else "failure_count"
+    conn.execute(
+        f"""UPDATE workflows SET {col}={col}+1, last_used_at=CURRENT_TIMESTAMP
+            WHERE id=?""",
+        (workflow_id,),
+    )
+
+
+def supersede_workflow(conn: sqlite3.Connection, name: str) -> bool:
+    """Mark a workflow superseded (soft delete) by name."""
+    _ensure_workflows_table(conn)
+    row = get_workflow(conn, name)
+    if not row:
+        return False
+    conn.execute(
+        "UPDATE workflows SET superseded_by=id WHERE id=?",
+        (row["id"],),
+    )
+    return True
 
 
 # ── Observability ─────────────────────────────────────────────────────────────

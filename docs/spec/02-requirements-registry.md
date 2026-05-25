@@ -639,25 +639,25 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR035-005` | `FR-PREF-005` | M2/M3 blocks non-empty | `milestone_context_block(Milestone.M2)`, `milestone_context_block(Milestone.M3)` | — | Both return non-empty strings with `## Personalization` header | implemented |
 | `AC-CR035-006` | All CR-035 | Smoke tests | `python smoke_test.py` | — | 119 passed, 0 failed | implemented |
 
-### Controlled Initiative (CR-036)
+### Controlled Initiative (CR-038)
 
 | ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
 |---|---|---|---|---|---|---|---|
-| `FR-INIT-001` | functional | P1 | implemented | `InitiativeEngine.submit(signal)` rejects silently if: mode=OFF, mode=ERRORS_ONLY and category != SYSTEM_FAILURE, confidence < 0.80, or category suppressed; otherwise queues in `_pending` | `AC-CR036-001`, `AC-CR036-002`, `AC-CR036-003`, `AC-CR036-004` | `CR-036` | `src/initiative.py` — `InitiativeEngine.submit()`, `_CONFIDENCE_THRESHOLD=0.80`, `ProactiveMode` checks |
-| `FR-INIT-002` | functional | P1 | implemented | `InitiativeEngine.dismiss(category)` increments dismissal counter; after `_DISMISS_THRESHOLD (3)` the category is added to `_suppressed` and all future signals of that category are rejected | `AC-CR036-005` | `CR-036` | `src/initiative.py` — `dismiss()`, `_DISMISS_THRESHOLD=3`, `_suppressed` set |
-| `FR-INIT-003` | functional | P1 | implemented | `InitiativeEngine.drain() -> list[ProactiveSignal]` returns and clears `_pending`; second call returns `[]` | `AC-CR036-002` | `CR-036` | `src/initiative.py` — `drain()` |
-| `NFR-INIT-001` | non-functional | P1 | implemented | `submit()`, `dismiss()`, `drain()` never raise; below-threshold candidates logged at DEBUG only; `InitiativeEngine` wired to `BackgroundReview` via `_initiative_engine`; signals drained in `_agent_loop()` before LLM call | `AC-CR036-001` through `AC-CR036-005` | `CR-036` | `src/initiative.py` — try/except in all public methods; `src/chat.py` — drain+inject in `_agent_loop()`; `src/background_review.py` — `submit_initiative()` |
+| `FR-INIT-001` | functional | P1 | implemented | `InitiativeEngine.submit(signal)` rejects silently if: mode=OFF, mode=ERRORS_ONLY and category != SYSTEM_FAILURE, confidence < 0.80, or category suppressed; otherwise queues in `_pending` | `AC-CR038-001`, `AC-CR038-002`, `AC-CR038-003`, `AC-CR038-004` | `CR-038` | `src/initiative.py` — `InitiativeEngine.submit()`, `_CONFIDENCE_THRESHOLD=0.80`, `ProactiveMode` checks |
+| `FR-INIT-002` | functional | P1 | implemented | `InitiativeEngine.dismiss(category)` increments dismissal counter; after `_DISMISS_THRESHOLD (3)` the category is added to `_suppressed` and all future signals of that category are rejected | `AC-CR038-005` | `CR-038` | `src/initiative.py` — `dismiss()`, `_DISMISS_THRESHOLD=3`, `_suppressed` set |
+| `FR-INIT-003` | functional | P1 | implemented | `InitiativeEngine.drain() -> list[ProactiveSignal]` returns and clears `_pending`; second call returns `[]` | `AC-CR038-002` | `CR-038` | `src/initiative.py` — `drain()` |
+| `NFR-INIT-001` | non-functional | P1 | implemented | `submit()`, `dismiss()`, `drain()` never raise; below-threshold candidates logged at DEBUG only; `InitiativeEngine` wired to `BackgroundReview` via `_initiative_engine`; signals drained in `_agent_loop()` before LLM call | `AC-CR038-001` through `AC-CR038-005` | `CR-038` | `src/initiative.py` — try/except in all public methods; `src/chat.py` — drain+inject in `_agent_loop()`; `src/background_review.py` — `submit_initiative()` |
 
-### Acceptance criteria — Controlled Initiative (CR-036)
+### Acceptance criteria — Controlled Initiative (CR-038)
 
 | ID | Requirements | Scenario | Input | Pre-conditions | Expected | Status |
 |---|---|---|---|---|---|---|
-| `AC-CR036-001` | `FR-INIT-001` | OFF rejects all | `mode=OFF`, `SYSTEM_FAILURE`, conf=0.90 | — | `drain()` returns `[]` | implemented |
-| `AC-CR036-002` | `FR-INIT-001`, `FR-INIT-003` | ERRORS_ONLY allows failure | `mode=ERRORS_ONLY`, `SYSTEM_FAILURE`, conf=0.90 | — | `drain()` returns the signal | implemented |
-| `AC-CR036-003` | `FR-INIT-001` | ERRORS_ONLY rejects followup | `mode=ERRORS_ONLY`, `IN_SESSION_FOLLOWUP`, conf=0.90 | — | `drain()` returns `[]` | implemented |
-| `AC-CR036-004` | `FR-INIT-001` | Low confidence rejected | `mode=FULL`, `SYSTEM_FAILURE`, conf=0.75 | — | `drain()` returns `[]` | implemented |
-| `AC-CR036-005` | `FR-INIT-002` | 3 dismissals suppress | `dismiss()` x3, then `submit()` high-confidence | — | `drain()` returns `[]` | implemented |
-| `AC-CR036-006` | All CR-036 | Smoke tests | `python smoke_test.py` | — | 124 passed, 0 failed | implemented |
+| `AC-CR038-001` | `FR-INIT-001` | OFF rejects all | `mode=OFF`, `SYSTEM_FAILURE`, conf=0.90 | — | `drain()` returns `[]` | implemented |
+| `AC-CR038-002` | `FR-INIT-001`, `FR-INIT-003` | ERRORS_ONLY allows failure | `mode=ERRORS_ONLY`, `SYSTEM_FAILURE`, conf=0.90 | — | `drain()` returns the signal | implemented |
+| `AC-CR038-003` | `FR-INIT-001` | ERRORS_ONLY rejects followup | `mode=ERRORS_ONLY`, `IN_SESSION_FOLLOWUP`, conf=0.90 | — | `drain()` returns `[]` | implemented |
+| `AC-CR038-004` | `FR-INIT-001` | Low confidence rejected | `mode=FULL`, `SYSTEM_FAILURE`, conf=0.75 | — | `drain()` returns `[]` | implemented |
+| `AC-CR038-005` | `FR-INIT-002` | 3 dismissals suppress | `dismiss()` x3, then `submit()` high-confidence | — | `drain()` returns `[]` | implemented |
+| `AC-CR038-006` | All CR-038 | Smoke tests | `python smoke_test.py` | — | 129 passed, 0 failed | implemented |
 
 ### Safe Executor (CR-037)
 
@@ -701,6 +701,81 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR023-005` | `FR-ORCH-040`, `NFR-ORCH-015` | High-confidence stop | `execute()` with rich evidence (420-char snippets → confidence > 0.85 at step 3) | — | Stops before `_MAX_STEPS`; `_synthesize()` called without budget note | implemented |
 | `AC-CR023-006` | `FR-ORCH-041` | Registration | `XochitlChat.__new__` with `_builtin_skills=None` then inspect `.skills` | — | `ExplorerSkill` instance present in list | implemented |
 | `AC-CR023-007` | All CR-023 | Smoke tests | `python smoke_test.py` | — | 103 passed, 0 failed | implemented |
+
+### Terminal Visual Grammar (CR-039)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-UI-009` | functional | P1 | implemented | `src/terminal_output.py` provides semantic line formatting: prefixes (done/action/warn/fail), 2-space indent, 80-col wrap via `format_line`, `format_block`, `format_step`, `format_skill_output` | `AC-CR039-001`, `AC-CR039-002`, `AC-CR039-003` | `CR-039` | `src/terminal_output.py` |
+| `FR-UI-010` | functional | P1 | implemented | CLI group accepts `--json`; `today`, `queue`, `done` emit `cli_payload()` JSON | `AC-CR039-004` | `CR-039` | `src/cli.py` — `_json_mode()`, `print_json()` |
+| `NFR-UI-009` | non-functional | P2 | implemented | Wrapped operational lines target ≤80 characters for pipe/copy safety | `AC-CR039-001` | `CR-039` | `MAX_LINE_WIDTH = 80` in `terminal_output.py` |
+
+### Acceptance criteria — Terminal Visual Grammar (CR-039)
+
+| ID | Requirements | Scenario | Input | Pre-conditions | Expected | Status |
+|---|---|---|---|---|---|---|
+| `AC-CR039-001` | `FR-UI-009`, `NFR-UI-009` | Wrap width | `wrap_text()` on long string, width=40 | — | All lines ≤42 (continuation indent) | implemented |
+| `AC-CR039-002` | `FR-UI-009` | Plain prefixes | `format_line(..., rich=False)` | — | `[ok]` and `->` prefixes present | implemented |
+| `AC-CR039-003` | `FR-UI-009` | Step format | `format_step(1, 3, "Fetch")` | — | Output contains `[1/3]` | implemented |
+| `AC-CR039-004` | `FR-UI-010` | CLI JSON | `xochitl --json today` | — | Valid JSON with `command` and `data.queue` | implemented |
+| `AC-CR039-005` | `FR-UI-010` | Status JSON | `xochitl --json status` | — | JSON contains `projects` and `queue` | implemented |
+| `AC-CR039-006` | `FR-UI-010` | Chat JSON guard | `xochitl --json chat` | — | `ok: false`, `interactive_only` error | implemented |
+| `AC-CR039-007` | All CR-039 | Smoke tests | `python smoke_test.py` | — | 146 passed, 0 failed (suite cumulative) | implemented |
+
+### Compact Reasoning Disclosure (CR-040)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-044` | functional | P1 | implemented | One-line action summary printed before skill/weather execution via `_emit_action_line()` and `action_summary()` | `AC-CR040-002` | `CR-040` | `src/chat.py`, `src/action_disclosure.py` |
+| `FR-ORCH-045` | functional | P1 | implemented | Skill results use `format_compact_result()` to pair action label with formatted body | `AC-CR040-003` | `CR-040` | `src/chat.py` `_agent_loop()` skill path |
+| `FR-ORCH-046` | functional | P1 | implemented | `is_why_request()` short-circuits to `build_why_expansion()` in `process_message()` | `AC-CR040-001` | `CR-040` | `src/chat.py`, `prompts/system_xochitl.txt` `[REASONING DISCLOSURE]` |
+
+### Acceptance criteria — Compact Reasoning Disclosure (CR-040)
+
+| ID | Requirements | Scenario | Input | Pre-conditions | Expected | Status |
+|---|---|---|---|---|---|---|
+| `AC-CR040-001` | `FR-ORCH-046` | Why detection | `is_why_request("Why?")` vs normal query | — | True for why; False for weather query | implemented |
+| `AC-CR040-002` | `FR-ORCH-044` | Action summary | `action_summary("Checking weather")` | — | Label text in output | implemented |
+| `AC-CR040-003` | `FR-ORCH-045` | Compact result | `format_compact_result(action, body)` | — | Both action and body present | implemented |
+| `AC-CR040-004` | `FR-ORCH-046` | Prompt section | Read `system_xochitl.txt` | — | Contains `[REASONING DISCLOSURE]` | implemented |
+| `AC-CR040-005` | All CR-040 | Smoke tests | `python smoke_test.py` | — | 146 passed, 0 failed (suite cumulative) | implemented |
+
+### Procedural Memory (CR-041)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-MEM-008` | functional | P1 | implemented | `workflows` SQLite table + CRUD for reusable step sequences (separate from semantic memory) | `AC-CR041-001` | `CR-041` | `src/database.py` |
+| `FR-MEM-009` | functional | P1 | implemented | `search_workflows_by_intent()` top-1 hybrid match (keyword + `workflow_intents` embeddings, CR-042) when score >= 0.50 | `AC-CR041-002`, `AC-CR042-004` | `CR-041`, `CR-042` | `src/workflows.py`, `src/workflow_vector.py` |
+| `FR-MEM-010` | functional | P1 | implemented | `_agent_loop()` injects `[PROCEDURAL WORKFLOW]` block capped at 2000 chars | `AC-CR041-003` | `CR-041` | `src/chat.py` |
+| `FR-MEM-011` | functional | P1 | implemented | Multi-step offer + `/workflows` + `/workflow save <name>` (LLM distill, CR-042) + `/workflow run <name>` | `AC-CR041-004`, `AC-CR042-003` | `CR-041`, `CR-042` | `src/workflows.py`, `src/chat.py`, `src/skills/workflow_skill.py` |
+
+### Acceptance criteria — Procedural Memory (CR-041)
+
+| ID | Requirements | Scenario | Input | Pre-conditions | Expected | Status |
+|---|---|---|---|---|---|---|
+| `AC-CR041-001` | `FR-MEM-008` | Upsert round-trip | in-memory DB | — | Name and steps match | implemented |
+| `AC-CR041-002` | `FR-MEM-009` | Intent search | weekly review query | seeded workflow | Match returned | implemented |
+| `AC-CR041-003` | `FR-MEM-010` | Block cap | `format_workflow_block` | large steps | len <= 2000 | implemented |
+| `AC-CR041-004` | `FR-MEM-011` | Distill | 2 tool turns in history | — | >= 2 steps | implemented |
+| `AC-CR041-005` | All CR-041 | Smoke tests | `python smoke_test.py` | — | 146 passed, 0 failed (suite cumulative) | implemented |
+
+### Procedural Memory Phase 2 (CR-042)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-MEM-012` | functional | P2 | implemented | `WorkflowVectorIndex` LanceDB table `workflow_intents` for embedding recall (separate from `memories`) | `AC-CR042-001`, `AC-CR042-004` | `CR-042` | `src/workflow_vector.py` |
+| `FR-MEM-013` | functional | P2 | implemented | `distill_workflow_trajectory()` LLM distillation with mechanical fallback on save | `AC-CR042-002` | `CR-042` | `src/workflows.py` |
+| `FR-MEM-014` | functional | P2 | implemented | `execute_workflow()` + `WorkflowSkill` + `/workflow run <name>` | `AC-CR042-003` | `CR-042` | `src/workflows.py`, `src/skills/workflow_skill.py`, `src/chat.py` |
+
+### Acceptance criteria — Procedural Memory Phase 2 (CR-042)
+
+| ID | Requirements | Scenario | Input | Pre-conditions | Expected | Status |
+|---|---|---|---|---|---|---|
+| `AC-CR042-001` | `FR-MEM-012` | Vector search | mocked index | indexed workflow | workflow_id returned | implemented |
+| `AC-CR042-002` | `FR-MEM-013` | LLM distill | mocked `call_local` | JSON steps | parsed and used | implemented |
+| `AC-CR042-003` | `FR-MEM-014` | Executor | two mock skills | workflow dict | both steps run in order | implemented |
+| `AC-CR042-004` | `FR-MEM-012` | Hybrid search | embed hit + weak keyword | seeded row | combined score matches | implemented |
+| `AC-CR042-005` | All CR-042 | Smoke tests | `python smoke_test.py` | — | 146 passed, 0 failed | implemented |
 
 ## Requirement lifecycle notes
 

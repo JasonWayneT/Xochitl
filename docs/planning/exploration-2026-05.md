@@ -545,3 +545,34 @@ Research pass completed 2026-05-24. For each item: concrete best practices, anti
 - Executor (#19) carries the most risk — needs careful governor design complete before touching it.
 - Group 7 items B6–B8 (persona) and C9–C11 (relationship) will need a design conversation: what do the milestone boundaries look like in practice for Jason's actual usage patterns?
 - Streaming (#33) may surface router architecture choices — is Gemma4 local accessible via a streaming API? Worth a quick spike before committing to CR-031.
+
+---
+
+## Status
+
+**Updated**: 2026-05-25  
+**Smoke**: 146 passed, 0 failed (`python smoke_test.py`)  
+**Last CR completed**: CR-042 (procedural memory phase 2)
+
+### Completed (exploration items)
+
+All 36 exploration gap items are implemented.
+
+| CR | Item |
+|----|------|
+| CR-038 | Controlled initiative (renumbered from CR-036 collision) |
+| CR-039 | Terminal visual grammar (#31 / D12) |
+| CR-040 | Compact reasoning disclosure (#34 / E15) |
+| CR-041 | Procedural memory (#12) MVP |
+| CR-042 | Procedural memory phase 2: LLM distill, embedding recall, executor |
+
+### Outstanding
+
+None from the original 36-item gap analysis.
+
+### Handoff gotchas (paste at session start)
+
+- Windows cp1252: smoke `test("label", fn)` strings must be **ASCII only** (`>=`, `->`, not Unicode).
+- `src/governor.py` = token budget; `src/executor.py` = action permission (`ActionGovernor`); `src/initiative.py` = proactive policy.
+- `preferences` table columns: `preference_key`, `preference_value` (not `key`/`value`).
+- Capability boundary remains **CR-036**; controlled initiative is **CR-038**.

@@ -13,10 +13,11 @@ Xochitl (pronounced "so-CHEEL") is a terminal-native personal AI system — mode
 - **Terminal UI**: `rich`
 - **Database**: SQLite (local task storage and session history)
 - **Notion**: `notion-client` library
-- **LLM**: Tiered routing via `src/router.py`
-  - **Local**: `gemma4-e4b` (Task management, simple QA, file reads)
-  - **Cloud**: Gemini 1.5 Pro / Flash or Claude (Complex code, architecture, BMAD)
-- **Vector DB**: ChromaDB for long-term memory
+- **LLM**: Tiered routing via `src/router.py` (no direct model calls from skills/chat)
+  - **Local**: `gemma2:2b` router, `phi4:14b-q4_K_M` primary, `qwen2.5-coder` for coding
+  - **Cloud**: Gemini 2.0 Flash / Claude (complex code, architecture, BMAD)
+- **Vector DB**: LanceDB at `~/.xochitl/lancedb/` (`memories`, `workflow_intents`)
+- **User docs**: `CAPABILITIES.md`, `XOCHITL_EXPLAINED.md`
 
 ## Agent Operating Rules
 
@@ -35,29 +36,33 @@ Every code change must cite at least one requirement ID (`FR-*`, `NFR-*`, `ARCH-
 ```
 ./
 ├── src/
-│   ├── cli.py                 # Entry point
-│   ├── chat.py                # Conversational loop & intent classification
-│   ├── router.py              # TieredRouter (Local vs Cloud)
-│   ├── task_manager.py        # Task CRUD & queue management
-│   ├── notion_sync.py         # Notion integration
-│   ├── database.py            # SQLite schema
+│   ├── cli.py                 # Entry point; --json for data commands
+│   ├── chat.py                # Conversational loop, skills, slash commands
+│   ├── router.py              # TieredRouter (all LLM calls)
+│   ├── context_manager.py     # System prompt assembly
+│   ├── database.py            # SQLite schema (queue, workflows, preferences, …)
+│   ├── memory.py              # LanceDB semantic memory (HyDE)
+│   ├── workflows.py           # Procedural memory (CR-041/042)
+│   ├── workflow_vector.py     # workflow_intents embedding index
+│   ├── terminal_output.py     # Terminal visual grammar (CR-039)
+│   ├── action_disclosure.py   # Reasoning disclosure (CR-040)
+│   ├── governor.py            # SessionGovernor token budget (not ActionGovernor)
+│   ├── executor.py            # ActionGovernor / SafeExecutor (CR-037)
+│   ├── initiative.py          # Controlled initiative (CR-038)
+│   ├── background_review.py   # Background learning daemon
 │   ├── security.py            # Path sandboxing
-│   ├── events.py              # Thread-safe event bus for web SSE layer (FR-ORCH-020)
-│   └── skills/                # Pipeline logic
-│       ├── bmad_skill.py      # Project init & BMAD artifacts
-│       ├── sdd_skill.py       # Spec generation & requirement CRUD
-│       └── code_skill.py      # Code generation & scaffolding
-├── docs/spec/                 # Xochitl-as-a-product SDD specs
+│   ├── events.py              # Event bus (FR-ORCH-020)
+│   └── skills/                # BMAD, SDD, Code, Notion, Weather, Web, Zettel, Explorer, Workflow, …
+├── docs/spec/                 # SDD chain (CRs are primary feature specs)
 │   ├── 00-project-constitution.md
 │   ├── 01-bmad-intake.md
 │   ├── 02-requirements-registry.md
-│   ├── 03-feature-specs/
-│   ├── 04-design-specs/
-│   ├── 05-change-requests/
+│   ├── 05-change-requests/    # CR-038–042: initiative, UI grammar, disclosure, procedural mem
 │   ├── 06-traceability/traceability-matrix.md
-│   ├── 07-decisions/
 │   ├── 08-test-specs/
 │   └── 09-known-issues/
+├── CAPABILITIES.md            # User-facing capability manifest
+├── XOCHITL_EXPLAINED.md       # Conceptual guide
 ├── projects/                  # Applications built WITH Xochitl
 │   └── <project-id>/
 │       ├── .project-meta.yml  # Project metadata
@@ -89,7 +94,10 @@ xochitl chat            # (Default) Interactive conversational session
 xochitl plan "<name>"   # Decompose project into tasks
 xochitl sync            # Push completed tasks to Notion
 xochitl pull            # Fetch latest from Notion
+xochitl --json today    # Machine-readable CLI output (CR-039)
 ```
+
+In-chat: `/workflows`, `/workflow save <name>`, `/workflow run <name>`, `/brief`, `/budget`, `/dismiss`
 
 ## Architecture: Key Invariants
 
@@ -100,9 +108,10 @@ xochitl pull            # Fetch latest from Notion
 
 ## Development & Testing
 
-- **Smoke Test**: `python smoke_test.py` (Unit tests for pipeline components)
+- **Smoke Test**: `python smoke_test.py` — 146 tests (May 2026); ASCII-only test labels on Windows
 - **E2E Test**: `python end_to_end_test.py` (Mocked full pipeline flow)
 - **Linting**: No raw SQL outside `database.py`; all LLM calls via `router.py`.
+- **Governor vs executor**: `governor.py` = token budget; `executor.py` = file/shell action permission.
 
 ## Code Quality Standards
 
@@ -122,7 +131,7 @@ Every commit must include a scope from the closed list below. Scope-less commits
 | `sdd` | SDD pipeline (BMAD intake, spec gen, code gen) |
 | `orch` | Orchestration (`context_manager.py`, `chat.py`, `router.py`, `background_review.py`) |
 | `skill` | All files under `src/skills/` |
-| `mem` | Memory and retrieval (`memory.py`, ChromaDB layer) |
+| `mem` | Memory and retrieval (`memory.py`, `workflows.py`, LanceDB) |
 | `ztk` | Zettelkasten note engine |
 | `dev` | Standards, tooling, CI, documentation changes |
 

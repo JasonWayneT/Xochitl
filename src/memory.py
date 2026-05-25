@@ -5,6 +5,7 @@
 # Implements FR-MEM-004 (Vector DB Semantic Search — Tier 3, LanceDB)
 # Implements FR-MEM-005 (Reranking Protocol — Qwen3-Reranker via Ollama, graceful fallback)
 # Implements FR-MEM-006 (Session Archiving — SQLite sessions → ~/.xochitl/sessions/*.md)
+# Procedural workflows (FR-MEM-008–011): see src/workflows.py + workflows table (CR-041)
 # Implements NFR-PERF-001 (Tier 1/2 latency < 100ms)
 # Implements NFR-PERF-002 (Tier 3 latency < 550ms)
 # Implements NFR-REL-001 (Atomic write before embedding)

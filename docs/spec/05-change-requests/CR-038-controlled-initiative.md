@@ -1,9 +1,12 @@
-# CR-036 — Controlled Initiative
+# CR-038 — Controlled Initiative
 
 **Status**: implemented
 **Date**: 2026-05-25
 **Priority**: 13 (Group 6 — Autonomy Layer)
 **Source**: `docs/planning/exploration-2026-05.md` item #16
+
+> **Note:** Renumbered from CR-036 to resolve ID collision with
+> `CR-036-capability-boundary-comms.md` (E17). Capability boundary remains CR-036.
 
 ---
 
@@ -49,12 +52,12 @@ usage and trust (arxiv 2509.09309) unless they follow a strict policy:
 
 | ID | Scenario | Expected |
 |---|---|---|
-| `AC-CR036-001` | `InitiativeEngine(mode=OFF).submit(high-confidence SYSTEM_FAILURE)` | Signal not queued; `drain()` returns `[]` |
-| `AC-CR036-002` | `InitiativeEngine(mode=ERRORS_ONLY).submit(high-confidence SYSTEM_FAILURE)` | Signal queued; `drain()` returns it |
-| `AC-CR036-003` | `InitiativeEngine(mode=ERRORS_ONLY).submit(high-confidence IN_SESSION_FOLLOWUP)` | Signal not queued; `drain()` returns `[]` |
-| `AC-CR036-004` | `submit(signal with confidence=0.75)` | Rejected; `drain()` returns `[]` |
-| `AC-CR036-005` | `dismiss(SYSTEM_FAILURE)` called 3 times, then `submit(high-confidence SYSTEM_FAILURE)` | Signal not queued (suppressed); `drain()` returns `[]` |
-| `AC-CR036-006` | `python smoke_test.py` | 124 passed, 0 failed |
+| `AC-CR038-001` | `InitiativeEngine(mode=OFF).submit(high-confidence SYSTEM_FAILURE)` | Signal not queued; `drain()` returns `[]` |
+| `AC-CR038-002` | `InitiativeEngine(mode=ERRORS_ONLY).submit(high-confidence SYSTEM_FAILURE)` | Signal queued; `drain()` returns it |
+| `AC-CR038-003` | `InitiativeEngine(mode=ERRORS_ONLY).submit(high-confidence IN_SESSION_FOLLOWUP)` | Signal not queued; `drain()` returns `[]` |
+| `AC-CR038-004` | `submit(signal with confidence=0.75)` | Rejected; `drain()` returns `[]` |
+| `AC-CR038-005` | `dismiss(SYSTEM_FAILURE)` called 3 times, then `submit(high-confidence SYSTEM_FAILURE)` | Signal not queued (suppressed); `drain()` returns `[]` |
+| `AC-CR038-006` | `python smoke_test.py` | 129 passed, 0 failed |
 
 ---
 
@@ -119,11 +122,11 @@ as the first line of its response before handling the user's query.
 
 ## Implementation tasks
 
-- [x] Write `CR-036-controlled-initiative.md`
+- [x] Write `CR-038-controlled-initiative.md` (renumbered from CR-036)
 - [x] `src/initiative.py` (NEW) — `ProactiveMode`, `InitiativeCategory`, `ProactiveSignal`, `InitiativeEngine`
 - [x] `src/background_review.py` (UPDATE) — `_initiative_engine` field; `submit_initiative()` public method
 - [x] `src/chat.py` (UPDATE) — `InitiativeEngine` in `__init__()`; drain + inject in `_agent_loop()`; `/dismiss` slash command
 - [x] `docs/spec/02-requirements-registry.md` — FR-INIT-001, FR-INIT-002, FR-INIT-003, NFR-INIT-001
 - [x] `docs/spec/08-test-specs/TEST-INIT-001-controlled-initiative.md`
-- [x] `smoke_test.py` — 5 tests (AC-CR036-001 through AC-CR036-005)
+- [x] `smoke_test.py` — 5 tests (AC-CR038-001 through AC-CR038-005)
 - [x] `docs/spec/06-traceability/traceability-matrix.md`

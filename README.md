@@ -2,6 +2,9 @@
 
 Terminal-native personal AI system. Manages personal tasks via Notion, runs a BMAD → SDD → Code Generation pipeline for building new applications, and maintains persistent memory across sessions. Primary inference runs locally via Ollama; cloud models (Gemini, Claude) are called selectively for high-complexity tasks.
 
+- **[CAPABILITIES.md](CAPABILITIES.md)** — verified feature manifest  
+- **[XOCHITL_EXPLAINED.md](XOCHITL_EXPLAINED.md)** — conceptual guide (why/how, not a command manual)
+
 ---
 
 ## Tech Stack
@@ -18,7 +21,7 @@ Terminal-native personal AI system. Manages personal tasks via Notion, runs a BM
 | Embeddings | `nomic-embed-text` (default), `bge-m3` (recommended) |
 | Cloud fallback | Gemini 2.0 Flash / Claude (optional, API key required) |
 | Relational DB | SQLite |
-| Vector DB | ChromaDB |
+| Vector DB | LanceDB (`~/.xochitl/lancedb/`) — `memories` + `workflow_intents` tables |
 | Task integration | Notion API (`notion-client`) |
 
 ---
@@ -45,7 +48,7 @@ System prompt assembled from five layers before every LLM call:
 | 1 | Identity Guard — SOUL.md persona + hardcoded language/behavior rules | Never |
 | 2 | Preflight facts — CWD, active project, WIP queue count, platform | Never |
 | 3 | Preferences — active user preferences from `preferences` table | Yes |
-| 4 | Semantic memories — top-k ChromaDB recall (HyDE) | Yes |
+| 4 | Semantic memories — top-k LanceDB recall (HyDE) | Yes |
 | 5 | Active skill schema — injected when skill scores ≥ 0.65 for this turn | Yes |
 
 When total token count exceeds 75% of the model limit, layers 3–5 are compacted proportionally. Layers 1–2 are never modified.
@@ -58,14 +61,21 @@ When total token count exceeds 75% of the model limit, layers 3–5 are compacte
 |---|---|
 | `queue` | WIP task queue, max 3 rows |
 | `session_history` | Full conversation transcripts |
-| `preferences` | Structured user preferences (key/value + context) |
+| `preferences` | Structured user preferences (`preference_key`, `preference_value`, context) |
 | `memory_facts` | Structured background facts — category, confidence (0–1), source, project, superseded_by |
+| `workflows` | Procedural memory — reusable step sequences (CR-041) |
 
-**ChromaDB (`src/memory.py`):**
+**LanceDB (`src/memory.py`, `src/workflow_vector.py`):**
 
-- Collection: `xochitl_memory`
-- Recall uses HyDE: `_hyde_embed()` generates a hypothetical document via the router model before embedding, improving match quality for declarative personal notes over naive question embedding
-- Falls back to direct `_embed(query)` if the model call fails
+- Table `memories` — semantic personal recall (HyDE: hypothetical answer embedded before search; falls back to direct query embedding)
+- Table `workflow_intents` — separate embedding index for procedural workflow triggers (CR-042); not mixed with semantic facts
+- Stored under `~/.xochitl/lancedb/`
+
+**Procedural workflows (`src/workflows.py`, `src/skills/workflow_skill.py`):**
+
+- `search_workflows_by_intent()` — hybrid keyword + embedding match (threshold 0.50)
+- `_agent_loop()` injects `[PROCEDURAL WORKFLOW]` block when a workflow matches
+- `/workflow save <name>` — LLM-distilled steps from session; `/workflow run <name>` — execute via skills
 
 **BackgroundReview daemon (`src/background_review.py`):**
 
@@ -100,6 +110,18 @@ Terminal UI calls `_status.update()` directly for low latency. The event bus is 
 
 `XochitlChat.start()` tracks `_consecutive_staged`. If 6 or more staged messages fire without a real `Prompt.ask()` turn, the staged queue is cleared and a warning is printed. Counter resets on real user input. Prevents runaway skill-chain loops.
 
+### Terminal output (`src/terminal_output.py`, CR-039)
+
+Semantic line prefixes (`done`, `action`, `warn`, `fail`), 80-column wrap, and `format_step(i, n, label)` for multi-step progress. Skill results can use compact action+body pairing via `src/action_disclosure.py` (CR-040).
+
+### Runtime governance
+
+| Module | Role |
+|---|---|
+| `src/governor.py` | Session token budget (`SessionGovernor`) — progressive local-only routing |
+| `src/executor.py` | Action permission (`ActionGovernor`, `SafeExecutor`) — read auto, write/exec gated |
+| `src/initiative.py` | Proactive alerts by category (CR-038) |
+
 ---
 
 ## Functional Breakdown
@@ -115,6 +137,9 @@ Terminal UI calls `_status.update()` directly for low latency. The event bus is 
 | `xochitl sync` | Push completed tasks to Notion |
 | `xochitl pull` | Fetch latest from Notion |
 | `xochitl authorize <path>` | Grant file access to a directory |
+| `xochitl --json <cmd>` | JSON output for `today`, `status`, `queue`, `sync`, `pull`, `tasks`, etc. |
+
+**In-chat (selection):** `/workflows`, `/workflow save <name>`, `/workflow run <name>`, `/brief`, `/budget`, `/dismiss`
 
 ### Skills
 
@@ -127,7 +152,10 @@ Terminal UI calls `_status.update()` directly for low latency. The event bus is 
 | `WeatherSkill` | Weather queries | Open-Meteo geocoding + forecast; no API key required |
 | `WebLookupSkill` | Live information queries | DuckDuckGo search + page fetch; URL normalization for redirect handling |
 | `NotionSkill` | "sync tasks", "pull from notion" | Notion PARA sync |
-| `DynamicSkill` | Any `.xochitl/skills/` directory | User-defined reusable workflows; auto-proposed after repeating multi-step patterns |
+| `ExplorerSkill` | Investigative / research phrasing | Bounded read-only file exploration |
+| `OrchestratorSkill` | Multi-step coordination | Delegates across skills |
+| `WorkflowSkill` | `/workflow run`, strong workflow match | Executes saved procedural workflows |
+| `DynamicSkill` | Any `.xochitl/skills/` directory | User-defined skills; auto-proposed after repeating multi-step patterns |
 
 ---
 
@@ -182,11 +210,17 @@ OLLAMA_MAX_LOADED_MODELS=2
 │   ├── context_manager.py       # System prompt assembly (5-layer stack)
 │   ├── context_loader.py        # History trim, compression, prompt building
 │   ├── database.py              # SQLite schema, helpers, memory_facts
-│   ├── memory.py                # ChromaDB VectorMemory, HyDE recall
+│   ├── memory.py                # LanceDB semantic memory, HyDE recall
+│   ├── workflows.py             # Procedural memory search, distill, execute
+│   ├── workflow_vector.py       # LanceDB workflow_intents index
+│   ├── terminal_output.py       # Terminal visual grammar (CR-039)
+│   ├── action_disclosure.py     # Compact reasoning disclosure (CR-040)
+│   ├── governor.py              # Session token budget
+│   ├── executor.py              # ActionGovernor / SafeExecutor
+│   ├── initiative.py            # Controlled proactive alerts
 │   ├── background_review.py     # BackgroundReview daemon
 │   ├── events.py                # XochitlEventEmitter — web SSE groundwork
 │   ├── security.py              # Path sandboxing
-│   ├── intent.py                # Intent classification types
 │   ├── llm_interface.py         # Provider abstraction (local / cloud)
 │   ├── model_manager.py         # Model selection logic
 │   └── skills/
@@ -199,7 +233,12 @@ OLLAMA_MAX_LOADED_MODELS=2
 │       ├── weather_skill.py
 │       ├── web_lookup_skill.py
 │       ├── notion_skill.py
+│       ├── explorer_skill.py
+│       ├── orchestrator_skill.py
+│       ├── workflow_skill.py
 │       └── dynamic_skill.py
+├── CAPABILITIES.md              # Capability manifest (user-facing)
+├── XOCHITL_EXPLAINED.md         # Conceptual learning guide
 ├── docs/spec/                   # Requirements registry, CRs, traceability matrix
 │   ├── 02-requirements-registry.md
 │   ├── 05-change-requests/
@@ -211,7 +250,7 @@ OLLAMA_MAX_LOADED_MODELS=2
 ├── .env.example                 # All configurable env vars with inline comments
 ├── SOUL.md.example              # Persona template
 ├── conversation.config.example.yaml
-├── smoke_test.py                # 27-test unit suite
+├── smoke_test.py                # Unit/regression suite (146 tests, May 2026)
 └── end_to_end_test.py           # Mocked full pipeline flow
 ```
 
@@ -220,7 +259,7 @@ OLLAMA_MAX_LOADED_MODELS=2
 ## Testing
 
 ```powershell
-python smoke_test.py        # 27 unit tests — expected: 27 passed, 0 failed
+python smoke_test.py        # Expected: 146 passed, 0 failed
 python end_to_end_test.py   # Mocked full pipeline flow
 ```
 
