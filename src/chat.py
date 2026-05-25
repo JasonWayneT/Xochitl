@@ -369,6 +369,10 @@ class XochitlChat:
         # so start() knows to skip _stream_response() to avoid double-printing.
         self._last_response_streamed: bool = False
 
+        # CR-025: response mode tracking — tracks mode between turns for transition
+        # announcements. Starts as conversational (default). (FR-ORCH-032)
+        self._current_mode: str = "conversational"
+
         # FR-ORCH-025: session token budget governor — tracks estimated spend and
         # applies progressive routing restrictions (FULL → PREFER_LOCAL → LOCAL_ONLY → HARD_STOP).
         self._governor = SessionGovernor()
@@ -750,7 +754,24 @@ class XochitlChat:
         """
         _events.emit("routing_started", {"query": user_input[:100]})
 
-        system_prompt = cm.assemble_system_prompt()
+        # CR-025: infer response mode and announce transitions (FR-ORCH-032, NFR-ORCH-007)
+        try:
+            from src.response_mode import infer_mode as _infer_mode, MODE_CONVERSATIONAL
+            _new_mode = _infer_mode(user_input)
+            if _new_mode != self._current_mode:
+                _mode_labels = {
+                    "operator": "→ operator mode",
+                    "report": "→ report mode",
+                    "conversational": "→ conversational mode",
+                }
+                console.print(
+                    f"[dim]{_mode_labels.get(_new_mode, f'→ {_new_mode} mode')}[/dim]"
+                )
+            self._current_mode = _new_mode
+        except ImportError:
+            _new_mode = "conversational"
+
+        system_prompt = cm.assemble_system_prompt(mode=_new_mode)
         messages = cm.assemble_messages(self._clean_history(), user_input, tag_provenance=True)
 
         # ── Phase 2: deterministic skill scoring pre-turn ─────────────────────

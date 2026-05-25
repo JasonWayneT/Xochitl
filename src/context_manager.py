@@ -698,7 +698,7 @@ class ContextManager:
     def _total_tokens(self, *texts: str) -> int:
         return sum(_estimate_tokens(t) for t in texts if t)
 
-    def assemble_system_prompt(self) -> str:
+    def assemble_system_prompt(self, mode: str = "conversational") -> str:
         """Build the full system prompt with token budget enforcement.
 
         Priority order (highest → lowest priority when compacting):
@@ -716,6 +716,12 @@ class ContextManager:
 
         Skills are NOT included in the global prompt — Phase 2 injects them per-turn
         via can_handle() scoring when a skill scores above threshold.
+
+        Args:
+            mode: Response mode for this turn — one of ``"conversational"``
+                (default), ``"operator"``, or ``"report"``. A non-conversational
+                mode appends a per-turn behavior block after the skills hint.
+                Implements FR-ORCH-033 (CR-025).
         """
         # ── Language hard-guard — MUST be the very first tokens the model sees ──
         # Small local models (Gemma 4B) ignore language rules buried late in a
@@ -769,6 +775,14 @@ class ContextManager:
             "and more. They will be provided when relevant to your request."
         )
 
+        # CR-025: per-turn response mode block (FR-ORCH-033).
+        # Empty string for conversational mode — no extra block needed.
+        try:
+            from src.response_mode import mode_block as _mode_block
+            _rmode_block = _mode_block(mode)
+        except ImportError:
+            _rmode_block = ""
+
         # behavior_config_text is now part of guard_text — exclude from budget total.
         total = self._total_tokens(
             guard_text, user_profile_text, facts_text,
@@ -789,6 +803,8 @@ class ContextManager:
                 parts.append(memory_text)
             if files_text:
                 parts.append(files_text)
+            if _rmode_block:
+                parts.append(_rmode_block)
             return "\n\n---\n\n".join(parts)
 
         # ── Over budget: compact in reverse priority order ────────────────────
@@ -821,6 +837,8 @@ class ContextManager:
             parts.append(self.files.compact(files_budget))
         else:
             parts.append("[File context omitted — token budget exhausted]")
+        if _rmode_block:
+            parts.append(_rmode_block)
 
         return "\n\n---\n\n".join(parts)
 

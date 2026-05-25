@@ -46,6 +46,10 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `ARCH-ORCH-001` | `CR-018` | `CR-018` | `AC-CR018-001`, `AC-CR018-003`, `AC-CR018-004` | `TASK-ORCH-018` | `src/exceptions.py` (full hierarchy with ASCII-tree docstring) | smoke (AC-CR018-001, AC-CR018-003, AC-CR018-004) | implemented |
 | `NFR-DEV-007` | `CR-018` | `CR-018` | `AC-CR018-002`, `AC-CR018-005` | `TASK-ORCH-018` | `src/security.py` (three SSRF raise sites → `SSRFBlockedError`), `src/exceptions.py` (`XochitlPermissionError = SandboxError`) | smoke (AC-CR018-002, AC-CR018-005) | implemented |
 | `NFR-DEV-008` | `CR-018` | `CR-018` | `AC-CR018-006` | `TASK-ORCH-018` | `src/skills/weather_skill.py` (two `ValueError` → `GeocodingError`) | smoke (AC-CR018-006) | implemented |
+| `FR-ORCH-032` | `CR-025` | `CR-025` | `AC-CR025-001` through `AC-CR025-004` | `TASK-ORCH-025` | `src/response_mode.py` (`infer_mode()`, `_OPERATOR_LEADING_VERB`, `_REPORT_TERMS`) | smoke (AC-CR025-001–004) | implemented |
+| `FR-ORCH-033` | `CR-025` | `CR-025` | `AC-CR025-005`, `AC-CR025-006` | `TASK-ORCH-025` | `src/context_manager.py` (`assemble_system_prompt(mode=...)` — mode block appended after skills hint) | smoke (AC-CR025-005–006) | implemented |
+| `NFR-ORCH-007` | `CR-025` | `CR-025` | — | `TASK-ORCH-025` | `src/chat.py` (`_agent_loop` — `self._current_mode` tracking, dim transition line) | manual | implemented |
+| `NFR-ORCH-008` | `CR-025` | `CR-025` | `AC-CR025-002` through `AC-CR025-004` | `TASK-ORCH-025` | `src/response_mode.py` (regex + frozenset only, no LLM call) | smoke (AC-CR025-002–004) | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |

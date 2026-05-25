@@ -460,12 +460,26 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR018-006` | `NFR-DEV-008` | Geocoding raise type | `WeatherSkill._geocode("NowhereVille")` with empty mock | — | Raises `GeocodingError` (not `ValueError`) | implemented |
 | `AC-CR018-007` | All CR-018 | Smoke tests | `python smoke_test.py` runs | — | 69 passed, 0 failed | implemented |
 
+### Orchestration — Response Mode Switching (CR-025)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-032` | functional | P1 | implemented | `src/response_mode.py` defines three modes (`conversational`, `operator`, `report`) and `infer_mode(user_input: str) -> str` using regex/keyword heuristics — no LLM call | `AC-CR025-001` through `AC-CR025-004` | `CR-025` | `src/response_mode.py` |
+| `FR-ORCH-033` | functional | P1 | implemented | `ContextManager.assemble_system_prompt(mode: str = "conversational") -> str` appends the mode-specific prompt block for `operator` and `report` modes; `conversational` mode adds no extra block | `AC-CR025-005`, `AC-CR025-006` | `CR-025` | `src/context_manager.py` — mode block appended after skills hint in both budget paths |
+| `NFR-ORCH-007` | non-functional | P1 | implemented | When response mode changes between consecutive turns, `XochitlChat` prints a single dim transition line before the response (`"→ operator mode"`, etc.) | — | `CR-025` | `src/chat.py` — `_agent_loop()` mode transition announcement |
+| `NFR-ORCH-008` | non-functional | P1 | implemented | Mode inference is a regex/keyword heuristic — no second LLM call; `infer_mode()` runs synchronously before the main LLM call | `AC-CR025-002` through `AC-CR025-004` | `CR-025` | `src/response_mode.py` — compiled regex + frozenset keyword lookup |
+
+### Acceptance criteria — Response Mode Switching (CR-025)
+
 | ID | Requirement | Scenario | Trigger | Expected | Status |
 |---|---|---|---|---|---|
-| `AC-CR015-001` | `NFR-DEV-001` | Scope standards in CLAUDE.md | `CLAUDE.md` is read | — | File contains `## Code Quality Standards` section with scope table | implemented |
-| `AC-CR015-002` | `NFR-DEV-002` through `NFR-DEV-006` | Standards documented | `CLAUDE.md` is read | — | All six NFR-DEV-* standards listed with descriptions | implemented |
-| `AC-CR015-003` | `NFR-DEV-001` | Scope list in AGENTS.md | `AGENTS.md` is read | — | File contains a `## Commit conventions` section with the closed scope list | implemented |
-| `AC-CR015-004` | `NFR-DEV-001` | Scope rule in AGENTS.md | `AGENTS.md` is read | — | Section states that scope-less commits are prohibited | implemented |
+| `AC-CR025-001` | `FR-ORCH-032` | Constants | `src.response_mode` imported | — | All three `MODE_*` constants have correct string values | implemented |
+| `AC-CR025-002` | `FR-ORCH-032`, `NFR-ORCH-008` | Operator inference | `infer_mode("sync my tasks")` | — | Returns `"operator"` | implemented |
+| `AC-CR025-003` | `FR-ORCH-032`, `NFR-ORCH-008` | Report inference | `infer_mode("give me a report on my projects")` | — | Returns `"report"` | implemented |
+| `AC-CR025-004` | `FR-ORCH-032`, `NFR-ORCH-008` | Conversational fallback | `infer_mode("what's the weather like?")` | — | Returns `"conversational"` | implemented |
+| `AC-CR025-005` | `FR-ORCH-033` | Operator block injected | `assemble_system_prompt(mode="operator")` called | — | Output contains `[RESPONSE MODE: OPERATOR]` | implemented |
+| `AC-CR025-006` | `FR-ORCH-033` | No block for conversational | `assemble_system_prompt()` with default mode | — | Output does NOT contain `[RESPONSE MODE:` | implemented |
+| `AC-CR025-007` | All CR-025 | Smoke tests | `python smoke_test.py` runs | — | 75 passed, 0 failed | implemented |
 
 ## Requirement lifecycle notes
 

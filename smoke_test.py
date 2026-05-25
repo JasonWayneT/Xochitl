@@ -1184,6 +1184,104 @@ def t_weather_geocode_raises_geocoding_error():
 test("Exceptions: WeatherSkill raises GeocodingError for unknown location (AC-CR018-006)", t_weather_geocode_raises_geocoding_error)
 
 
+# ── CR-025 Response Mode Switching ────────────────────────────────────────────
+
+def t_response_mode_constants():
+    """AC-CR025-001: src.response_mode defines MODE_* constants."""
+    from src.response_mode import MODE_CONVERSATIONAL, MODE_OPERATOR, MODE_REPORT
+    assert MODE_CONVERSATIONAL == "conversational", f"Unexpected value: {MODE_CONVERSATIONAL!r}"
+    assert MODE_OPERATOR == "operator", f"Unexpected value: {MODE_OPERATOR!r}"
+    assert MODE_REPORT == "report", f"Unexpected value: {MODE_REPORT!r}"
+test("ResponseMode: MODE_* constants defined (AC-CR025-001)", t_response_mode_constants)
+
+
+def t_infer_mode_operator():
+    """AC-CR025-002: infer_mode() returns 'operator' for command verbs."""
+    from src.response_mode import infer_mode, MODE_OPERATOR
+    operator_cases = [
+        "sync my tasks",
+        "sync",
+        "build the project",
+        "run the tests",
+        "delete old tasks",
+        "!do it now",
+        "create a new task",
+        "refresh my queue",
+        "push to Notion",
+    ]
+    for case in operator_cases:
+        result = infer_mode(case)
+        assert result == MODE_OPERATOR, \
+            f"infer_mode({case!r}) returned {result!r}, expected 'operator' (FR-ORCH-032)"
+test("ResponseMode: infer_mode returns 'operator' for commands (AC-CR025-002)", t_infer_mode_operator)
+
+
+def t_infer_mode_report():
+    """AC-CR025-003: infer_mode() returns 'report' for structure keywords."""
+    from src.response_mode import infer_mode, MODE_REPORT
+    report_cases = [
+        "give me a report on my projects",
+        "give me a summary of today",
+        "summarize my tasks",
+        "show me an overview",
+        "status report",
+        "list all my tasks",
+        "list my projects",
+        "what's the status of the sprint",
+    ]
+    for case in report_cases:
+        result = infer_mode(case)
+        assert result == MODE_REPORT, \
+            f"infer_mode({case!r}) returned {result!r}, expected 'report' (FR-ORCH-032)"
+test("ResponseMode: infer_mode returns 'report' for structure keywords (AC-CR025-003)", t_infer_mode_report)
+
+
+def t_infer_mode_conversational():
+    """AC-CR025-004: infer_mode() returns 'conversational' for open-ended input."""
+    from src.response_mode import infer_mode, MODE_CONVERSATIONAL
+    convo_cases = [
+        "what's the weather like?",
+        "can you help me plan my week?",
+        "I'm not sure what to do next",
+        "tell me about the PARA methodology",
+        "how are things going with the fitness app?",
+    ]
+    for case in convo_cases:
+        result = infer_mode(case)
+        assert result == MODE_CONVERSATIONAL, \
+            f"infer_mode({case!r}) returned {result!r}, expected 'conversational' (FR-ORCH-032)"
+test("ResponseMode: infer_mode returns 'conversational' for open-ended (AC-CR025-004)", t_infer_mode_conversational)
+
+
+def t_assemble_injects_mode_block():
+    """AC-CR025-005: assemble_system_prompt(mode='operator') contains [RESPONSE MODE: OPERATOR]."""
+    from src.context_manager import ContextManager
+    cm = ContextManager(route="cloud")
+    cm.ingest(query="test", history=[])
+    prompt = cm.assemble_system_prompt(mode="operator")
+    assert "[RESPONSE MODE: OPERATOR]" in prompt, \
+        "assemble_system_prompt(mode='operator') missing [RESPONSE MODE: OPERATOR] block (FR-ORCH-033)"
+    prompt_report = cm.assemble_system_prompt(mode="report")
+    assert "[RESPONSE MODE: REPORT]" in prompt_report, \
+        "assemble_system_prompt(mode='report') missing [RESPONSE MODE: REPORT] block (FR-ORCH-033)"
+test("ResponseMode: assemble_system_prompt injects mode block (AC-CR025-005)", t_assemble_injects_mode_block)
+
+
+def t_assemble_no_mode_block_conversational():
+    """AC-CR025-006: assemble_system_prompt(mode='conversational') has no [RESPONSE MODE: block."""
+    from src.context_manager import ContextManager
+    cm = ContextManager(route="cloud")
+    cm.ingest(query="test", history=[])
+    prompt = cm.assemble_system_prompt(mode="conversational")
+    assert "[RESPONSE MODE:" not in prompt, \
+        "assemble_system_prompt(mode='conversational') should not inject a mode block (FR-ORCH-033)"
+    # Default (no mode arg) should also be clean
+    prompt_default = cm.assemble_system_prompt()
+    assert "[RESPONSE MODE:" not in prompt_default, \
+        "assemble_system_prompt() with default mode should not inject a mode block"
+test("ResponseMode: no mode block for conversational (AC-CR025-006)", t_assemble_no_mode_block_conversational)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
