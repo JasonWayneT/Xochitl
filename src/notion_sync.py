@@ -6,6 +6,7 @@ import httpx
 from datetime import datetime, timezone
 from typing import Optional
 
+from src.exceptions import NotionError  # ARCH-ORCH-001 (CR-018)
 from src.secrets import get_secret
 
 NOTION_API_KEY         = get_secret("NOTION_API_KEY", "")
@@ -65,7 +66,7 @@ def _page_update(page_id: str, properties: dict) -> None:
 
 def fetch_projects() -> list[dict]:
     if not NOTION_API_KEY or not NOTION_PROJECTS_DB_ID:
-        raise RuntimeError("NOTION_API_KEY and NOTION_PROJECTS_DB_ID required")
+        raise NotionError("NOTION_API_KEY and NOTION_PROJECTS_DB_ID required")
     pages = _db_query_all(NOTION_PROJECTS_DB_ID)
     return [_parse_project_page(p) for p in pages]
 
@@ -228,7 +229,7 @@ def detect_conflict(notion_edited: str, local_synced: str) -> bool:
 def push_completed_tasks(completed_tasks: list[dict]) -> int:
     """Mark tasks as completed in Notion. Returns count of updated tasks."""
     if not NOTION_API_KEY:
-        raise RuntimeError("NOTION_API_KEY required")
+        raise NotionError("NOTION_API_KEY required")
     updated = 0
     for task in completed_tasks:
         notion_id = task.get("notion_task_id")

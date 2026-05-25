@@ -43,6 +43,9 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `NFR-DEV-004` | `CR-015` | `CR-015` | `AC-CR015-002` | `TASK-DEV-015` | `CLAUDE.md` (§NFR-DEV-004 Google docstrings rule) | doc review (AC-CR015-002) | implemented |
 | `NFR-DEV-005` | `CR-015` | `CR-015` | `AC-CR015-002` | `TASK-DEV-015` | `CLAUDE.md` (§NFR-DEV-005 testing checklist) | doc review (AC-CR015-002) | implemented |
 | `NFR-DEV-006` | `CR-015` | `CR-015` | `AC-CR015-002` | `TASK-DEV-015` | `CLAUDE.md` (§NFR-DEV-006 security checklist) | doc review (AC-CR015-002) | implemented |
+| `ARCH-ORCH-001` | `CR-018` | `CR-018` | `AC-CR018-001`, `AC-CR018-003`, `AC-CR018-004` | `TASK-ORCH-018` | `src/exceptions.py` (full hierarchy with ASCII-tree docstring) | smoke (AC-CR018-001, AC-CR018-003, AC-CR018-004) | implemented |
+| `NFR-DEV-007` | `CR-018` | `CR-018` | `AC-CR018-002`, `AC-CR018-005` | `TASK-ORCH-018` | `src/security.py` (three SSRF raise sites → `SSRFBlockedError`), `src/exceptions.py` (`XochitlPermissionError = SandboxError`) | smoke (AC-CR018-002, AC-CR018-005) | implemented |
+| `NFR-DEV-008` | `CR-018` | `CR-018` | `AC-CR018-006` | `TASK-ORCH-018` | `src/skills/weather_skill.py` (two `ValueError` → `GeocodingError`) | smoke (AC-CR018-006) | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |

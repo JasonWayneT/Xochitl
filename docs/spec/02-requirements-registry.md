@@ -440,6 +440,33 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR015-003` | `NFR-DEV-001` | Scope list in AGENTS.md | `AGENTS.md` is read | — | File contains a `## Commit conventions` section with the closed scope list | implemented |
 | `AC-CR015-004` | `NFR-DEV-001` | Scope rule in AGENTS.md | `AGENTS.md` is read | — | Section states that scope-less commits are prohibited | implemented |
 
+### Architecture — Exception Hierarchy (CR-018)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `ARCH-ORCH-001` | architecture | P1 | implemented | `src/exceptions.py` defines `XochitlError` as the base exception with a documented hierarchy: `RouterError`, `SkillError`, `GeocodingError`, `ContextError`, `SandboxError`, `SSRFBlockedError`, `NotionError`; hierarchy documented in module docstring with ASCII tree | `AC-CR018-001`, `AC-CR018-003`, `AC-CR018-004` | `CR-018` | `src/exceptions.py` |
+| `NFR-DEV-007` | non-functional | P1 | implemented | SSRF-blocked conditions raise `SSRFBlockedError` (not bare `XochitlPermissionError`); `XochitlPermissionError` is kept as a backward-compatible alias for `SandboxError` so existing catch-sites are not broken | `AC-CR018-002`, `AC-CR018-005` | `CR-018` | `src/security.py` — three SSRF raise sites updated |
+| `NFR-DEV-008` | non-functional | P1 | implemented | Geocoding failure in `weather_skill.py` raises `GeocodingError` (not `ValueError`) so callers can handle location failures separately from generic skill failures | `AC-CR018-006` | `CR-018` | `src/skills/weather_skill.py` — two raise sites updated |
+
+### Acceptance criteria — Exception Hierarchy (CR-018)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR018-001` | `ARCH-ORCH-001` | Module exports | `src.exceptions` imported | — | All eight exception classes importable without error | implemented |
+| `AC-CR018-002` | `NFR-DEV-007` | Alias | `XochitlPermissionError is SandboxError` | — | Returns `True`; existing catch-sites catch `SandboxError` | implemented |
+| `AC-CR018-003` | `ARCH-ORCH-001` | Sandbox hierarchy | Hierarchy inspected | — | `SSRFBlockedError` ⊂ `SandboxError` ⊂ `XochitlError` | implemented |
+| `AC-CR018-004` | `ARCH-ORCH-001` | Skill hierarchy | Hierarchy inspected | — | `GeocodingError` ⊂ `SkillError` ⊂ `XochitlError` | implemented |
+| `AC-CR018-005` | `NFR-DEV-007` | SSRF raise type | `validate_outbound_url("http://127.0.0.1/")` | — | Raises `SSRFBlockedError` (not generic `Exception`) | implemented |
+| `AC-CR018-006` | `NFR-DEV-008` | Geocoding raise type | `WeatherSkill._geocode("NowhereVille")` with empty mock | — | Raises `GeocodingError` (not `ValueError`) | implemented |
+| `AC-CR018-007` | All CR-018 | Smoke tests | `python smoke_test.py` runs | — | 69 passed, 0 failed | implemented |
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR015-001` | `NFR-DEV-001` | Scope standards in CLAUDE.md | `CLAUDE.md` is read | — | File contains `## Code Quality Standards` section with scope table | implemented |
+| `AC-CR015-002` | `NFR-DEV-002` through `NFR-DEV-006` | Standards documented | `CLAUDE.md` is read | — | All six NFR-DEV-* standards listed with descriptions | implemented |
+| `AC-CR015-003` | `NFR-DEV-001` | Scope list in AGENTS.md | `AGENTS.md` is read | — | File contains a `## Commit conventions` section with the closed scope list | implemented |
+| `AC-CR015-004` | `NFR-DEV-001` | Scope rule in AGENTS.md | `AGENTS.md` is read | — | Section states that scope-less commits are prohibited | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

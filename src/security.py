@@ -24,6 +24,11 @@ from src.config import (
     DECISION_LOG_PATH,
     CONFIG_DIR,
 )
+from src.exceptions import (  # Implements ARCH-ORCH-001 (CR-018)
+    SandboxError,
+    SSRFBlockedError,
+    XochitlPermissionError,  # backward-compat alias for SandboxError
+)
 
 
 # ── SSRF protection (FR-SEC-005, NFR-SEC-003) ────────────────────────────────
@@ -64,19 +69,19 @@ def validate_outbound_url(url: str) -> str:
     """
     parsed = urlparse(url)
     if parsed.scheme not in _ALLOWED_SCHEMES:
-        raise XochitlPermissionError(
+        raise SSRFBlockedError(  # NFR-DEV-007 (CR-018)
             f"SSRF: scheme '{parsed.scheme}' not allowed (only http/https)"
         )
 
     host = parsed.hostname
     if not host:
-        raise XochitlPermissionError(f"SSRF: could not extract hostname from URL: {url!r}")
+        raise SSRFBlockedError(f"SSRF: could not extract hostname from URL: {url!r}")
 
     # Resolve hostname → IP(s); raises on DNS failure (treated as blocked).
     try:
         addr_results = socket.getaddrinfo(host, None)
     except socket.gaierror as exc:
-        raise XochitlPermissionError(
+        raise SSRFBlockedError(
             f"SSRF: hostname resolution failed for '{host}': {exc}"
         ) from exc
 
@@ -88,7 +93,7 @@ def validate_outbound_url(url: str) -> str:
             continue  # malformed address — skip rather than crash
         for network in _BLOCKED_NETWORKS:
             if ip in network:
-                raise XochitlPermissionError(
+                raise SSRFBlockedError(
                     f"SSRF: host '{host}' resolves to blocked address {ip} (range {network})"
                 )
 
@@ -96,17 +101,21 @@ def validate_outbound_url(url: str) -> str:
 
 
 # ── Exceptions ────────────────────────────────────────────────────────────────
-
-class XochitlPermissionError(Exception):
-    pass
-
-
-# Keep old name as alias so existing catch-sites don't break
-PermissionError = XochitlPermissionError
-
+# SandboxError and XochitlPermissionError are imported from src.exceptions (CR-018).
+# RequiresConfirmation is control-flow (not a domain error) — stays here.
 
 class RequiresConfirmation(Exception):
-    def __init__(self, prompt: str):
+    """Signal that a write or destructive operation needs explicit user confirmation.
+
+    This is a control-flow signal, not a domain error — it is not part of the
+    XochitlError hierarchy. Raised by permission-gated operations; caught by
+    the interactive confirmation loop in chat.py.
+
+    Args:
+        prompt: Human-readable description of what action requires confirmation.
+    """
+
+    def __init__(self, prompt: str) -> None:
         self.prompt = prompt
         super().__init__(prompt)
 

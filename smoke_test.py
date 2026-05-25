@@ -1080,6 +1080,110 @@ def t_correction_escalation_to_preferences():
 test("Correction: recurring correction escalates to preferences table (AC-CR030-005)", t_correction_escalation_to_preferences)
 
 
+# ── CR-018 Exception Hierarchy ────────────────────────────────────────────────
+
+def t_exception_module_exports():
+    """AC-CR018-001: src.exceptions defines all required exception classes."""
+    from src.exceptions import (
+        XochitlError, RouterError, SkillError, GeocodingError,
+        ContextError, SandboxError, SSRFBlockedError, NotionError,
+        XochitlPermissionError,
+    )
+    for cls in (XochitlError, RouterError, SkillError, GeocodingError,
+                ContextError, SandboxError, SSRFBlockedError, NotionError):
+        assert issubclass(cls, Exception), f"{cls.__name__} is not an Exception subclass"
+test("Exceptions: src.exceptions defines all required classes (AC-CR018-001)", t_exception_module_exports)
+
+
+def t_exception_backward_compat_alias():
+    """AC-CR018-002: XochitlPermissionError is SandboxError (backward-compat alias)."""
+    from src.exceptions import XochitlPermissionError, SandboxError
+    assert XochitlPermissionError is SandboxError, \
+        "XochitlPermissionError must be an alias for SandboxError (NFR-DEV-007)"
+    # Verify existing code that catches XochitlPermissionError still catches SandboxError
+    err = SandboxError("test")
+    caught = False
+    try:
+        raise err
+    except XochitlPermissionError:
+        caught = True
+    assert caught, "XochitlPermissionError catch-site did not catch SandboxError instance"
+test("Exceptions: XochitlPermissionError is SandboxError alias (AC-CR018-002)", t_exception_backward_compat_alias)
+
+
+def t_exception_hierarchy_sandbox():
+    """AC-CR018-003: SSRFBlockedError < SandboxError < XochitlError."""
+    from src.exceptions import SSRFBlockedError, SandboxError, XochitlError
+    assert issubclass(SSRFBlockedError, SandboxError), \
+        "SSRFBlockedError must be a subclass of SandboxError (ARCH-ORCH-001)"
+    assert issubclass(SandboxError, XochitlError), \
+        "SandboxError must be a subclass of XochitlError (ARCH-ORCH-001)"
+test("Exceptions: SSRFBlockedError < SandboxError < XochitlError (AC-CR018-003)", t_exception_hierarchy_sandbox)
+
+
+def t_exception_hierarchy_skill():
+    """AC-CR018-004: GeocodingError < SkillError < XochitlError."""
+    from src.exceptions import GeocodingError, SkillError, XochitlError
+    assert issubclass(GeocodingError, SkillError), \
+        "GeocodingError must be a subclass of SkillError (ARCH-ORCH-001)"
+    assert issubclass(SkillError, XochitlError), \
+        "SkillError must be a subclass of XochitlError (ARCH-ORCH-001)"
+test("Exceptions: GeocodingError < SkillError < XochitlError (AC-CR018-004)", t_exception_hierarchy_skill)
+
+
+def t_ssrf_raises_ssrf_blocked_error():
+    """AC-CR018-005: validate_outbound_url() raises SSRFBlockedError for blocked URLs."""
+    from src.exceptions import SSRFBlockedError
+    from src.security import validate_outbound_url
+    blocked_cases = [
+        "http://127.0.0.1/admin",
+        "http://169.254.169.254/latest/meta-data/",
+        "http://10.0.0.1/internal",
+        "file:///etc/passwd",
+    ]
+    for url in blocked_cases:
+        raised = False
+        try:
+            validate_outbound_url(url)
+        except SSRFBlockedError:
+            raised = True
+        except Exception:
+            raised = True  # still blocked, just not SSRFBlockedError — fail below
+            raised_type = type(Exception).__name__
+        assert raised, f"validate_outbound_url did not raise for blocked URL: {url!r}"
+        # Verify specifically SSRFBlockedError
+        try:
+            validate_outbound_url(url)
+            assert False, f"No exception raised for {url!r}"
+        except SSRFBlockedError:
+            pass  # correct
+        except Exception as exc:
+            assert False, \
+                f"Expected SSRFBlockedError for {url!r}, got {type(exc).__name__}: {exc} (NFR-DEV-007)"
+test("Exceptions: validate_outbound_url raises SSRFBlockedError (AC-CR018-005)", t_ssrf_raises_ssrf_blocked_error)
+
+
+def t_weather_geocode_raises_geocoding_error():
+    """AC-CR018-006: WeatherSkill raises GeocodingError for unknown location."""
+    from unittest.mock import patch
+    from src.exceptions import GeocodingError
+    from src.skills.weather_skill import WeatherSkill
+
+    skill = WeatherSkill()
+    # Mock fetch_bytes to return an empty results list (no matching location)
+    empty_geocode_response = b'{"results": []}'
+    with patch("src.skills.weather_skill.fetch_bytes", return_value=empty_geocode_response):
+        try:
+            skill._geocode("NowhereVilleXXXX99")
+            assert False, "_geocode() did not raise for empty geocoding result"
+        except GeocodingError:
+            pass  # correct — NFR-DEV-008
+        except Exception as exc:
+            assert False, \
+                f"Expected GeocodingError, got {type(exc).__name__}: {exc} (NFR-DEV-008)"
+test("Exceptions: WeatherSkill raises GeocodingError for unknown location (AC-CR018-006)", t_weather_geocode_raises_geocoding_error)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

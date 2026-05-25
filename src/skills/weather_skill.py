@@ -6,6 +6,7 @@ import json
 import re
 from urllib.parse import quote_plus, urlencode
 
+from src.exceptions import GeocodingError  # ARCH-ORCH-001 (CR-018)
 from src.http_utils import fetch_bytes  # FR-API-005, NFR-API-002 (retry + rate limit)
 from src.skills.base import Skill
 
@@ -212,9 +213,9 @@ class WeatherSkill(Skill):
             if first:
                 break
         else:
-            raise ValueError(f"no matching location found for {location!r}")
+            raise GeocodingError(f"no matching location found for {location!r}")
         if "latitude" not in first or "longitude" not in first:
-            raise ValueError(f"location result for {location!r} did not include coordinates")
+            raise GeocodingError(f"location result for {location!r} did not include coordinates")
         return first
 
     def _forecast(self, latitude: float, longitude: float) -> dict:
