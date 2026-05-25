@@ -1404,6 +1404,77 @@ def t_obs_on_llm_complete_writes_jsonl():
 test("Obs: on_event('llm_complete') assembles trace and calls _write_jsonl (AC-CR021-005)", t_obs_on_llm_complete_writes_jsonl)
 
 
+# ── CR-019 — Reflection / Critic ──────────────────────────────────────────────
+
+def t_critic_class_defined():
+    """AC-CR019-001: TurnCritic defined with callable should_critique() and critique()."""
+    from src.critic import TurnCritic, CritiqueResult
+    critic = TurnCritic()
+    assert callable(getattr(critic, "should_critique", None)), \
+        "TurnCritic must define should_critique() (FR-ORCH-037)"
+    assert callable(getattr(critic, "critique", None)), \
+        "TurnCritic must define critique() (FR-ORCH-038)"
+test("Critic: TurnCritic defines should_critique() and critique() (AC-CR019-001)", t_critic_class_defined)
+
+
+def t_critic_should_critique_triggers():
+    """AC-CR019-002: should_critique() returns True for each trigger condition."""
+    from src.critic import TurnCritic
+    critic = TurnCritic()
+    # Trigger a: skill executed
+    assert critic.should_critique(score=0.0, tool_calls_made=True, response="Fine."), \
+        "tool_calls_made=True must trigger critique (FR-ORCH-037)"
+    # Trigger b: near-miss score
+    assert critic.should_critique(score=0.45, tool_calls_made=False, response="Fine."), \
+        "Near-miss score (0.20–0.65) must trigger critique (FR-ORCH-037)"
+    # Trigger c: hedging language
+    assert critic.should_critique(score=0.0, tool_calls_made=False, response="I think this might be correct."), \
+        "Hedging language must trigger critique (FR-ORCH-037)"
+test("Critic: should_critique() returns True for all three trigger conditions (AC-CR019-002)", t_critic_should_critique_triggers)
+
+
+def t_critic_no_critique_high_confidence():
+    """AC-CR019-003: should_critique() returns False for high-score confident response."""
+    from src.critic import TurnCritic
+    critic = TurnCritic()
+    result = critic.should_critique(
+        score=0.90,
+        tool_calls_made=False,
+        response="The weather today is sunny and 72°F.",
+    )
+    assert result is False, \
+        "High score + no tool calls + no hedging must NOT trigger critique (FR-ORCH-037)"
+test("Critic: should_critique() returns False for high-score confident response (AC-CR019-003)", t_critic_no_critique_high_confidence)
+
+
+def t_parse_critic_response_verdicts():
+    """AC-CR019-004: _parse_critic_response() maps all three verdict prefixes correctly."""
+    from src.critic import _parse_critic_response
+    ok = _parse_critic_response("OK: the response fully answers the question")
+    assert ok.verdict == "ok", f"Expected 'ok', got {ok.verdict!r}"
+
+    corr = _parse_critic_response("CORRECTABLE: missing the required error handling step")
+    assert corr.verdict == "correctable", f"Expected 'correctable', got {corr.verdict!r}"
+    assert "error handling" in corr.note
+
+    ambig = _parse_critic_response("AMBIGUOUS: cannot evaluate factual claims without data")
+    assert ambig.verdict == "ambiguous", f"Expected 'ambiguous', got {ambig.verdict!r}"
+test("Critic: _parse_critic_response() maps OK/CORRECTABLE/AMBIGUOUS correctly (AC-CR019-004)", t_parse_critic_response_verdicts)
+
+
+def t_maybe_critique_in_chat():
+    """AC-CR019-005: chat.py defines _maybe_critique and references _MAX_CRITIC_ITERATIONS."""
+    import src.chat as chat_mod
+    src_text = Path(chat_mod.__file__).read_text(encoding="utf-8")
+    assert "_maybe_critique" in src_text, \
+        "chat.py must define _maybe_critique method (FR-ORCH-037)"
+    assert "_MAX_CRITIC_ITERATIONS" in src_text, \
+        "chat.py must reference _MAX_CRITIC_ITERATIONS to enforce the cap (NFR-ORCH-012)"
+    assert "_tool_calls_made" in src_text, \
+        "chat.py must track _tool_calls_made for the critic trigger (FR-ORCH-037)"
+test("Critic: chat.py defines _maybe_critique with _MAX_CRITIC_ITERATIONS cap (AC-CR019-005)", t_maybe_critique_in_chat)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

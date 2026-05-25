@@ -517,6 +517,26 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR021-005` | `FR-ORCH-035` | JSONL write | `on_event("llm_complete", ...)` called with primed trace | — | `_write_jsonl()` called once with record containing `trace_id` | implemented |
 | `AC-CR021-006` | All CR-021 | Smoke tests | `python smoke_test.py` runs | — | 83 passed, 0 failed | implemented |
 
+### Orchestration — Reflection / Critic (CR-019)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-037` | functional | P1 | implemented | `TurnCritic.should_critique()` returns `True` when: (a) a skill was executed, (b) skill score in near-miss zone (0.20–0.65), or (c) response matches `_HEDGING_PATTERNS`. Never fires on streaming turns. | `AC-CR019-001`, `AC-CR019-002`, `AC-CR019-003` | `CR-019` | `src/critic.py` — `TurnCritic.should_critique()`; `src/chat.py` — `_maybe_critique()` called only from non-streaming path |
+| `FR-ORCH-038` | functional | P1 | implemented | `TurnCritic.critique()` returns `CritiqueResult` with verdict in `{"ok", "correctable", "ambiguous"}`. CORRECTABLE triggers retry loop (capped at `_MAX_CRITIC_ITERATIONS=2`). AMBIGUOUS appends `_Fíjate —_` caveat. | `AC-CR019-004`, `AC-CR019-005` | `CR-019` | `src/critic.py` — `critique()`, `_parse_critic_response()`; `src/chat.py` — `_maybe_critique()` correction loop |
+| `NFR-ORCH-012` | non-functional | P1 | implemented | Critic call uses `force_route="simple_qa"` (local model). At most `_MAX_CRITIC_ITERATIONS` (2) extra LLM calls per turn when triggered. | — | `CR-019` | `src/critic.py` — `critique()` uses `force_route="simple_qa"`; `src/chat.py` — `range(_MAX_CRITIC_ITERATIONS)` loop |
+| `NFR-ORCH-013` | non-functional | P1 | implemented | Critique never runs on streaming turns. `_maybe_critique()` is wrapped in `try/except Exception` and silently degrades to returning the original response on any failure. | — | `CR-019` | `src/chat.py` — streaming path returns before `_maybe_critique`; `try/except Exception` in `_maybe_critique` |
+
+### Acceptance criteria — Reflection / Critic (CR-019)
+
+| ID | Requirement | Scenario | Trigger | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR019-001` | `FR-ORCH-037`, `FR-ORCH-038` | Class structure | Import `TurnCritic` | — | `should_critique()` and `critique()` are callable | implemented |
+| `AC-CR019-002` | `FR-ORCH-037` | Trigger conditions | `should_critique()` with each trigger independently | — | Returns `True` for tool_calls_made, near-miss score, and hedging language | implemented |
+| `AC-CR019-003` | `FR-ORCH-037` | No trigger | `should_critique(score=0.90, tool_calls_made=False, response="confident answer")` | — | Returns `False` | implemented |
+| `AC-CR019-004` | `FR-ORCH-038` | Parsing | `_parse_critic_response()` with OK / CORRECTABLE / AMBIGUOUS prefixes | — | Correct verdicts returned | implemented |
+| `AC-CR019-005` | `FR-ORCH-037`, `NFR-ORCH-012` | Integration | Source inspection of `chat.py` | — | `_maybe_critique` and `_MAX_CRITIC_ITERATIONS` both present | implemented |
+| `AC-CR019-006` | All CR-019 | Smoke tests | `python smoke_test.py` runs | — | 88 passed, 0 failed | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

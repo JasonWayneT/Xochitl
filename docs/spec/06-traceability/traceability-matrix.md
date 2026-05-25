@@ -56,6 +56,10 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-ORCH-036` | `CR-021` | `CR-021` | `AC-CR021-002`, `AC-CR021-003` | `TASK-ORCH-021` | `src/chat.py` (`_agent_loop` — `trace_id` in `routing_started`, `tokens_in`/`cost_usd` in `llm_complete`) | smoke (AC-CR021-002–003) | implemented |
 | `NFR-ORCH-010` | `CR-021` | `CR-021` | — | `TASK-ORCH-021` | `src/observability.py` (`_write_jsonl()` — rotate at 10 MB to `.jsonl.bak`) | source inspection | implemented |
 | `NFR-ORCH-011` | `CR-021` | `CR-021` | — | `TASK-ORCH-021` | `src/observability.py` (`_handle_llm_complete()` — `threading.Thread(daemon=True)` for `_write_db()`) | source inspection | implemented |
+| `FR-ORCH-037` | `CR-019` | `CR-019` | `AC-CR019-001`, `AC-CR019-002`, `AC-CR019-003` | `TASK-ORCH-019` | `src/critic.py` (`TurnCritic.should_critique()` — three trigger conditions); `src/chat.py` (`_maybe_critique()` — non-streaming only) | smoke (AC-CR019-001–003) | implemented |
+| `FR-ORCH-038` | `CR-019` | `CR-019` | `AC-CR019-004`, `AC-CR019-005` | `TASK-ORCH-019` | `src/critic.py` (`critique()`, `_parse_critic_response()`); `src/chat.py` (`_maybe_critique()` — correction loop + convergence guard) | smoke (AC-CR019-004–005) | implemented |
+| `NFR-ORCH-012` | `CR-019` | `CR-019` | — | `TASK-ORCH-019` | `src/critic.py` (`force_route="simple_qa"`); `src/chat.py` (`range(_MAX_CRITIC_ITERATIONS)`) | source inspection | implemented |
+| `NFR-ORCH-013` | `CR-019` | `CR-019` | — | `TASK-ORCH-019` | `src/chat.py` (`_maybe_critique()` — streaming returns before call; full try/except wrapper) | source inspection | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |

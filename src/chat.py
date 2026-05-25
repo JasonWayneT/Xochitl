@@ -940,6 +940,9 @@ class XochitlChat:
         # Strip <skill_call> XML from the visible part of the response
         visible = _SKILL_CALL_RE.sub("", response_text).strip()
 
+        # CR-019: track whether a skill executed this turn (FR-ORCH-037 trigger)
+        _tool_calls_made = False
+
         if skill_call:
             skill_name, params = skill_call
             skill = self._find_skill_by_name(skill_name)
@@ -949,6 +952,7 @@ class XochitlChat:
                         "action": str(params.get("action", skill_name)),
                         "risk": self._risk_label_for_skill(type(skill).__name__, params),
                     })
+                    # Staged for approval — no critique (action hasn't run yet)
                     return self._stage_skill_call_plan(skill, params, user_input, visible)
 
                 _events.emit("skill_started", {"skill": skill_name, "params": list(params.keys())})
@@ -956,6 +960,7 @@ class XochitlChat:
                     _status.update(f"running skill: {skill_name}")
                 tool_result = skill.execute(user_input, self.current_context, params)
                 _events.emit("skill_complete", {"skill": skill_name, "success": True})
+                _tool_calls_made = True
 
                 # Implements FR-ORCH-009 — persist tool turn in session history
                 self.session_history.append({
@@ -965,11 +970,16 @@ class XochitlChat:
                     "timestamp": datetime.now().isoformat(),
                 })
 
-                if visible:
-                    return f"{visible}\n\n{tool_result}"
-                return tool_result
+                _final = f"{visible}\n\n{tool_result}" if visible else tool_result
+            else:
+                _final = visible or response_text
+        else:
+            _final = visible or response_text
 
-        return visible or response_text
+        # CR-019: post-execution reflection/critique on non-streaming turns (FR-ORCH-037)
+        return self._maybe_critique(
+            _final, user_input, top_score, _tool_calls_made, messages, system_prompt, force
+        )
 
     def _skill_call_requires_approval(self, skill: Skill, params: dict) -> bool:
         """Return True when a skill call can mutate files, state, or services.
@@ -1095,6 +1105,92 @@ class XochitlChat:
             if type(skill).__name__.lower() == name.lower():
                 return skill
         return None
+
+    # ── Post-execution reflection/critic (CR-019) ─────────────────────────────
+
+    def _maybe_critique(
+        self,
+        response: str,
+        goal: str,
+        top_score: float,
+        tool_calls_made: bool,
+        messages: list[dict],
+        system_prompt: str,
+        force: Optional[str],
+    ) -> str:
+        """Run post-execution critique if warranted; return (possibly improved) response.
+
+        Implements FR-ORCH-037, FR-ORCH-038 (CR-019). Only fires on non-streaming
+        turns when at least one trigger condition is met. Uses the local model
+        (force_route="simple_qa") for the critique call (NFR-ORCH-012). The entire
+        block is wrapped in try/except — must never crash the main loop (NFR-ORCH-013).
+
+        Args:
+            response:        The assembled response text to evaluate.
+            goal:            The original user input.
+            top_score:       Highest skill can_handle() score for this turn.
+            tool_calls_made: True if a skill was executed this turn.
+            messages:        Assembled conversation history (for correction retries).
+            system_prompt:   Base system prompt (amended with critic note on retry).
+            force:           Optional force_route value (preserved on retries).
+
+        Returns:
+            The original response, a corrected response, or the original with a
+            caveat appended — depending on the critic verdict.
+        """
+        try:
+            from src.critic import TurnCritic, _MAX_CRITIC_ITERATIONS
+            _critic = TurnCritic()
+            if not _critic.should_critique(top_score, tool_calls_made, response):
+                return response
+
+            current_response = response
+            current_system = system_prompt
+
+            for _ in range(_MAX_CRITIC_ITERATIONS):
+                cresult = _critic.critique(
+                    goal=goal,
+                    response=current_response,
+                    router=self.router,
+                )
+
+                if cresult.verdict == "ok":
+                    break
+
+                if cresult.verdict == "ambiguous":
+                    current_response = (
+                        current_response
+                        + f"\n\n_{_FYI} — {cresult.note}_"
+                    )
+                    break
+
+                # CORRECTABLE: retry with critic note injected into system prompt
+                current_system = (
+                    current_system
+                    + f"\n\n[CRITIC NOTE: The previous response had this issue: "
+                    f"{cresult.note} — please address it in your next response.]"
+                )
+                retry = self.router.route(
+                    query=goal,
+                    conversation_history=messages,
+                    system_prompt=current_system,
+                    force_route=force,
+                )
+                if retry.error:
+                    break
+                new_response = _SKILL_CALL_RE.sub("", retry.content or "").strip()
+                if not new_response or new_response == current_response:
+                    # No improvement — escalate to caveat and stop (convergence guard)
+                    current_response = (
+                        current_response
+                        + f"\n\n_{_FYI} — {cresult.note}_"
+                    )
+                    break
+                current_response = new_response
+
+            return current_response
+        except Exception:
+            return response  # critic must never crash the main loop (NFR-ORCH-013)
 
     # ── Intent classification ─────────────────────────────────────────────────
 
