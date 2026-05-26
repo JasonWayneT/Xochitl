@@ -2571,6 +2571,59 @@ test("Workflow: hybrid embed boosts recall (AC-CR042-004)", t_workflow_hybrid_em
 test("Workflow: vector index upsert mocked (AC-CR042-001)", t_workflow_vector_index_mock)
 
 
+# ── CR-043 GPU-Aware Model Selection ─────────────────────────────────────────
+
+def t_classify_desktop_profile():
+    """AC-CR043-001: 16 GB total VRAM maps to DESKTOP profile (FR-GPU-001)."""
+    from src.model_manager import _classify_profile, HardwareProfile
+    result = _classify_profile(16_384)
+    assert result == HardwareProfile.DESKTOP, f"Expected DESKTOP, got {result}"
+
+def t_classify_laptop_profile():
+    """AC-CR043-002: 8 GB total VRAM maps to LAPTOP profile (FR-GPU-001)."""
+    from src.model_manager import _classify_profile, HardwareProfile
+    result = _classify_profile(8_192)
+    assert result == HardwareProfile.LAPTOP, f"Expected LAPTOP, got {result}"
+
+def t_classify_none_is_minimal():
+    """AC-CR043-003: None VRAM (no GPU) maps to MINIMAL profile (NFR-GPU-001)."""
+    from src.model_manager import _classify_profile, HardwareProfile
+    result = _classify_profile(None)
+    assert result == HardwareProfile.MINIMAL, f"Expected MINIMAL, got {result}"
+
+def t_select_model_desktop_thinking():
+    """AC-CR043-004: DESKTOP profile selects qwen3:14b for thinking role (FR-GPU-002)."""
+    import src.model_manager as mm
+    original = mm._HARDWARE_PROFILE
+    try:
+        mm._HARDWARE_PROFILE = mm.HardwareProfile.DESKTOP
+        model = mm.select_model("thinking")
+        assert model == "qwen3:14b", f"Expected qwen3:14b, got {model}"
+    finally:
+        mm._HARDWARE_PROFILE = original
+
+def t_startup_report_contains_profile_and_model():
+    """AC-CR043-005: get_startup_report() includes profile name and model name (FR-GPU-003)."""
+    import src.model_manager as mm
+    original = mm._HARDWARE_PROFILE
+    original_info = mm._vram_info
+    try:
+        mm._HARDWARE_PROFILE = mm.HardwareProfile.DESKTOP
+        mm._vram_info = {"total_mb": 16_384, "free_mb": 13_000}
+        report = mm.get_startup_report()
+        assert "DESKTOP" in report, f"Profile not in report: {report!r}"
+        assert "qwen3:14b" in report, f"Model not in report: {report!r}"
+    finally:
+        mm._HARDWARE_PROFILE = original
+        mm._vram_info = original_info
+
+test("GPU: 16 GB VRAM maps to DESKTOP profile (AC-CR043-001)", t_classify_desktop_profile)
+test("GPU: 8 GB VRAM maps to LAPTOP profile (AC-CR043-002)", t_classify_laptop_profile)
+test("GPU: None VRAM maps to MINIMAL profile (AC-CR043-003)", t_classify_none_is_minimal)
+test("GPU: DESKTOP thinking role selects qwen3:14b (AC-CR043-004)", t_select_model_desktop_thinking)
+test("GPU: startup report contains profile and model (AC-CR043-005)", t_startup_report_contains_profile_and_model)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
