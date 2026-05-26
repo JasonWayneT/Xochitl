@@ -108,8 +108,9 @@ In-chat: `/workflows`, `/workflow save <name>`, `/workflow run <name>`, `/brief`
 
 ## Development & Testing
 
-- **Smoke Test**: `python smoke_test.py` — 146 tests (May 2026); ASCII-only test labels on Windows
-- **E2E Test**: `python end_to_end_test.py` (Mocked full pipeline flow)
+- **Smoke Test**: `python smoke_test.py` — 167 tests (May 2026); ASCII-only test labels on Windows
+- **E2E Test**: `python tests/end_to_end_test.py` (Mocked full pipeline flow)
+- **Unit Tests**: `python tests/test_chat_logic.py` | **Eval**: `python tests/eval_harness.py`
 - **Linting**: No raw SQL outside `database.py`; all LLM calls via `router.py`.
 - **Governor vs executor**: `governor.py` = token budget; `executor.py` = file/shell action permission.
 

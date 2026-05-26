@@ -107,7 +107,7 @@ When the user asks for a change:
 8. Update the traceability matrix.
 9. Produce an implementation task list.
 10. Implement the smallest safe change.
-11. Run `python smoke_test.py` and `python end_to_end_test.py` or explain why tests could not be run.
+11. Run `python smoke_test.py` and `python tests/end_to_end_test.py` or explain why tests could not be run.
 12. Update the change request with the verification result.
 
 ## Rebuild-from-scratch workflow
@@ -175,6 +175,6 @@ When finished, report:
 - Requirements touched
 - Specs updated
 - Code files changed
-- Tests run (`smoke_test.py` / `end_to_end_test.py` results)
+- Tests run (`smoke_test.py` / `tests/end_to_end_test.py` results)
 - Traceability updates
 - Open questions or risks

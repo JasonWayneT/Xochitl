@@ -248,10 +248,15 @@ OLLAMA_MAX_LOADED_MODELS=2
 ├── prompts/
 │   └── system_xochitl.txt       # System prompt template (fallback path for context_manager)
 ├── .env.example                 # All configurable env vars with inline comments
-├── SOUL.md.example              # Persona template
-├── conversation.config.example.yaml
-├── smoke_test.py                # Unit/regression suite (146 tests, May 2026)
-└── end_to_end_test.py           # Mocked full pipeline flow
+├── smoke_test.py                # Unit/regression suite (167 tests, May 2026)
+├── tests/
+│   ├── end_to_end_test.py       # Mocked full pipeline flow
+│   ├── eval_harness.py          # Skill routing accuracy eval (CR-022)
+│   └── test_chat_logic.py       # Chat layer unit tests
+└── docs/examples/
+    ├── Me.md.example            # User profile template
+    ├── SOUL.md.example          # Persona template
+    └── conversation.config.example.yaml
 ```
 
 ---
@@ -259,8 +264,9 @@ OLLAMA_MAX_LOADED_MODELS=2
 ## Testing
 
 ```powershell
-python smoke_test.py        # Expected: 146 passed, 0 failed
-python end_to_end_test.py   # Mocked full pipeline flow
+python smoke_test.py              # Expected: 167 passed, 0 failed
+python tests/end_to_end_test.py   # Mocked full pipeline flow
+python tests/eval_harness.py      # Skill routing accuracy eval
 ```
 
 Compile check:

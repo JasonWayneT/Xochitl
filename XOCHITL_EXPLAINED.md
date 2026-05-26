@@ -30,13 +30,20 @@ This is the first question worth answering honestly, because ChatGPT, Claude, an
 
 Xochitl doesn't use a single AI model. She uses a tiered system — two brains that handle different kinds of work.
 
-**The local brain** runs entirely on your computer using a technology called Ollama. The primary model is Phi-4 — about 14 billion parameters, compressed to fit in roughly 8 GB of GPU memory. There's also a smaller "router" model (Gemma 2B) whose only job is to read your message in milliseconds and decide where it should go. Both run offline, instantly, for free.
+**The local brain** runs entirely on your computer using a technology called Ollama. At boot, Xochitl detects how much GPU memory your machine has and automatically selects the best models for your hardware — no configuration needed. A workstation with 20+ GB gets large reasoning models; a laptop with 8 GB gets leaner but still capable ones. There's also a smaller "router" model whose only job is to read your message in milliseconds and decide where it should go. Both run offline, instantly, for free.
 
-**The cloud brain** is called when the task is genuinely difficult — production code, architectural reasoning, interpreting large documents. It routes to Gemini Flash or Claude. These are the same top-tier models available via API, called only when the local brain isn't the right tool.
+| Profile | GPU memory | What she picks |
+|---|---|---|
+| Workstation | 20 GB+ | Large reasoning model (e.g. Qwen3 32B) |
+| Desktop | 12–20 GB | Mid-size model (e.g. Qwen3 14B) |
+| Laptop | 6–12 GB | Compact model (e.g. Qwen 9B) |
+| Minimal | < 6 GB | Lightweight model (e.g. Phi-4 mini) |
+
+**The cloud brain** is called when the task is genuinely difficult — production code, architectural reasoning, interpreting large documents. It routes to Gemini 1.5 Flash by default (1,500 free requests per day). These are the same top-tier models available via API, called only when the local brain isn't the right tool.
 
 **The routing decision** happens before you even see a loading indicator. The router model reads your message, compares it against a set of task categories (file reading, coding, creative writing, simple question, web lookup, etc.), and makes a call. Simple and sensitive tasks go local. Hard problems go cloud.
 
-The trade-off here is real and worth being honest about: a 14-billion-parameter model running on a laptop is good, not great. It's roughly comparable to early GPT-3.5 quality on most tasks — genuinely useful, sometimes impressive, but not GPT-4 class. The design philosophy is: local for 80% of the work, cloud for the 20% that needs it. This keeps costs near zero and privacy high without sacrificing quality where it matters.
+The trade-off here is real and worth being honest about: local models are good, not always excellent. On complex reasoning tasks, architectural decisions, or long-document analysis, the cloud models are noticeably better. The routing system tries to catch these cases, but it's not perfect. The design philosophy is: local for 80% of the work, cloud for the 20% that needs it. This keeps costs near zero and privacy high without sacrificing quality where it matters.
 
 ---
 
@@ -108,6 +115,10 @@ Skills are discrete capabilities Xochitl invokes when a conversation calls for t
 
 **Notion Sync.** Two-way sync with your Notion workspace using the PARA methodology — Projects, Areas, Resources, Archive — for task organization that scales.
 
+**Google Maps.** Directions, turn-by-turn steps, travel time, and nearby places (restaurants, shops, etc.) via Google Maps APIs. Say "directions to downtown" or "find a coffee shop near me." The `get_travel_time()` utility is also used internally by future calendar integration to surface "leave by" reminders.
+
+**Gmail.** Read your inbox, search by sender or subject, open full message bodies, send email, mark as read, and archive — all from the terminal. After any listing, say "read email 2" to open it. Auth is handled once via browser OAuth and saved to `~/.xochitl/google_token.json`.
+
 **Dynamic Skills.** You can teach Xochitl new one-off capabilities, and she'll persist them as reusable skills under `.xochitl/skills/`. If a multi-step process keeps repeating, she may offer to turn it into a dynamic skill — separate from procedural workflows, which are stored as named multi-step routines (see Layer 4).
 
 **Workflow execution.** `WorkflowSkill` runs saved procedures step-by-step when you use `/workflow run` or ask to run a saved routine with a strong intent match.
@@ -143,9 +154,9 @@ Path sandboxing adds another layer. She can only access directories you've expli
 
 ## Honest Limitations
 
-**Local model quality.** The 14B parameter local model is good, not excellent. On complex reasoning tasks, architectural decisions, or long-document analysis, the cloud models are noticeably better. The routing system tries to catch these cases, but it's not perfect — sometimes a complex question goes local when it should escalate.
+**Local model quality scales with your hardware.** Xochitl automatically selects the best local model for your GPU. On a workstation with 20+ GB of VRAM, local quality is excellent. On a laptop with 6–8 GB, local models are capable for most tasks but the cloud brain handles the hard ones. The routing system tries to catch these cases, but it's not perfect — sometimes a complex question goes local when it should escalate.
 
-**Speed on first load.** The first time a model is used in a session, Ollama loads it into GPU memory. This takes 5–15 seconds. After that, responses are near-instant. The tuning applied recently (keeping models "warm" for 30 minutes, running two simultaneously) eliminates most of this delay after the first use of a session.
+**Speed on first load.** The first time a model is used in a session, Ollama loads it into GPU memory. This takes 5–15 seconds. After that, responses are near-instant. Keeping models warm between sessions eliminates most of this delay after the first use.
 
 **Terminal-only.** Xochitl lives in the command line. This is intentional — terminal interfaces are fast, scriptable, and composable — but it's a real barrier for people who don't work in a terminal daily. A web interface is planned, and the groundwork is already in place.
 
@@ -174,4 +185,4 @@ The architecture is web-ready. The terminal is where she lives today.
 | [docs/spec/02-requirements-registry.md](docs/spec/02-requirements-registry.md) | Formal `FR-*` requirements |
 | [AGENTS.md](AGENTS.md) | SDD rules for contributors and agents |
 
-**Verification (May 2026):** `python smoke_test.py` — 146 passed, 0 failed.
+**Verification (May 2026):** `python smoke_test.py` — 167 passed, 0 failed.
