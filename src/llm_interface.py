@@ -22,10 +22,11 @@ LOCAL_PROVIDER       = get_secret("LOCAL_PROVIDER", "ollama")
 LM_STUDIO_URL        = get_secret("LM_STUDIO_URL", "http://localhost:1234/v1")
 
 CLOUD_PROVIDER    = get_secret("CLOUD_PROVIDER", "gemini")
-# gemini-1.5-pro is retired/slower; gemini-2.0-flash matches it on most tasks at lower cost.
-CLOUD_MODEL       = get_secret("CLOUD_MODEL", "gemini-2.0-flash")
-CLOUD_MODEL_PRO   = get_secret("CLOUD_MODEL_PRO", "gemini-2.0-flash")
-CLOUD_MODEL_FLASH = get_secret("CLOUD_MODEL_FLASH", "gemini-2.0-flash")
+# gemini-1.5-flash: free tier 1,500 RPD / 15 RPM — far more generous than 2.0-flash free tier.
+# Override via Doppler/secrets (CLOUD_MODEL_PRO, CLOUD_MODEL_FLASH) to use paid models.
+CLOUD_MODEL       = get_secret("CLOUD_MODEL",       "gemini-1.5-flash")
+CLOUD_MODEL_PRO   = get_secret("CLOUD_MODEL_PRO",   "gemini-1.5-flash")
+CLOUD_MODEL_FLASH = get_secret("CLOUD_MODEL_FLASH", "gemini-1.5-flash")
 GEMINI_API_KEY    = get_secret("GEMINI_API_KEY", "")
 ANTHROPIC_API_KEY = get_secret("ANTHROPIC_API_KEY", "")
 

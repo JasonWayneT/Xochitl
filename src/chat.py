@@ -472,10 +472,11 @@ class XochitlChat:
             from src.skills.zettelkasten_skill import ZettelkastenSkill
             from src.skills.explorer_skill import ExplorerSkill  # FR-ORCH-041
             from src.skills.workflow_skill import WorkflowSkill  # FR-MEM-014 / CR-042
+            from src.skills.maps_skill import MapsSkill          # FR-MAPS-001 / CR-045
             self._builtin_skills = [
                 BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill(),
                 WeatherSkill(), WebLookupSkill(), ZettelkastenSkill(), ExplorerSkill(),
-                WorkflowSkill(),
+                WorkflowSkill(), MapsSkill(),
             ]
 
         from src.skills.dynamic_skill import load_dynamic_skills

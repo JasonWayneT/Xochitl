@@ -2624,6 +2624,92 @@ test("GPU: DESKTOP thinking role selects qwen3:14b (AC-CR043-004)", t_select_mod
 test("GPU: startup report contains profile and model (AC-CR043-005)", t_startup_report_contains_profile_and_model)
 
 
+# ── CR-045 Google Maps Skill ──────────────────────────────────────────────────
+
+def t_maps_can_handle_directions():
+    """AC-CR045-001: can_handle detects directions queries (FR-MAPS-001)."""
+    from src.skills.maps_skill import MapsSkill
+    skill = MapsSkill()
+    score = skill.can_handle("directions to the library", {})
+    assert score >= 0.90, f"Expected >= 0.90, got {score}"
+
+def t_maps_can_handle_places():
+    """AC-CR045-002: can_handle detects places queries (FR-MAPS-002)."""
+    from src.skills.maps_skill import MapsSkill
+    skill = MapsSkill()
+    score = skill.can_handle("find a coffee shop near me", {})
+    assert score >= 0.90, f"Expected >= 0.90, got {score}"
+
+def t_maps_ignores_unrelated():
+    """AC-CR045-003: can_handle returns 0.0 for non-maps queries (FR-MAPS-001)."""
+    from src.skills.maps_skill import MapsSkill
+    skill = MapsSkill()
+    score = skill.can_handle("what is the weather today", {})
+    assert score == 0.0, f"Expected 0.0, got {score}"
+
+def t_maps_extract_destination():
+    """AC-CR045-004: _extract_destination parses 'directions to X' (FR-MAPS-001)."""
+    from src.skills.maps_skill import MapsSkill
+    result = MapsSkill._extract_destination("directions to downtown San Diego")
+    assert "San Diego" in result, f"Expected 'San Diego' in result, got {result!r}"
+
+def t_maps_format_directions_structure():
+    """AC-CR045-005: _format_directions includes distance, duration, steps (FR-MAPS-001)."""
+    from src.skills.maps_skill import _format_directions
+    mock_data = {
+        "routes": [{
+            "legs": [{
+                "distance": {"text": "5.2 mi"},
+                "duration": {"text": "12 mins"},
+                "start_address": "123 Main St",
+                "end_address": "456 Oak Ave",
+                "steps": [
+                    {"html_instructions": "Head <b>north</b>", "distance": {"text": "0.2 mi"}},
+                    {"html_instructions": "Turn <b>right</b>", "distance": {"text": "5.0 mi"}},
+                ],
+            }]
+        }]
+    }
+    result = _format_directions(mock_data, "origin", "dest", "driving")
+    assert "5.2 mi" in result, "Expected distance in output"
+    assert "12 mins" in result, "Expected duration in output"
+    assert "Head north" in result, "Expected step 1 in output"
+
+def t_maps_format_places_structure():
+    """AC-CR045-006: _format_places includes name, address, rating (FR-MAPS-002)."""
+    from src.skills.maps_skill import _format_places
+    mock_data = {
+        "results": [{
+            "name": "Blue Bottle Coffee",
+            "formatted_address": "123 Coffee Lane, San Diego, CA",
+            "rating": 4.5,
+            "user_ratings_total": 320,
+            "opening_hours": {"open_now": True},
+        }]
+    }
+    result = _format_places(mock_data, "coffee shop near me")
+    assert "Blue Bottle Coffee" in result, "Expected place name in output"
+    assert "4.5" in result, "Expected rating in output"
+    assert "Open now" in result, "Expected open status in output"
+
+def t_maps_missing_api_key_returns_message():
+    """AC-CR045-007: execute returns setup instruction when API key is missing (NFR-MAPS-001)."""
+    from unittest.mock import patch
+    from src.skills.maps_skill import MapsSkill
+    skill = MapsSkill()
+    with patch("src.skills.maps_skill.get_secret", return_value=""):
+        result = skill.execute("directions to the park", {}, {"intent": "directions"})
+    assert "GOOGLE_MAPS_API_KEY" in result, "Expected API key setup message"
+
+test("Maps: can_handle detects directions queries (AC-CR045-001)", t_maps_can_handle_directions)
+test("Maps: can_handle detects places queries (AC-CR045-002)", t_maps_can_handle_places)
+test("Maps: can_handle returns 0.0 for unrelated query (AC-CR045-003)", t_maps_ignores_unrelated)
+test("Maps: _extract_destination parses 'directions to X' (AC-CR045-004)", t_maps_extract_destination)
+test("Maps: _format_directions includes distance, duration, steps (AC-CR045-005)", t_maps_format_directions_structure)
+test("Maps: _format_places includes name, address, rating (AC-CR045-006)", t_maps_format_places_structure)
+test("Maps: missing API key returns setup instruction (AC-CR045-007)", t_maps_missing_api_key_returns_message)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
