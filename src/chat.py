@@ -126,30 +126,53 @@ def _osc8_link(path: str) -> str:
 # ── Status Tier renderer (FR-UI-001) ─────────────────────────────────────────
 
 class _StatusContext:
-    """Context manager that shows a live flower-animated status during LLM calls.
+    """Context manager that shows a live bloom-wave status during LLM calls.
 
-    Implements FR-UI-001 — replaces static 'thinking...' spinner with a
-    Rich Live display showing a cycling flower glyph, the current sub-task,
-    and elapsed time. Flower sequence mirrors the Xochitl splash screen.
+    Implements FR-UI-001 — replaces static 'thinking...' with a Rich Live
+    display: a bloom wave that rolls across five flower positions, paired
+    with a randomly chosen tip about Xochitl's features. Each query picks
+    a different tip so the user learns something new while they wait.
     """
 
-    # Two-flower morphing sequence — left blooms while right fades, then they
-    # cross and reverse. 10 distinct frames at 50 ms each = 500 ms full cycle.
+    # Bloom wave — a bloom state rolls left-to-right across 5 positions.
+    # 9 frames at 50 ms each = 450 ms full cycle.
     _FLOWERS = [
-        "·  ❁",
-        "✦  ❀",
-        "✽  ✿",
-        "✿  ✽",
-        "❀  ✦",
-        "❁  ·",
-        "❀  ✦",
-        "✿  ✽",
-        "✽  ✿",
-        "✦  ❀",
+        "✦ · · · ·",
+        "✿ ✦ · · ·",
+        "❀ ✿ ✦ · ·",
+        "❁ ❀ ✿ ✦ ·",
+        "· ❁ ❀ ✿ ✦",
+        "· · ❁ ❀ ✿",
+        "· · · ❁ ❀",
+        "· · · · ❁",
+        "· · · · ·",
     ]
 
-    def __init__(self, label: str = "thinking..."):
-        self._label = label
+    # Loading tips — one is picked at random each time Xochitl starts thinking.
+    _TIPS = [
+        "/brief for compact responses  —  /detailed for deep dives",
+        "xochitl today fills your queue with your top 3 priority tasks",
+        "ask 'why did you do that?' and I'll show you my reasoning",
+        "I remember your preferences and style across sessions",
+        "xochitl sync pushes your completed tasks up to Notion",
+        "mention any file path and I'll read it automatically",
+        "xochitl plan 'name' decomposes a project into queued tasks",
+        "your queue holds exactly 3 tasks — focused work, not overwhelm",
+        "BMAD walks through Business Model → Architecture → Design",
+        "xochitl pull fetches the latest tasks from Notion",
+        "hedged language means I'm less than 80% confident — take note",
+        "xochitl done <n> marks a task complete and refreshes your queue",
+        "simple tasks stay on your local GPU — your data never leaves",
+        "I detect when you rephrase a question and learn your preference",
+        "I stay on local models by default and only go cloud when needed",
+        "ask me to 'think through' something for a more deliberate answer",
+        "/dismiss clears a proactive alert you've already seen",
+        "I track my own persona drift and self-correct in long sessions",
+    ]
+
+    def __init__(self, label: str = ""):
+        import random
+        self._tip = random.choice(self._TIPS)
         self._note = "starting up"
         self._start = time.monotonic()
         self._live: Optional[Live] = None
@@ -158,20 +181,17 @@ class _StatusContext:
         self._refresh_thread: Optional[threading.Thread] = None
 
     def _render(self) -> Text:
-        elapsed = time.monotonic() - self._start
-        # Advance flower frame (4 fps via refresh_per_second=4)
         flower = self._FLOWERS[self._frame % len(self._FLOWERS)]
         self._frame += 1
         t = Text()
         t.append("  ", style="")
-        t.append(f"{flower} ", style="bold magenta")
-        t.append(self._label, style="dim")
-        t.append("  ", style="dim")
-        t.append(self._note, style="dim")
+        t.append(f"{flower}   ", style="bold magenta")
+        t.append("tip  ", style="dim cyan")
+        t.append(self._tip, style="dim")
         return t
 
     def update(self, label: str) -> None:
-        self._label = "thinking..."
+        # _note tracks pipeline stage internally; not shown visually (tip takes that space)
         self._note = (label or "working").strip().lower()
         if self._live:
             self._live.update(self._render())
@@ -631,11 +651,7 @@ class XochitlChat:
                     )
 
                 # ── LLM turn — FR-UI-001 status + FR-UI-006 cancellable thread ──
-                hint = (
-                    f"thinking...  [staged: '{self._staged_message[:30]}…']"
-                    if self._staged_message else "thinking..."
-                )
-                status_ctx = _StatusContext(hint)
+                status_ctx = _StatusContext()
                 self._active_status = status_ctx
                 try:
                     with status_ctx:
