@@ -777,6 +777,87 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR042-004` | `FR-MEM-012` | Hybrid search | embed hit + weak keyword | seeded row | combined score matches | implemented |
 | `AC-CR042-005` | All CR-042 | Smoke tests | `python smoke_test.py` | — | 146 passed, 0 failed | implemented |
 
+### GPU-Aware Model Selection (CR-043)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-GPU-001` | functional | P1 | implemented | `_classify_profile()` maps total VRAM (MB) to `HardwareProfile` enum: WORKSTATION>=20GB, DESKTOP>=12GB, LAPTOP>=6GB, MINIMAL<6GB | `AC-CR043-001`, `AC-CR043-002`, `AC-CR043-003` | `CR-043` | `src/model_manager.py` |
+| `FR-GPU-002` | functional | P1 | implemented | `select_model()` returns model name from `_PROFILES[_HARDWARE_PROFILE][role]`; detected once at import time | `AC-CR043-004` | `CR-043` | `src/model_manager.py` |
+| `FR-GPU-003` | functional | P2 | implemented | `get_startup_report()` returns GPU info + model assignments as plain text | `AC-CR043-005` | `CR-043` | `src/model_manager.py` |
+| `NFR-GPU-001` | non-functional | P1 | implemented | Profile detection uses total VRAM (stable), not free VRAM (fluctuates) | `AC-CR043-003` | `CR-043` | `src/model_manager.py` (`get_vram_info`) |
+
+### Acceptance criteria — GPU-Aware Model Selection (CR-043)
+
+| ID | Requirements | Scenario | Input | Expected | Status |
+|---|---|---|---|---|---|
+| `AC-CR043-001` | `FR-GPU-001` | 16 GB total VRAM | `_classify_profile(16384)` | `DESKTOP` | implemented |
+| `AC-CR043-002` | `FR-GPU-001` | 8 GB total VRAM | `_classify_profile(8192)` | `LAPTOP` | implemented |
+| `AC-CR043-003` | `FR-GPU-001`, `NFR-GPU-001` | No GPU / None | `_classify_profile(None)` | `MINIMAL` | implemented |
+| `AC-CR043-004` | `FR-GPU-002` | DESKTOP + thinking role | `select_model("thinking")` w/ DESKTOP profile | `qwen3:14b` | implemented |
+| `AC-CR043-005` | `FR-GPU-003` | Startup report | `get_startup_report()` | contains profile name and model name | implemented |
+
+### Doppler-First Secrets Management (CR-044)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `NFR-SEC-002` | non-functional | P1 | implemented | `secrets.load()` injects Doppler secrets into `os.environ` at boot before any skill reads credentials | `AC-CR044-001` | `CR-044` | `src/secrets.py` (`_try_doppler`) |
+| `NFR-SEC-003` | non-functional | P1 | implemented | Falls back to `.env` if Doppler unavailable; silent in both cases | `AC-CR044-002` | `CR-044` | `src/secrets.py` (`_try_dotenv`) |
+| `NFR-SEC-004` | non-functional | P1 | implemented | Doppler keys do not overwrite keys already in `os.environ` (non-destructive merge) | `AC-CR044-003` | `CR-044` | `src/secrets.py` (`_try_doppler` — `if key not in os.environ`) |
+
+### Acceptance criteria — Doppler Secrets (CR-044)
+
+| ID | Requirements | Scenario | Expected | Status |
+|---|---|---|---|---|
+| `AC-CR044-001` | `NFR-SEC-002` | Doppler CLI available and configured | `secrets.load()` returns `'doppler'` | implemented |
+| `AC-CR044-002` | `NFR-SEC-003` | Doppler unavailable, .env present | `secrets.load()` returns `'dotenv'` | implemented |
+| `AC-CR044-003` | `NFR-SEC-004` | Key already in env | Doppler value does not overwrite | implemented |
+
+### Google Maps Skill (CR-045)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-MAPS-001` | functional | P1 | implemented | Directions and travel time between two points via Google Directions API | `AC-CR045-001`, `AC-CR045-004`, `AC-CR045-005` | `CR-045` | `src/skills/maps_skill.py` (`_directions`, `_format_directions`) |
+| `FR-MAPS-002` | functional | P1 | implemented | Places search (restaurants, shops, etc.) near a location via Google Places API | `AC-CR045-002`, `AC-CR045-006` | `CR-045` | `src/skills/maps_skill.py` (`_places`, `_format_places`) |
+| `FR-MAPS-003` | functional | P2 | implemented | Uses saved home preference as default origin/location when omitted | — | `CR-045` | `src/skills/maps_skill.py` (`_default_location`) |
+| `FR-MAPS-004` | non-functional | P1 | implemented | API key read from secrets store (`GOOGLE_MAPS_API_KEY`); missing key returns setup instruction | `AC-CR045-007` | `CR-045` | `src/skills/maps_skill.py` (`execute`) |
+| `NFR-MAPS-001` | non-functional | P1 | implemented | All Maps HTTP calls use `http_utils.fetch_bytes` (SSRF guard + retry) | — | `CR-045` | `src/skills/maps_skill.py` (`_fetch_json`) |
+
+### Acceptance criteria — Google Maps (CR-045)
+
+| ID | Requirements | Scenario | Expected | Status |
+|---|---|---|---|---|
+| `AC-CR045-001` | `FR-MAPS-001` | `can_handle("directions to the library")` | >= 0.90 | implemented |
+| `AC-CR045-002` | `FR-MAPS-002` | `can_handle("find a coffee shop near me")` | >= 0.90 | implemented |
+| `AC-CR045-003` | `FR-MAPS-001` | `can_handle("what is the weather")` | 0.0 | implemented |
+| `AC-CR045-004` | `FR-MAPS-001` | `_extract_destination("directions to downtown San Diego")` | contains "San Diego" | implemented |
+| `AC-CR045-005` | `FR-MAPS-001` | `_format_directions()` with mock data | includes distance, duration, steps | implemented |
+| `AC-CR045-006` | `FR-MAPS-002` | `_format_places()` with mock data | includes name, rating, open status | implemented |
+| `AC-CR045-007` | `FR-MAPS-004` | Missing API key | returns setup instruction with key name | implemented |
+
+### Gmail Skill (CR-046a)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-GMAIL-001` | functional | P1 | implemented | List unread inbox messages with from/subject/date/snippet; `gmail_last_list` stored in context | `AC-CR046a-001`, `AC-CR046a-006` | `CR-046a` | `src/skills/gmail_skill.py` (`_inbox`, `_format_inbox`) |
+| `FR-GMAIL-002` | functional | P1 | implemented | Search Gmail using natural-language queries mapped to Gmail query syntax | `AC-CR046a-003`, `AC-CR046a-005` | `CR-046a` | `src/skills/gmail_skill.py` (`_search`, `_extract_search_query`) |
+| `FR-GMAIL-003` | functional | P1 | implemented | Send email via RFC 2822 + base64url encoding to Gmail send API | `AC-CR046a-002`, `AC-CR046a-008` | `CR-046a` | `src/skills/gmail_skill.py` (`_send`, `_build_raw_message`) |
+| `FR-GMAIL-004` | functional | P2 | implemented | Mark as read and archive emails by 1-based index into last shown list | — | `CR-046a` | `src/skills/gmail_skill.py` (`_mark_read`) |
+| `NFR-GMAIL-001` | non-functional | P1 | implemented | Auth failure returns descriptive message; no email content persisted to disk | `AC-CR046a-009` | `CR-046a` | `src/skills/gmail_skill.py` (`execute` try/except) |
+
+### Acceptance criteria — Gmail (CR-046a)
+
+| ID | Requirements | Scenario | Expected | Status |
+|---|---|---|---|---|
+| `AC-CR046a-001` | `FR-GMAIL-001` | `can_handle("check my email")` | >= 0.90 | implemented |
+| `AC-CR046a-002` | `FR-GMAIL-003` | `can_handle("send an email to bob")` | >= 0.90 | implemented |
+| `AC-CR046a-003` | `FR-GMAIL-002` | `can_handle("find emails from alice")` | >= 0.90 | implemented |
+| `AC-CR046a-004` | `FR-GMAIL-001` | `can_handle("what is the weather")` | 0.0 | implemented |
+| `AC-CR046a-005` | `FR-GMAIL-002` | `_extract_search_query("emails from alice@gmail.com")` | `"from:alice@gmail.com"` | implemented |
+| `AC-CR046a-006` | `FR-GMAIL-001` | `_format_inbox()` with mock data | includes sender, subject, snippet | implemented |
+| `AC-CR046a-007` | `FR-GMAIL-001` | `_format_full_message()` with mock data | includes From, To, Subject, body | implemented |
+| `AC-CR046a-008` | `FR-GMAIL-003` | `_build_raw_message()` | non-empty base64, contains recipient | implemented |
+| `AC-CR046a-009` | `NFR-GMAIL-001` | Auth FileNotFoundError | returns descriptive string, no exception raised | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

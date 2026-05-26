@@ -149,6 +149,22 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-MEM-012` | `CR-042` | `CR-042` | `AC-CR042-001`, `AC-CR042-004` | `TASK-MEM-042-a` | `src/workflow_vector.py` (`WorkflowVectorIndex`); `src/workflows.py` (`_hybrid_scores`, `search_workflows_by_intent`, `_index_workflow_embedding`) | smoke (AC-CR042-001, AC-CR042-004) | implemented |
 | `FR-MEM-013` | `CR-042` | `CR-042` | `AC-CR042-002` | `TASK-MEM-042-a` | `src/workflows.py` (`distill_workflow_trajectory`); `src/chat.py` (`use_llm_distill` on save) | smoke (AC-CR042-002) | implemented |
 | `FR-MEM-014` | `CR-042` | `CR-042` | `AC-CR042-003` | `TASK-MEM-042-b` | `src/workflows.py` (`execute_workflow`); `src/skills/workflow_skill.py`; `src/chat.py` (`WorkflowSkill`, `/workflow run`) | smoke (AC-CR042-003) | implemented |
+| `FR-GPU-001` | `CR-043` | `CR-043` | `AC-CR043-001`, `AC-CR043-002`, `AC-CR043-003` | `TASK-GPU-043-a` | `src/model_manager.py` (`_classify_profile`, `HardwareProfile`) | smoke (AC-CR043-001–003) | implemented |
+| `FR-GPU-002` | `CR-043` | `CR-043` | `AC-CR043-004` | `TASK-GPU-043-a` | `src/model_manager.py` (`select_model`, `_PROFILES`, `_HARDWARE_PROFILE`) | smoke (AC-CR043-004) | implemented |
+| `FR-GPU-003` | `CR-043` | `CR-043` | `AC-CR043-005` | `TASK-GPU-043-b` | `src/model_manager.py` (`get_startup_report`) | smoke (AC-CR043-005) | implemented |
+| `NFR-GPU-001` | `CR-043` | `CR-043` | `AC-CR043-003` | `TASK-GPU-043-a` | `src/model_manager.py` (`get_vram_info` — total VRAM, not free) | smoke (AC-CR043-003) | implemented |
+| `NFR-SEC-002` | `CR-044` | `CR-044` | `AC-CR044-001` | `TASK-SEC-044-a` | `src/secrets.py` (`_try_doppler`); `src/cli.py` (`_boot` calls `secrets.load()`) | manual | implemented |
+| `NFR-SEC-003` | `CR-044` | `CR-044` | `AC-CR044-002` | `TASK-SEC-044-a` | `src/secrets.py` (`_try_dotenv`) | manual | implemented |
+| `NFR-SEC-004` | `CR-044` | `CR-044` | `AC-CR044-003` | `TASK-SEC-044-a` | `src/secrets.py` (`_try_doppler` — `if key not in os.environ`) | manual | implemented |
+| `FR-MAPS-001` | `CR-045` | `CR-045` | `AC-CR045-001`, `AC-CR045-004`, `AC-CR045-005` | `TASK-MAPS-045-a` | `src/skills/maps_skill.py` (`MapsSkill._directions`, `_format_directions`, `_extract_destination`) | smoke (AC-CR045-001–005) | implemented |
+| `FR-MAPS-002` | `CR-045` | `CR-045` | `AC-CR045-002`, `AC-CR045-006` | `TASK-MAPS-045-a` | `src/skills/maps_skill.py` (`MapsSkill._places`, `_format_places`) | smoke (AC-CR045-002, 006) | implemented |
+| `FR-MAPS-003` | `CR-045` | `CR-045` | — | `TASK-MAPS-045-b` | `src/skills/maps_skill.py` (`_default_location`) | manual | implemented |
+| `FR-MAPS-004` | `CR-045` | `CR-045` | `AC-CR045-007` | `TASK-MAPS-045-b` | `src/skills/maps_skill.py` (`execute` — missing key guard) | smoke (AC-CR045-007) | implemented |
+| `FR-GMAIL-001` | `CR-046a` | `CR-046a` | `AC-CR046a-001`, `AC-CR046a-006`, `AC-CR046a-007` | `TASK-GMAIL-046a-a` | `src/skills/gmail_skill.py` (`GmailSkill._inbox`, `_format_inbox`, `_format_full_message`) | smoke (AC-CR046a-001, 006, 007) | implemented |
+| `FR-GMAIL-002` | `CR-046a` | `CR-046a` | `AC-CR046a-003`, `AC-CR046a-005` | `TASK-GMAIL-046a-a` | `src/skills/gmail_skill.py` (`GmailSkill._search`, `_extract_search_query`) | smoke (AC-CR046a-003, 005) | implemented |
+| `FR-GMAIL-003` | `CR-046a` | `CR-046a` | `AC-CR046a-002`, `AC-CR046a-008` | `TASK-GMAIL-046a-b` | `src/skills/gmail_skill.py` (`GmailSkill._send`, `_build_raw_message`) | smoke (AC-CR046a-002, 008) | implemented |
+| `FR-GMAIL-004` | `CR-046a` | `CR-046a` | — | `TASK-GMAIL-046a-b` | `src/skills/gmail_skill.py` (`GmailSkill._mark_read`) | manual | implemented |
+| `NFR-GMAIL-001` | `CR-046a` | `CR-046a` | `AC-CR046a-009` | `TASK-GMAIL-046a-a` | `src/skills/gmail_skill.py` (`execute` — FileNotFoundError/Exception handling) | smoke (AC-CR046a-009) | implemented |
 
 | `FR-ORCH-015` | `CR-008` | `CR-008` | `AC-CR008-001` | `TASK-CR008-001`, `TASK-CR008-002` | `src/router.py` (`_ZETTEL_RE`, `_fast_classify`, `_LOCAL_SPECIALIZED_CATEGORIES`, `_FORCE_LOCAL_CATEGORIES`, `_KEYWORD_MAP`, `_CLASSIFICATION_PROMPT`) | manual | implemented |
 | `FR-ZTK-001` | `CR-008` | `CR-008` | `AC-CR008-002` | `TASK-CR008-003`, `TASK-CR008-004` | `src/chat.py` (`_builtin_skills`), `src/skills/zettelkasten_skill.py` (`_ENTER_PHRASES`, `tool_definition`) | manual | implemented |

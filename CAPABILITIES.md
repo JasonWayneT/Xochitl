@@ -47,7 +47,8 @@ Xochitl is a high-intelligence agentic CLI for software engineering, project pla
 
 ## 4. Technical Capabilities
 
-- **LLM routing**: Ollama local (Phi-4, Gemma2 router, Qwen coder) + optional Gemini / Claude cloud.
+- **LLM routing**: Ollama local + optional Gemini / Claude cloud. GPU-aware model selection (CR-043): auto-detects VRAM at boot and selects the best local models for WORKSTATION / DESKTOP / LAPTOP / MINIMAL profiles.
+- **Secrets management** (CR-044): Doppler-first load at boot (`secrets.load()`); falls back to `.env` then `os.environ`. Per-key DB override via `xochitl secrets set`.
 - **Terminal visual grammar** (CR-039): Semantic prefixes (`done`, `action`, `warn`, `fail`), 80-column wrap, step progress `n/m` via `src/terminal_output.py`.
 - **JSON CLI mode**: `xochitl --json` on data commands (`today`, `status`, `queue`, `sync`, etc.); `chat`/`plan` return `interactive_only`.
 - **Safe executor** (CR-037): `ActionGovernor` classifies read/write/exec; path traversal denied; allowlisted shell commands.
@@ -58,7 +59,23 @@ Xochitl is a high-intelligence agentic CLI for software engineering, project pla
 
 ---
 
-## 5. Command Reference
+## 5. Google Integration
+
+OAuth 2.0 credentials at `~/.xochitl/google_token.json`. Run `xochitl` and say "check my email" or "directions to X" — auth flow opens in browser on first use.
+
+| Capability | Skill | What you can say |
+|---|---|---|
+| Gmail inbox | `GmailSkill` | "check my email", "any unread emails?" |
+| Gmail search | `GmailSkill` | "find emails from alice", "emails about the project" |
+| Gmail send | `GmailSkill` | "send an email to bob@example.com saying..." |
+| Gmail mark/archive | `GmailSkill` | "mark email 1 as read", "archive that" |
+| Directions | `MapsSkill` | "directions to downtown", "how long to drive to X" |
+| Travel time | `MapsSkill` | "how far is it from home to the airport?" |
+| Places search | `MapsSkill` | "find a Thai restaurant near me" |
+
+---
+
+## 6. Command Reference
 
 | Command | Description |
 |---|---|
@@ -83,7 +100,7 @@ Xochitl is a high-intelligence agentic CLI for software engineering, project pla
 
 ---
 
-## 6. Skills (built-in)
+## 7. Skills (built-in)
 
 | Skill | Role |
 |---|---|
@@ -97,6 +114,8 @@ Xochitl is a high-intelligence agentic CLI for software engineering, project pla
 | `ExplorerSkill` | Bounded read-only investigation |
 | `OrchestratorSkill` | Multi-skill coordination |
 | `WorkflowSkill` | Run saved procedural workflows |
+| `MapsSkill` | Directions, travel time, places search (CR-045) |
+| `GmailSkill` | Read inbox, search, send, mark read (CR-046a) |
 | `DynamicSkill` | Loads `.xochitl/skills/` |
 
 ---
