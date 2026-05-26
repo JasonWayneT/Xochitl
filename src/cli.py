@@ -16,8 +16,19 @@ from rich.spinner import SPINNERS
 
 # Flower blooming sequence — dot → sparkle → bud → full bloom → bud → sparkle
 SPINNERS["xochitl"] = {
-    "interval": 180,
-    "frames": ["·", "✦", "✿", "❀", "✽", "❀", "✿", "✦"],
+    "interval": 50,
+    "frames": [
+        "·  ❁",
+        "✦  ❀",
+        "✽  ✿",
+        "✿  ✽",
+        "❀  ✦",
+        "❁  ·",
+        "❀  ✦",
+        "✿  ✽",
+        "✽  ✿",
+        "✦  ❀",
+    ],
 }
 
 console = Console()
@@ -666,13 +677,6 @@ def chat(ctx, cloud, with_orchestrator, no_rich):
             [{"status": "warn", "text": "chat is interactive; run without --json"}],
         )
         return
-    # CR-043: GPU report in startup banner (FR-GPU-003)
-    try:
-        from src.model_manager import get_startup_report
-        report = get_startup_report()
-        console.print(f"[dim]{report}[/dim]\n")
-    except Exception:
-        pass
     # Implements FR-UX-001 (--no-rich flag, TERM=dumb fallback)
     from src.chat import XochitlChat
     XochitlChat(force_cloud=cloud, with_orchestrator=with_orchestrator, no_rich=no_rich).start()

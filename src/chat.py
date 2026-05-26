@@ -133,8 +133,20 @@ class _StatusContext:
     and elapsed time. Flower sequence mirrors the Xochitl splash screen.
     """
 
-    # Flower frames — mirrors the ✿ ❀ splash screen pattern
-    _FLOWERS = ["✿", "❀", "✿", "❀"]
+    # Two-flower morphing sequence — left blooms while right fades, then they
+    # cross and reverse. 10 distinct frames at 50 ms each = 500 ms full cycle.
+    _FLOWERS = [
+        "·  ❁",
+        "✦  ❀",
+        "✽  ✿",
+        "✿  ✽",
+        "❀  ✦",
+        "❁  ·",
+        "❀  ✦",
+        "✿  ✽",
+        "✽  ✿",
+        "✦  ❀",
+    ]
 
     def __init__(self, label: str = "thinking..."):
         self._label = label
@@ -168,7 +180,7 @@ class _StatusContext:
         while not self._stop_event.is_set():
             if self._live:
                 self._live.update(self._render())
-            time.sleep(0.06)
+            time.sleep(0.05)
 
     def __enter__(self) -> "_StatusContext":
         if not _TERM_DUMB:
