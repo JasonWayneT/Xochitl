@@ -2710,6 +2710,111 @@ test("Maps: _format_places includes name, address, rating (AC-CR045-006)", t_map
 test("Maps: missing API key returns setup instruction (AC-CR045-007)", t_maps_missing_api_key_returns_message)
 
 
+# ── CR-046a Gmail Skill ───────────────────────────────────────────────────────
+
+def t_gmail_can_handle_inbox():
+    """AC-CR046a-001: can_handle detects inbox queries (FR-GMAIL-001)."""
+    from src.skills.gmail_skill import GmailSkill
+    skill = GmailSkill()
+    assert skill.can_handle("check my email", {}) >= 0.90
+
+def t_gmail_can_handle_send():
+    """AC-CR046a-002: can_handle detects send intent (FR-GMAIL-003)."""
+    from src.skills.gmail_skill import GmailSkill
+    skill = GmailSkill()
+    assert skill.can_handle("send an email to bob@example.com", {}) >= 0.90
+
+def t_gmail_can_handle_search():
+    """AC-CR046a-003: can_handle detects search queries (FR-GMAIL-002)."""
+    from src.skills.gmail_skill import GmailSkill
+    skill = GmailSkill()
+    assert skill.can_handle("find emails from alice", {}) >= 0.90
+
+def t_gmail_ignores_unrelated():
+    """AC-CR046a-004: can_handle returns 0.0 for non-email queries (FR-GMAIL-001)."""
+    from src.skills.gmail_skill import GmailSkill
+    skill = GmailSkill()
+    assert skill.can_handle("what is the weather today", {}) == 0.0
+
+def t_gmail_extract_search_query_from():
+    """AC-CR046a-005: _extract_search_query parses 'emails from X' (FR-GMAIL-002)."""
+    from src.skills.gmail_skill import _extract_search_query
+    result = _extract_search_query("emails from alice@gmail.com")
+    assert "alice@gmail.com" in result, f"Expected email in query, got {result!r}"
+    assert result.startswith("from:"), f"Expected 'from:' prefix, got {result!r}"
+
+def t_gmail_format_inbox_structure():
+    """AC-CR046a-006: _format_inbox includes sender, subject, snippet (FR-GMAIL-001)."""
+    from src.skills.gmail_skill import _format_inbox
+    summaries = [("id123", {
+        "id": "id123",
+        "from_": "Alice <alice@example.com>",
+        "subject": "Project Update",
+        "date": "May 25, 2026  10:00 AM",
+        "snippet": "Here is the latest on the project...",
+        "unread": True,
+    })]
+    result = _format_inbox(summaries)
+    assert "Alice" in result, "Expected sender in output"
+    assert "Project Update" in result, "Expected subject in output"
+    assert "latest on the project" in result, "Expected snippet in output"
+
+def t_gmail_format_full_message():
+    """AC-CR046a-007: _format_full_message includes headers and body (FR-GMAIL-001)."""
+    import base64
+    from src.skills.gmail_skill import _format_full_message
+    body_text = "Hello, this is the email body."
+    body_b64 = base64.urlsafe_b64encode(body_text.encode()).decode()
+    mock_msg = {
+        "payload": {
+            "mimeType": "text/plain",
+            "headers": [
+                {"name": "From", "value": "Alice <alice@example.com>"},
+                {"name": "To", "value": "me@example.com"},
+                {"name": "Subject", "value": "Test Subject"},
+                {"name": "Date", "value": "Mon, 25 May 2026 10:00:00 +0000"},
+            ],
+            "body": {"data": body_b64},
+            "parts": [],
+        },
+        "snippet": "Hello, this is...",
+    }
+    result = _format_full_message(mock_msg)
+    assert "Alice" in result, "Expected From in output"
+    assert "Test Subject" in result, "Expected Subject in output"
+    assert "email body" in result, "Expected body text in output"
+
+def t_gmail_build_raw_message():
+    """AC-CR046a-008: _build_raw_message returns non-empty base64 string (FR-GMAIL-003)."""
+    import base64
+    from src.skills.gmail_skill import _build_raw_message
+    raw = _build_raw_message(to="bob@example.com", subject="Hello", body="Test body")
+    assert isinstance(raw, str) and len(raw) > 0, "Expected non-empty base64 string"
+    # Verify it decodes without error
+    decoded = base64.urlsafe_b64decode(raw + "==")
+    assert b"bob@example.com" in decoded, "Expected recipient in encoded message"
+
+def t_gmail_auth_error_returns_message():
+    """AC-CR046a-009: execute returns message on auth failure, not an exception (NFR-GMAIL-001)."""
+    from unittest.mock import patch
+    from src.skills.gmail_skill import GmailSkill
+    skill = GmailSkill()
+    with patch("src.google_auth.get_service", side_effect=FileNotFoundError("credentials not found")):
+        result = skill.execute("check my email", {}, {})
+    assert "credentials" in result.lower() or "not found" in result.lower(), \
+        f"Expected error message, got: {result!r}"
+
+test("Gmail: can_handle detects inbox queries (AC-CR046a-001)", t_gmail_can_handle_inbox)
+test("Gmail: can_handle detects send intent (AC-CR046a-002)", t_gmail_can_handle_send)
+test("Gmail: can_handle detects search queries (AC-CR046a-003)", t_gmail_can_handle_search)
+test("Gmail: can_handle returns 0.0 for unrelated query (AC-CR046a-004)", t_gmail_ignores_unrelated)
+test("Gmail: _extract_search_query parses 'emails from X' (AC-CR046a-005)", t_gmail_extract_search_query_from)
+test("Gmail: _format_inbox includes sender, subject, snippet (AC-CR046a-006)", t_gmail_format_inbox_structure)
+test("Gmail: _format_full_message includes headers and body (AC-CR046a-007)", t_gmail_format_full_message)
+test("Gmail: _build_raw_message returns valid base64 (AC-CR046a-008)", t_gmail_build_raw_message)
+test("Gmail: auth failure returns message not exception (AC-CR046a-009)", t_gmail_auth_error_returns_message)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
