@@ -55,7 +55,9 @@ XOCHITL_BANNER = "[bold cyan]Xochitl[/bold cyan] [dim]— Personal AI System[/di
 
 
 def _boot() -> None:
-    """Initialize DB on first run."""
+    """Initialize DB on first run and load secrets."""
+    from src import secrets
+    secrets.load()
     from src.database import init_db
     init_db()
 
