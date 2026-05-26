@@ -576,3 +576,47 @@ None from the original 36-item gap analysis.
 - `src/governor.py` = token budget; `src/executor.py` = action permission (`ActionGovernor`); `src/initiative.py` = proactive policy.
 - `preferences` table columns: `preference_key`, `preference_value` (not `key`/`value`).
 - Capability boundary remains **CR-036**; controlled initiative is **CR-038**.
+
+---
+
+## JARVIS Skill Roadmap — Session 2026-05-25
+
+Skills identified for the next build phase, ranked by JARVIS-esque impact. These are
+the things a real JARVIS needs that Xochitl can't do yet. All are queued — none started.
+
+| Priority | Skill | CR | Description |
+|---|---|---|---|
+| 1 | **Morning Briefing** | CR-046 | `xochitl brief` conductor: weather + calendar + WIP queue + overnight emails + GitHub notifications + news headlines. Not a skill — a conductor that calls all other skills and synthesises into one structured brief. Most JARVIS-esque single feature. |
+| 2 | **Web Research + Synthesis** | CR-047 | Multi-source search, reconcile results, produce a cited answer. The difference between a lookup and research. Builds on the bounded explorer (CR-023) already in backlog. |
+| 3 | **System Monitor** | CR-048 | Real-time CPU/RAM/GPU/disk/temp with alertable thresholds. "Alert me if GPU goes above 85C." Pairs with initiative engine (CR-038). JARVIS is always watching the environment. Threshold watchers: disk > 90%, PR open > 3 days, deadline in 48h. |
+| 4 | **Document / PDF Ingestion** | CR-049 | Drop a PDF, long URL, or Word doc — get a summary, Q&A on it, or extraction into the knowledge base. Massive daily productivity multiplier for knowledge workers. |
+| 5 | **Vision / Screenshot Analysis** | CR-050 | Paste or point at an image, get analysis. Bug screenshot -> diagnoses. Chart -> interprets. UI mockup -> critiques. Makes everything else compoundable. |
+| 6 | **Clipboard / Quick Capture** | CR-051 | Frictionless "Xochitl, remember this" for URLs, snippets, ideas -> memory. Zero-friction capture to Zettelkasten or preferences. |
+| 7 | **API Client** | CR-052 | Send HTTP requests, inspect responses — dev daily driver. Structured request builder, response formatter, save-to-memory. |
+| 8 | **Academic / Research Paper Search** | CR-053 | arXiv + Semantic Scholar integration. Important for R&D work referenced in exploration docs. Citation extraction, abstract summary, related paper graph. |
+| 9 | **Health / Habit Tracker** | CR-054 | Log sleep, workouts, habits. Links to task energy awareness. Fitbit API integration already planned. |
+| 10 | **Voice Input** | CR-055 | Wake word or push-to-talk -> text -> normal skill routing. Whisper local transcription preferred (no cloud dependency). |
+| 11 | **Wikipedia / Knowledge Synthesis** | CR-056 | Deeper than web lookup -- structured extraction from encyclopedic sources. Entity disambiguation, infobox parsing, summary with source links. |
+| 12 | **Browser Automation** | CR-057 | Playwright/Selenium for scraping pages that block raw HTTP. Required for sites that need JS rendering. |
+| 13 | **Travel / Logistics Planner** | CR-058 | Flight options, hotel, calendar blocking -- one-shot trip planning. Builds on Maps skill (CR-045) and Calendar skill (upcoming). |
+| 14 | **Dependency Audit** | CR-059 | `pip audit`, `npm audit` -> summarise CVEs, suggest fixes. Dev tooling skill, pairs with System Monitor (CR-048). |
+
+### Google skills still to build (CR-045 follow-ons)
+
+These use the google_auth.py OAuth flow already implemented (2026-05-25):
+
+| Skill | CR | Auth | APIs needed |
+|---|---|---|---|
+| Gmail | CR-046a | OAuth (done) | Gmail API v1 |
+| Calendar | CR-046b | OAuth (done) | Calendar API v3 |
+| Drive | CR-046c | OAuth (done) | Drive API v3 |
+
+Gmail and Calendar are prerequisites for Morning Briefing (CR-046).
+
+### Session state (end of 2026-05-25)
+
+- **Smoke tests**: 158 passed, 0 failed
+- **Last CR committed**: CR-045 (Google Maps skill)
+- **Doppler**: configured and live on this machine; `doppler login + doppler setup` needed on new machines
+- **gemini-1.5-flash**: set as default cloud model (replaces 2.0-flash, free tier 1,500 RPD)
+- **Next session start**: build CR-046a (Gmail skill) or CR-046 (Morning Briefing) — Gmail first since Briefing depends on it
