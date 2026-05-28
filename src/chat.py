@@ -1062,7 +1062,7 @@ class XochitlChat:
                 if not printed_header:
                     console.print(f"\n[bold]Xochitl[/bold]: ", end="")
                     printed_header = True
-                console.print(token, end="", flush=True)
+                console.print(token, end="")
                 buffer.append(token)
 
             if buffer:
@@ -1359,7 +1359,17 @@ class XochitlChat:
                     )
                     break
 
-                # CORRECTABLE: retry with critic note injected into system prompt
+                # CORRECTABLE on a tool-call turn: a retry would discard the skill
+                # result because the retry LLM call has no access to the tool output.
+                # Downgrade to AMBIGUOUS so we append a caveat instead of losing data.
+                if tool_calls_made and cresult.verdict == "correctable":
+                    current_response = (
+                        current_response
+                        + f"\n\n_{_FYI} — {cresult.note}_"
+                    )
+                    break
+
+                # CORRECTABLE (non-tool turn): retry with critic note injected into system prompt
                 current_system = (
                     current_system
                     + f"\n\n[CRITIC NOTE: The previous response had this issue: "

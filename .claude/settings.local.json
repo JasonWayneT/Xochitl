@@ -10,7 +10,19 @@
       "Edit",
       "Write",
       "Glob",
-      "Grep"
+      "Grep",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\Jason\\\\Desktop\\\\Jason\\\\Resource\\\\CodeProjects\\\\Xochitl\" | Select-Object Name, LastWriteTime, @{N='Size';E={if\\($_.PSIsContainer\\){'<dir>'}else{\"{0:N0} KB\" -f \\($_.Length/1KB\\)}}} | Format-Table -AutoSize)",
+      "WebFetch(domain:www.youtube.com)",
+      "WebSearch",
+      "Bash(mkdir -p \"C:\\\\Users\\\\Jason\\\\.claude\\\\projects\\\\C--Users-Jason-Desktop-Jason-Resource-CodeProjects-Xochitl\\\\memory\")",
+      "WebFetch(domain:arxiv.org)",
+      "WebFetch(domain:clearly.design)",
+      "WebFetch(domain:wal.sh)",
+      "WebFetch(domain:www.aiuxdesign.guide)",
+      "WebFetch(domain:thenewstack.io)",
+      "WebFetch(domain:www.anthropic.com)",
+      "WebFetch(domain:docs.dume.ai)",
+      "PowerShell(New-Item -ItemType File \"C:\\\\Users\\\\Jason\\\\Desktop\\\\Jason\\\\Resource\\\\CodeProjects\\\\Xochitl\\\\src\\\\secrets.py\" -Force)"
     ]
   }
 }
