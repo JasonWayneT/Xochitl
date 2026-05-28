@@ -170,6 +170,21 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-ORCH-049` | `CR-047` | `CR-047` | `AC-CR047-006` | `TASK-ORCH-047-b` | `src/chat.py` (`_handle_slash_command()` — `/debug skill` handler with scored table) | smoke (AC-CR047-006) | implemented |
 | `FR-ORCH-050` | `CR-047` | `CR-047` | `AC-CR047-007` | `TASK-ORCH-047-c` | `src/chat.py` (`process_message()` — `_AT_SKILL_RE` routing block; `@SkillName` prefix stripped before `execute()`) | smoke (AC-CR047-007) | implemented |
 | `NFR-DEV-009` | `CR-047` | `CR-047` | `AC-CR047-008` | `TASK-ORCH-047-d` | `AGENTS.md` ("Adding a new skill" section with 5-step mandatory checklist) | doc review (AC-CR047-008) | implemented |
+| `FR-JARV-001` | `CR-048` | `CR-048` | `AC-CR048-001` | `TASK-JARV-048-a` | `src/context_manager.py` `FactsEngine.assemble()` — `_time_greeting()` + `Time:` line | smoke (AC-CR048-001) | implemented |
+| `FR-JARV-002` | `CR-048` | `CR-048` | `AC-CR048-002`, `AC-CR048-003` | `TASK-JARV-048-a` | `src/context_manager.py` `FactsEngine.ingest()` `_fetch_git_state()` | smoke (AC-CR048-002, AC-CR048-003) | implemented |
+| `FR-JARV-003` | `CR-048` | `CR-048` | `AC-CR048-004` | `TASK-JARV-048-a` | `src/context_manager.py` `FactsEngine.ingest()` `_fetch_notion_freshness()` | smoke (AC-CR048-004) | implemented |
+| `FR-JARV-004` | `CR-048` | `CR-048` | `AC-CR048-005`, `AC-CR048-006`, `AC-CR048-007` | `TASK-JARV-048-b` | `src/initiative.py` — `DEADLINE`, `FOLLOWUP_SUGGESTION`, `SKILL_HEALTH`, `CELEBRATION` enum members; `_ERRORS_ONLY_CATEGORIES` set; `submit()` gate updated | smoke (AC-CR048-005–007) | implemented |
+| `FR-JARV-005` | `CR-048` | `CR-048` | `AC-CR048-008` | `TASK-JARV-048-c` | `src/governor.py` `approach_pct()`, `should_warn_approach()`; `src/chat.py` budget-approach warning block | smoke (AC-CR048-008) | implemented |
+| `FR-JARV-006` | `CR-048` | `CR-048` | `AC-CR048-009` | `TASK-JARV-048-d` | `src/chat.py` `_execute_skill_safe()` — all three `skill.execute()` call sites replaced | smoke (AC-CR048-009) | implemented |
+| `FR-JARV-007` | `CR-048` | `CR-048` | — | `TASK-JARV-048-d` | `src/chat.py` `start()` — skill health check loop on session startup | doc review | implemented |
+| `FR-JARV-008` | `CR-048` | `CR-048` | — | `TASK-JARV-048-e` | `src/chat.py` `_print_boot_banner()` — last-session resume hint from `sessions.context_summary` | manual | implemented |
+| `FR-JARV-009` | `CR-048` | `CR-048` | `AC-CR048-010` | `TASK-JARV-048-f` | `src/chat.py` `process_message()` — `@mention` fallback `console.print()` when skill not found | smoke (AC-CR048-010) | implemented |
+| `FR-JARV-010` | `CR-048` | `CR-048` | — | `TASK-JARV-048-f` | `src/chat.py` `_StatusContext._TIPS` — expanded from 18 to 30 entries | manual | implemented |
+| `FR-JARV-011` | `CR-048` | `CR-048` | `AC-CR048-011` | `TASK-JARV-048-g` | `src/chat.py` `_handle_slash_command()` `/status` → `_handle_status_command()` | smoke (AC-CR048-011) | implemented |
+| `FR-JARV-012` | `CR-048` | `CR-048` | — | `TASK-JARV-048-g` | `src/chat.py` `_record()` → `_save_context_summary()` — writes 150-char summary to `sessions` table | manual | implemented |
+| `NFR-JARV-001` | `CR-048` | `CR-048` | — | `TASK-JARV-048-a` | `src/context_manager.py` `_fetch_git_state()` — `timeout=2` on both subprocess calls | code review | implemented |
+| `NFR-JARV-002` | `CR-048` | `CR-048` | — | `TASK-JARV-048-d` | `src/chat.py` `_execute_skill_safe()` — `_timeout_log.warning()` on timeout | code review | implemented |
+| `NFR-JARV-003` | `CR-048` | `CR-048` | — | `TASK-JARV-048-e` | `src/chat.py` `_print_boot_banner()` — resume query wrapped in `except Exception: pass` | code review | implemented |
 
 | `FR-ORCH-015` | `CR-008` | `CR-008` | `AC-CR008-001` | `TASK-CR008-001`, `TASK-CR008-002` | `src/router.py` (`_ZETTEL_RE`, `_fast_classify`, `_LOCAL_SPECIALIZED_CATEGORIES`, `_FORCE_LOCAL_CATEGORIES`, `_KEYWORD_MAP`, `_CLASSIFICATION_PROMPT`) | manual | implemented |
 | `FR-ZTK-001` | `CR-008` | `CR-008` | `AC-CR008-002` | `TASK-CR008-003`, `TASK-CR008-004` | `src/chat.py` (`_builtin_skills`), `src/skills/zettelkasten_skill.py` (`_ENTER_PHRASES`, `tool_definition`) | manual | implemented |

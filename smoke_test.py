@@ -2815,6 +2815,225 @@ test("Gmail: _build_raw_message returns valid base64 (AC-CR046a-008)", t_gmail_b
 test("Gmail: auth failure returns message not exception (AC-CR046a-009)", t_gmail_auth_error_returns_message)
 
 
+# ── CR-048: JARVIS Hardening ──────────────────────────────────────────────────
+
+def t_facts_engine_time_greeting():
+    """AC-CR048-001: FactsEngine.assemble() contains Time: and greeting (FR-JARV-001)."""
+    from unittest.mock import patch, MagicMock
+    from src.context_manager import FactsEngine
+    engine = FactsEngine()
+    # Mock the DB and subprocess calls so ingest() completes cleanly
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = lambda s: s
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_conn.execute.return_value.fetchone.return_value = None
+    with patch("src.context_manager.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        with patch("src.database.get_connection", return_value=mock_conn), \
+             patch("src.database.get_queue", return_value=[]):
+            engine.ingest()
+    result = engine.assemble()
+    assert "Time:" in result, f"Expected 'Time:' in SYSTEM_FACTS, got: {result!r}"
+    has_greeting = any(g in result for g in ("Good morning", "Good afternoon", "Good evening"))
+    assert has_greeting, f"Expected time-of-day greeting in SYSTEM_FACTS, got: {result!r}"
+
+def t_facts_engine_git_state_in_repo():
+    """AC-CR048-002: FactsEngine.assemble() contains 'Git: branch=' when in a git repo (FR-JARV-002)."""
+    from unittest.mock import patch, MagicMock
+    from src.context_manager import FactsEngine
+    engine = FactsEngine()
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = lambda s: s
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_conn.execute.return_value.fetchone.return_value = None
+    branch_result = MagicMock(returncode=0, stdout="master\n")
+    log_result = MagicMock(returncode=0, stdout="abc1234 some commit message\n")
+    with patch("src.context_manager.subprocess.run", side_effect=[branch_result, log_result]):
+        with patch("src.database.get_connection", return_value=mock_conn), \
+             patch("src.database.get_queue", return_value=[]):
+            engine.ingest()
+    result = engine.assemble()
+    assert "Git: branch=" in result, f"Expected 'Git: branch=' in SYSTEM_FACTS, got: {result!r}"
+
+def t_facts_engine_git_state_outside_repo():
+    """AC-CR048-003: FactsEngine.ingest() handles non-git dir without exception (FR-JARV-002)."""
+    from unittest.mock import patch, MagicMock
+    from src.context_manager import FactsEngine
+    engine = FactsEngine()
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = lambda s: s
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_conn.execute.return_value.fetchone.return_value = None
+    # Simulate git not available or not in repo
+    with patch("src.context_manager.subprocess.run", side_effect=FileNotFoundError("git not found")):
+        with patch("src.database.get_connection", return_value=mock_conn), \
+             patch("src.database.get_queue", return_value=[]):
+            engine.ingest()  # must not raise
+    result = engine.assemble()
+    assert "[SYSTEM_FACTS]" in result, "Expected SYSTEM_FACTS block even without git"
+
+def t_facts_engine_notion_freshness():
+    """AC-CR048-004: FactsEngine.assemble() shows Notion line when sync_log has entry (FR-JARV-003)."""
+    from unittest.mock import patch, MagicMock
+    from src.context_manager import FactsEngine
+    engine = FactsEngine()
+    mock_conn = MagicMock()
+    mock_conn.__enter__ = lambda s: s
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    # Simulate a sync entry from 30 minutes ago
+    from datetime import datetime, timedelta
+    thirty_min_ago = (datetime.now() - timedelta(minutes=30)).isoformat()
+    mock_conn.execute.return_value.fetchone.return_value = (thirty_min_ago,)
+    with patch("src.context_manager.subprocess.run") as mock_run:
+        mock_run.return_value = MagicMock(returncode=1, stdout="")
+        with patch("src.database.get_connection", return_value=mock_conn), \
+             patch("src.database.get_queue", return_value=[]):
+            engine.ingest()
+    result = engine.assemble()
+    assert "Notion:" in result, f"Expected 'Notion:' in SYSTEM_FACTS, got: {result!r}"
+
+def t_initiative_new_categories_exist():
+    """AC-CR048-005: DEADLINE and SKILL_HEALTH enum members exist (FR-JARV-004)."""
+    from src.initiative import InitiativeCategory
+    assert hasattr(InitiativeCategory, "DEADLINE"), "DEADLINE category missing"
+    assert hasattr(InitiativeCategory, "SKILL_HEALTH"), "SKILL_HEALTH category missing"
+    assert hasattr(InitiativeCategory, "FOLLOWUP_SUGGESTION"), "FOLLOWUP_SUGGESTION missing"
+    assert hasattr(InitiativeCategory, "CELEBRATION"), "CELEBRATION category missing"
+
+def t_initiative_deadline_passes_errors_only():
+    """AC-CR048-006: DEADLINE signal is queued in ERRORS_ONLY mode (FR-JARV-004)."""
+    from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
+    engine = InitiativeEngine(mode=ProactiveMode.ERRORS_ONLY)
+    engine.submit(ProactiveSignal(
+        category=InitiativeCategory.DEADLINE,
+        message="Task due tomorrow",
+        confidence=0.90,
+        action_hint="Check /brief for details",
+    ))
+    signals = engine.drain()
+    assert len(signals) == 1, f"Expected 1 DEADLINE signal, got {len(signals)}"
+
+def t_initiative_celebration_blocked_in_errors_only():
+    """AC-CR048-007: CELEBRATION signal is NOT queued in ERRORS_ONLY mode (FR-JARV-004)."""
+    from src.initiative import InitiativeEngine, ProactiveMode, InitiativeCategory, ProactiveSignal
+    engine = InitiativeEngine(mode=ProactiveMode.ERRORS_ONLY)
+    engine.submit(ProactiveSignal(
+        category=InitiativeCategory.CELEBRATION,
+        message="Queue cleared!",
+        confidence=0.95,
+        action_hint="Great work today.",
+    ))
+    signals = engine.drain()
+    assert len(signals) == 0, f"Expected 0 CELEBRATION signals in ERRORS_ONLY mode, got {len(signals)}"
+
+def t_governor_approach_pct_zero_at_start():
+    """AC-CR048-008: approach_pct(LOCAL_ONLY) returns 0.0 with 0 tokens (FR-JARV-005)."""
+    from src.governor import SessionGovernor, Tier
+    g = SessionGovernor()
+    pct = g.approach_pct(Tier.LOCAL_ONLY)
+    assert 0.0 <= pct <= 1.0, f"approach_pct must be in [0,1], got {pct}"
+    assert pct == 0.0, f"Expected 0.0 at session start, got {pct}"
+
+def t_execute_skill_safe_timeout():
+    """AC-CR048-009: _execute_skill_safe returns timeout message for slow skills (FR-JARV-006)."""
+    import time as _time
+    from unittest.mock import MagicMock
+    from src.chat import XochitlChat
+    chat = XochitlChat.__new__(XochitlChat)
+    # Minimal init for _execute_skill_safe
+    chat._governor = MagicMock()
+
+    slow_skill = MagicMock()
+    def _slow_execute(*args, **kwargs):
+        _time.sleep(5)  # 5s — longer than 1s timeout we'll use
+        return "should not return"
+    slow_skill.execute = _slow_execute
+
+    start = _time.monotonic()
+    result = chat._execute_skill_safe(slow_skill, "hello", {}, {}, timeout=1.0)
+    elapsed = _time.monotonic() - start
+    assert elapsed < 3.0, f"Timeout test took too long: {elapsed:.1f}s"
+    assert "timeout" in result.lower() or "took longer" in result.lower(), \
+        f"Expected timeout error message, got: {result!r}"
+
+def t_mention_fallback_hint():
+    """AC-CR048-010: @UnknownSkill message triggers fallback hint (FR-JARV-009)."""
+    from unittest.mock import patch, MagicMock
+    from src.chat import XochitlChat, _AT_SKILL_RE
+    chat = XochitlChat.__new__(XochitlChat)
+    # Minimal attributes needed for process_message @-mention path
+    chat.session_history = []
+    chat.current_context = {}
+    chat.current_project = None
+    chat._builtin_skills = []
+    chat._skills = []
+    chat._governor = MagicMock()
+    chat._governor.tier.return_value = MagicMock(value="full")
+    chat.session_id = None
+    chat.force_cloud = False
+    chat._last_cancelled = None
+    chat._staged_message = None
+    chat._consecutive_staged = 0
+    chat._milestone_block = ""
+    chat._background_review = MagicMock()
+    chat._initiative = None
+    chat._obs_logger = None
+    chat._last_response_streamed = False
+    chat.router = MagicMock()
+    chat.file_tools = MagicMock()
+    chat.with_orchestrator = False
+
+    with patch.object(chat, "_find_skill_by_name", return_value=None), \
+         patch("src.chat.console") as mock_console, \
+         patch.object(chat, "_agent_loop", return_value="fallback response"), \
+         patch.object(chat, "_detect_current_project", return_value=None), \
+         patch.object(chat, "_maybe_save_preference", return_value=None), \
+         patch.object(chat, "_record", return_value="ok"), \
+         patch.object(chat, "_handle_permission_response", return_value=None), \
+         patch.object(chat, "_handle_action_confirmation", return_value=None), \
+         patch.object(chat, "_save_context_summary"), \
+         patch("src.chat.ContextManager") as mock_cm_cls, \
+         patch("src.bmad.detect_bmad_project", return_value=None):
+        mock_cm = MagicMock()
+        mock_cm_cls.return_value = mock_cm
+        mock_cm.ingest.return_value = None
+        chat.process_message("@UnknownSkill hello", _stream=False)
+
+    printed_texts = [str(call) for call in mock_console.print.call_args_list]
+    found = any("No skill named" in t for t in printed_texts)
+    assert found, f"Expected 'No skill named' fallback hint. Got: {printed_texts}"
+
+def t_status_command_output():
+    """AC-CR048-011: /status returns health table with 'Local model' and 'WIP' (FR-JARV-011)."""
+    from unittest.mock import patch, MagicMock
+    from src.chat import XochitlChat
+    chat = XochitlChat.__new__(XochitlChat)
+    chat._governor = MagicMock()
+    chat._governor.status_line.return_value = "~0 est. tokens | tier: full | 0% to local-only"
+    with patch("src.stats.health_check", return_value={"local_model": True, "issues": []}), \
+         patch("src.database.get_connection") as mock_get_conn, \
+         patch("src.database.get_queue", return_value=[]):
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = lambda s: s
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_get_conn.return_value = mock_conn
+        result = chat._handle_status_command()
+    assert "Local model" in result, f"Expected 'Local model' in /status output, got: {result!r}"
+    assert "WIP" in result, f"Expected 'WIP' in /status output, got: {result!r}"
+
+test("JARVIS: FactsEngine.assemble() includes time-of-day greeting (AC-CR048-001)", t_facts_engine_time_greeting)
+test("JARVIS: FactsEngine.assemble() shows Git branch in git repo (AC-CR048-002)", t_facts_engine_git_state_in_repo)
+test("JARVIS: FactsEngine.ingest() survives non-git directory (AC-CR048-003)", t_facts_engine_git_state_outside_repo)
+test("JARVIS: FactsEngine.assemble() shows Notion freshness (AC-CR048-004)", t_facts_engine_notion_freshness)
+test("JARVIS: InitiativeCategory has DEADLINE and SKILL_HEALTH (AC-CR048-005)", t_initiative_new_categories_exist)
+test("JARVIS: DEADLINE signal passes ERRORS_ONLY gate (AC-CR048-006)", t_initiative_deadline_passes_errors_only)
+test("JARVIS: CELEBRATION signal blocked in ERRORS_ONLY mode (AC-CR048-007)", t_initiative_celebration_blocked_in_errors_only)
+test("JARVIS: approach_pct returns 0.0 at session start (AC-CR048-008)", t_governor_approach_pct_zero_at_start)
+test("JARVIS: _execute_skill_safe returns timeout message for slow skill (AC-CR048-009)", t_execute_skill_safe_timeout)
+test("JARVIS: @UnknownSkill triggers fallback hint (AC-CR048-010)", t_mention_fallback_hint)
+test("JARVIS: /status output includes Local model and WIP (AC-CR048-011)", t_status_command_output)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

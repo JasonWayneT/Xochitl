@@ -882,6 +882,43 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR047-008` | `NFR-DEV-009` | `AGENTS.md` read | Contains section "Adding a Skill" with a numbered checklist | implemented |
 | `AC-CR047-009` | All CR-047 | `python smoke_test.py` runs | ≥ 167 tests pass, 0 failures | implemented |
 
+### JARVIS Hardening (CR-048)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-JARV-001` | functional | P1 | implemented | `FactsEngine.assemble()` appends a `Time: HH:MM (greeting)` line to `[SYSTEM_FACTS]` where greeting is "Good morning" (05-11), "Good afternoon" (12-17), or "Good evening" (18-04) | `AC-CR048-001` | `CR-048` | `src/context_manager.py` `FactsEngine.assemble()` |
+| `FR-JARV-002` | functional | P1 | implemented | `FactsEngine.ingest()` runs `git rev-parse --abbrev-ref HEAD` and `git log --oneline -1` with a 2-second timeout; on success, `[SYSTEM_FACTS]` includes `Git: branch=<name> | last=<msg>`; on failure the line is omitted silently | `AC-CR048-002`, `AC-CR048-003` | `CR-048` | `src/context_manager.py` `FactsEngine.ingest()` |
+| `FR-JARV-003` | functional | P2 | implemented | `FactsEngine.ingest()` queries `sync_log` for the most recent sync; `[SYSTEM_FACTS]` shows `Notion: last synced N min ago` (or "never synced") | `AC-CR048-004` | `CR-048` | `src/context_manager.py` `FactsEngine.ingest()` |
+| `FR-JARV-004` | functional | P1 | implemented | `InitiativeCategory` gains four new members: `DEADLINE`, `FOLLOWUP_SUGGESTION`, `SKILL_HEALTH`, `CELEBRATION`; `DEADLINE` and `SKILL_HEALTH` are permitted through `ERRORS_ONLY` mode; `FOLLOWUP_SUGGESTION` and `CELEBRATION` require `FULL` mode | `AC-CR048-005`, `AC-CR048-006`, `AC-CR048-007` | `CR-048` | `src/initiative.py` |
+| `FR-JARV-005` | functional | P1 | implemented | `SessionGovernor` exposes `approach_pct(tier)` returning 0.0–1.0 progress toward that tier's threshold; `should_warn_approach()` fires once at 0.75 and once at 0.90 per tier per session | `AC-CR048-008` | `CR-048` | `src/governor.py` |
+| `FR-JARV-006` | functional | P1 | implemented | `XochitlChat._execute_skill_safe()` wraps `skill.execute()` in a thread with a 30-second join timeout; on timeout returns a user-visible error string and sets `context["last_skill_timeout"] = True` | `AC-CR048-009` | `CR-048` | `src/chat.py` |
+| `FR-JARV-007` | functional | P2 | implemented | On session start, skills implementing `health_check() -> bool` are invoked; False result queues a `SKILL_HEALTH` initiative signal | — | `CR-048` | `src/chat.py` `start()` |
+| `FR-JARV-008` | functional | P2 | implemented | `_print_boot_banner()` queries `sessions` for the most recent prior session's `context_summary`; if gap < 24 hours and summary non-empty, prints a one-line resume hint below the WIP dashboard | — | `CR-048` | `src/chat.py` `_print_boot_banner()` |
+| `FR-JARV-009` | functional | P1 | implemented | When `@SomeName` prefix is not matched to any skill, the system prints a visible fallback hint before falling through to normal LLM routing | `AC-CR048-010` | `CR-048` | `src/chat.py` `process_message()` |
+| `FR-JARV-010` | functional | P3 | implemented | `_StatusContext._TIPS` is expanded from 18 to ≥30 entries with capability-revealing, personality-rich JARVIS-style tips | — | `CR-048` | `src/chat.py` |
+| `FR-JARV-011` | functional | P1 | implemented | `/status` slash command prints a system health table: local model, cloud route, Notion token, Gmail token, session budget, WIP count | `AC-CR048-011` | `CR-048` | `src/chat.py` `_handle_slash_command()` |
+| `FR-JARV-012` | functional | P2 | implemented | `XochitlChat._record()` updates `sessions.context_summary` in the database with a 150-char excerpt of each assistant reply | — | `CR-048` | `src/chat.py` `_record()` |
+| `NFR-JARV-001` | non-functional | P1 | implemented | Git subprocess in `FactsEngine.ingest()` must complete within 2 seconds or be skipped; never blocks session startup | — | `CR-048` | NFR-DEV-006 |
+| `NFR-JARV-002` | non-functional | P1 | implemented | Skill timeout wrapper (`FR-JARV-006`) must not suppress the original exception — it must log it at WARNING level | — | `CR-048` | NFR-DEV-003 |
+| `NFR-JARV-003` | non-functional | P2 | implemented | Session resume query (`FR-JARV-008`) must never raise; any exception is silently swallowed to protect startup | — | `CR-048` | — |
+
+### Acceptance criteria — JARVIS Hardening (CR-048)
+
+| ID | Requirements | Scenario | Expected | Status |
+|---|---|---|---|---|
+| `AC-CR048-001` | `FR-JARV-001` | `FactsEngine().assemble()` called after `ingest()` at 09:00 | Output contains "Time:" and "Good morning" | implemented |
+| `AC-CR048-002` | `FR-JARV-002` | `FactsEngine().assemble()` in a git repo | Output contains "Git: branch=" | implemented |
+| `AC-CR048-003` | `FR-JARV-002` | `FactsEngine().ingest()` outside git repo | No exception raised; assemble() omits Git line | implemented |
+| `AC-CR048-004` | `FR-JARV-003` | `FactsEngine().assemble()` with mock sync_log entry | Output contains "Notion:" | implemented |
+| `AC-CR048-005` | `FR-JARV-004` | `InitiativeCategory.DEADLINE` and `SKILL_HEALTH` imported | Both enum members exist | implemented |
+| `AC-CR048-006` | `FR-JARV-004` | `submit(DEADLINE, conf=0.9)` with `ERRORS_ONLY` mode | Signal is queued (drain() returns 1 item) | implemented |
+| `AC-CR048-007` | `FR-JARV-004` | `submit(CELEBRATION, conf=0.9)` with `ERRORS_ONLY` mode | Signal is NOT queued (drain() returns empty) | implemented |
+| `AC-CR048-008` | `FR-JARV-005` | `SessionGovernor().approach_pct(Tier.LOCAL_ONLY)` with 0 tokens | Returns 0.0 | implemented |
+| `AC-CR048-009` | `FR-JARV-006` | `_execute_skill_safe()` with a skill that sleeps 60s | Returns within ~2s with timeout error string | implemented |
+| `AC-CR048-010` | `FR-JARV-009` | `@UnknownSkill hello` sent via `process_message()` | Response contains "No skill named" | implemented |
+| `AC-CR048-011` | `FR-JARV-011` | `/status` handled by `_handle_slash_command()` | Response contains "Local model" and "WIP" | implemented |
+| `AC-CR048-012` | All | `python smoke_test.py` | ≥ 165 tests pass, 0 failures | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

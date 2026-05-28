@@ -45,13 +45,27 @@ class ProactiveMode(str, Enum):
 class InitiativeCategory(str, Enum):
     """Permitted categories for proactive surfacing (planning doc #16).
 
-    Only these two categories are allowed. Everything else (unsolicited tips,
-    personality engagement, recommendations unconnected to active work) is
-    never surfaced regardless of mode.
+    Implements FR-JARV-004 — expands from two to six permitted categories.
+
+    ERRORS_ONLY mode allows: SYSTEM_FAILURE, DEADLINE, SKILL_HEALTH
+    FULL mode allows all categories.
+    Everything else (unsolicited tips, personality engagement) is never surfaced.
     """
 
-    SYSTEM_FAILURE = "system_failure"       # e.g. Notion sync failed
-    IN_SESSION_FOLLOWUP = "in_session_followup"  # e.g. half-finished task
+    SYSTEM_FAILURE = "system_failure"           # e.g. Notion sync failed
+    IN_SESSION_FOLLOWUP = "in_session_followup" # e.g. half-finished task
+    DEADLINE = "deadline"                       # task deadline within 48h
+    FOLLOWUP_SUGGESTION = "followup_suggestion" # natural next step from prior turn
+    SKILL_HEALTH = "skill_health"               # skill missing credentials / stale token
+    CELEBRATION = "celebration"                 # milestone reached (queue drained, N tasks done)
+
+
+# Categories permitted through ERRORS_ONLY mode (critical enough to show by default).
+_ERRORS_ONLY_CATEGORIES: frozenset[InitiativeCategory] = frozenset({
+    InitiativeCategory.SYSTEM_FAILURE,
+    InitiativeCategory.DEADLINE,
+    InitiativeCategory.SKILL_HEALTH,
+})
 
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -112,7 +126,7 @@ class InitiativeEngine:
             if self._mode == ProactiveMode.OFF:
                 return
             if self._mode == ProactiveMode.ERRORS_ONLY:
-                if signal.category != InitiativeCategory.SYSTEM_FAILURE:
+                if signal.category not in _ERRORS_ONLY_CATEGORIES:
                     return
             if signal.category in self._suppressed:
                 return

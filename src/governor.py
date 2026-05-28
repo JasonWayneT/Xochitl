@@ -84,6 +84,8 @@ class SessionGovernor:
         self._completion_tokens: int = 0
         # Track which tiers have already triggered a warning this session.
         self._warned: set[Tier] = set()
+        # Track approach-level warnings (75%, 90% of next-tier gap). FR-JARV-005.
+        self._warned_approach: set[str] = set()
 
     # ── State ─────────────────────────────────────────────────────────────────
 
@@ -132,6 +134,59 @@ class SessionGovernor:
         """
         if t not in self._warned:
             self._warned.add(t)
+            return True
+        return False
+
+    def approach_pct(self, next_tier: Tier) -> float:
+        """Return progress (0.0–1.0) toward the next tier's threshold. FR-JARV-005.
+
+        Used to surface gradual budget warnings at 75% and 90% approach.
+
+        Args:
+            next_tier: The tier whose threshold we are approaching.
+
+        Returns:
+            Float in [0.0, 1.0] — fraction of the current-tier gap consumed.
+        """
+        total = self.total_tokens
+        current = self.tier()
+        thresholds = {
+            Tier.PREFER_LOCAL: _PREFER_LOCAL_THRESHOLD,
+            Tier.LOCAL_ONLY: _LOCAL_ONLY_THRESHOLD,
+            Tier.HARD_STOP: _HARD_STOP_THRESHOLD,
+        }
+        target = thresholds.get(next_tier)
+        if target is None:
+            return 0.0
+        # Lower bound is the current tier's threshold (or 0 for FULL).
+        lower_thresholds = {
+            Tier.PREFER_LOCAL: 0,
+            Tier.LOCAL_ONLY: _PREFER_LOCAL_THRESHOLD,
+            Tier.HARD_STOP: _LOCAL_ONLY_THRESHOLD,
+        }
+        lower = lower_thresholds.get(next_tier, 0)
+        if current.value >= next_tier.value:
+            return 1.0
+        gap = target - lower
+        if gap <= 0:
+            return 0.0
+        if total <= lower:
+            return 0.0
+        return min(1.0, (total - lower) / gap)
+
+    def should_warn_approach(self, next_tier: Tier, level: float) -> bool:
+        """Return True the first time approach reaches `level`; False on repeats. FR-JARV-005.
+
+        Args:
+            next_tier: Tier we are approaching.
+            level: Threshold fraction (e.g., 0.75 or 0.90).
+
+        Returns:
+            True if this is the first time approach_pct >= level for this tier+level combo.
+        """
+        key = f"{next_tier.value}@{int(level * 100)}"
+        if self.approach_pct(next_tier) >= level and key not in self._warned_approach:
+            self._warned_approach.add(key)
             return True
         return False
 

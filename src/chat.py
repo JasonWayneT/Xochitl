@@ -149,6 +149,7 @@ class _StatusContext:
     ]
 
     # Loading tips — one is picked at random each time Xochitl starts thinking.
+    # Implements FR-JARV-010 — expanded from 18 to 30 JARVIS-style tips.
     _TIPS = [
         "/brief for compact responses  —  /detailed for deep dives",
         "xochitl today fills your queue with your top 3 priority tasks",
@@ -168,6 +169,18 @@ class _StatusContext:
         "ask me to 'think through' something for a more deliberate answer",
         "/dismiss clears a proactive alert you've already seen",
         "I track my own persona drift and self-correct in long sessions",
+        "@GmailSkill or @MapsSkill bypasses scoring — direct skill routing",
+        "/workflow save <name> captures this session as a reusable procedure",
+        "say 'new note:' to drop a fleeting thought into your Zettelkasten",
+        "/debug skill shows why a skill did or didn't activate",
+        "I surface deadline warnings automatically — just keep due dates in Notion",
+        "BMAD → SDD → Code is the full pipeline: idea to working app",
+        "I run a background drift check to keep my personality on-track",
+        "/status shows a live health snapshot of all my systems",
+        "the Zettelkasten skill links ideas across your vault automatically",
+        "xochitl explorer digs deep into topics with multi-pass research",
+        "/budget shows how much of your session token limit is consumed",
+        "I save your communication style silently — no preference forms needed",
     ]
 
     def __init__(self, label: str = ""):
@@ -250,6 +263,31 @@ def _print_boot_banner(con: Console) -> None:
             con.print(f"  [dim]WIP 0/{limit} — queue empty. Run[/dim] [bold]xochitl today[/bold] [dim]to fill it.[/dim]")
     except Exception:
         pass  # never crash startup over a dashboard read failure
+
+    # FR-JARV-008: session resume summary — show last session context if < 24h gap.
+    # Helps the user immediately recall where they left off without asking.
+    try:
+        from src import database as _db2
+        with _db2.get_connection() as _conn2:
+            _row = _conn2.execute(
+                "SELECT context_summary, last_active FROM sessions "
+                "WHERE context_summary IS NOT NULL AND context_summary != '' "
+                "ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        if _row:
+            _summary, _last_active = _row[0], _row[1]
+            if _summary and _last_active:
+                from datetime import datetime as _dt
+                try:
+                    _la = _dt.fromisoformat(str(_last_active))
+                    _gap_h = (_dt.now() - _la).total_seconds() / 3600
+                    if _gap_h < 24:
+                        _summary_short = str(_summary)[:100]
+                        con.print(f"  [dim]↩ last session:[/dim] [dim cyan]{_summary_short}[/dim cyan]")
+                except Exception:
+                    pass
+    except Exception:
+        pass  # FR-JARV-008: NFR-JARV-003 — never crash startup over resume query
 
     # A2 — Anticipation gate: surface a one-line hint when ≥2 signals converge.
     # Implements FR-CONV-002. Informational only — never takes action (NFR-CONV-001).
@@ -662,6 +700,25 @@ class XochitlChat:
                         f"[dim yellow]⚠ Approaching session budget — preferring local model. "
                         f"{self._governor.status_line()}[/dim yellow]"
                     )
+                # FR-JARV-005: gradual approach warnings at 75% and 90% of next tier.
+                elif _gov_tier == _GovTier.FULL:
+                    if self._governor.should_warn_approach(_GovTier.PREFER_LOCAL, 0.90):
+                        console.print(
+                            f"[dim]Budget: 90% to prefer-local threshold — {self._governor.status_line()}[/dim]"
+                        )
+                    elif self._governor.should_warn_approach(_GovTier.PREFER_LOCAL, 0.75):
+                        console.print(
+                            f"[dim]Budget: 75% to prefer-local threshold — {self._governor.status_line()}[/dim]"
+                        )
+                elif _gov_tier == _GovTier.PREFER_LOCAL:
+                    if self._governor.should_warn_approach(_GovTier.LOCAL_ONLY, 0.90):
+                        console.print(
+                            f"[dim yellow]Budget: 90% to local-only threshold — {self._governor.status_line()}[/dim yellow]"
+                        )
+                    elif self._governor.should_warn_approach(_GovTier.LOCAL_ONLY, 0.75):
+                        console.print(
+                            f"[dim]Budget: 75% to local-only threshold — {self._governor.status_line()}[/dim]"
+                        )
 
                 # ── LLM turn — FR-UI-001 status + FR-UI-006 cancellable thread ──
                 status_ctx = _StatusContext()
@@ -820,15 +877,18 @@ class XochitlChat:
             _at_skill   = self._find_skill_by_name(_at_name)
             if _at_skill:
                 self._emit_action_line(f"Running {_at_name} (explicit)...")
-                _at_result = _at_skill.execute(
-                    _at_payload or user_input, self.current_context, {}
+                _at_result = self._execute_skill_safe(
+                    _at_skill, _at_payload or user_input, self.current_context, {}
                 )
                 response = _at_result or f"[dim]{_at_name} returned no output.[/dim]"
                 response = self._maybe_offer_skill_creation(user_input, response)
                 response = self._maybe_offer_workflow_save(user_input, response)
                 return self._record(response)
-            # Unrecognised @name — fall through to normal routing with a hint
-            user_input = user_input  # keep original; skill not found is non-fatal
+            # FR-JARV-009: @mention fallback — tell the user the name wasn't found.
+            console.print(
+                f"[dim]No skill named '{_at_name}'. "
+                f"Try /debug skill to see available skills.[/dim]"
+            )
 
         q_lower = user_input.lower()
 
@@ -868,6 +928,63 @@ class XochitlChat:
 
         return final
 
+
+    def _execute_skill_safe(
+        self,
+        skill: Skill,
+        user_input: str,
+        context: dict,
+        params: dict,
+        timeout: float = 30.0,
+    ) -> str:
+        """Wrap skill.execute() with a timeout to prevent hung sessions. FR-JARV-006.
+
+        Args:
+            skill: The skill instance to execute.
+            user_input: Forwarded to skill.execute().
+            context: Session context dict, mutated in place by the skill.
+            params: Extracted parameters for the skill.
+            timeout: Maximum seconds to wait before returning a timeout error.
+
+        Returns:
+            Skill output string, or a user-visible timeout error message.
+        """
+        import queue as _q
+        import logging as _lg
+        _timeout_log = _lg.getLogger("xochitl.skill_timeout")
+        result_q: _q.Queue = _q.Queue()
+
+        def _worker() -> None:
+            try:
+                result_q.put(("ok", skill.execute(user_input, context, params)))
+            except Exception as exc:
+                result_q.put(("err", str(exc)))
+
+        t = threading.Thread(target=_worker, daemon=True)
+        t.start()
+        t.join(timeout=timeout)
+
+        if t.is_alive():
+            skill_name = type(skill).__name__
+            _timeout_log.warning(
+                "skill_timeout skill=%s timeout=%.0fs", skill_name, timeout
+            )
+            context["last_skill_timeout"] = True
+            return (
+                f"[dim]{_ERR} — {skill_name} took longer than {int(timeout)}s to respond. "
+                f"The skill may be waiting on an external API. "
+                f"Please try again or check your connection.[/dim]"
+            )
+
+        context["last_skill_timeout"] = False
+        try:
+            status, value = result_q.get_nowait()
+        except _q.Empty:
+            return f"[dim]{_ERR} — skill returned no result.[/dim]"
+
+        if status == "err":
+            return f"[dim]{_ERR} — skill error: {value}[/dim]"
+        return value or ""
 
     def _emit_action_line(self, label: str) -> None:
         from src.action_disclosure import action_summary
@@ -1158,7 +1275,9 @@ class XochitlChat:
                 if _status:
                     _status.update(f"running skill: {skill_name}")
                 self._emit_action_line(infer_action_label(user_input, skill_name))
-                tool_result = skill.execute(user_input, self.current_context, params)
+                tool_result = self._execute_skill_safe(
+                    skill, user_input, self.current_context, params
+                )
                 _events.emit("skill_complete", {"skill": skill_name, "success": True})
                 _tool_calls_made = True
                 formatted = format_skill_output(tool_result)
@@ -1262,7 +1381,8 @@ class XochitlChat:
         if not skill:
             return f"{_ERR} - I could not find `{skill_name}` anymore, so I did not run it."
 
-        tool_result = skill.execute(
+        tool_result = self._execute_skill_safe(
+            skill,
             pending.get("user_input", ""),
             self.current_context,
             pending.get("params", {}),
@@ -1953,6 +2073,10 @@ class XochitlChat:
         if verb == "/budget":
             return self._governor.budget_detail()
 
+        # FR-JARV-011: /status — live system health table
+        if verb == "/status":
+            return self._handle_status_command()
+
         # CR-038: dismiss a proactive signal category (FR-INIT-002)
         if verb == "/dismiss":
             try:
@@ -2070,13 +2194,62 @@ class XochitlChat:
 
         available = (
             "/next <msg>  /retry  /authorize  /revoke  "
-            "/registry  /audit  /review  /research  /adversarial  /budget  /brief  "
+            "/registry  /audit  /review  /research  /adversarial  /budget  /status  /brief  "
             "/dismiss  /workflows  /workflow save <name>  /workflow run <name>  "
             "/debug skill"
         )
         return f"[dim]{_FYI} — unknown command: {verb}\nAvailable: {available}[/dim]"
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _handle_status_command(self) -> str:
+        """Return a system health table for /status. Implements FR-JARV-011.
+
+        Returns:
+            Multi-line status string with local model, cloud, API tokens, budget, WIP.
+        """
+        lines = ["[bold]System Status[/bold]", ""]
+
+        # Local model
+        try:
+            from src.stats import health_check
+            health = health_check()
+            local_ok = health.get("local_model", False)
+            lines.append(f"  Local model   : {'[green]online[/green]' if local_ok else '[red]offline[/red]'}")
+        except Exception:
+            lines.append("  Local model   : [dim]unknown[/dim]")
+
+        # Cloud route
+        cloud_ok = bool(
+            os.getenv("ANTHROPIC_API_KEY") or
+            os.getenv("GOOGLE_API_KEY") or
+            os.getenv("GEMINI_API_KEY")
+        )
+        lines.append(f"  Cloud route   : {'[green]available[/green]' if cloud_ok else '[dim]no key set[/dim]'}")
+
+        # Notion token
+        notion_ok = bool(os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_KEY"))
+        lines.append(f"  Notion        : {'[green]token set[/green]' if notion_ok else '[dim]no token[/dim]'}")
+
+        # Gmail token
+        gmail_path = Path.home() / ".xochitl" / "gmail_token.json"
+        gmail_ok = gmail_path.exists()
+        lines.append(f"  Gmail         : {'[green]token found[/green]' if gmail_ok else '[dim]not configured[/dim]'}")
+
+        # Session budget
+        lines.append(f"  Budget        : {self._governor.status_line()}")
+
+        # WIP count
+        try:
+            with db.get_connection() as _conn:
+                _q = db.get_queue(_conn)
+            lines.append(f"  WIP Queue     : {len(_q)}/3 items")
+        except Exception:
+            lines.append("  WIP Queue     : [dim]unavailable[/dim]")
+
+        lines.append("")
+        lines.append("[dim]Use /budget for full token breakdown.[/dim]")
+        return "\n".join(lines)
 
     def _last_user_message(self) -> str:
         """Return the most recent user message text in this session."""
@@ -2117,7 +2290,28 @@ class XochitlChat:
             "timestamp": datetime.now().isoformat(),
         })
         self._persist_session()
+        # FR-JARV-012: save a short context_summary so the next session can show a resume hint.
+        self._save_context_summary(response)
         return response
+
+    def _save_context_summary(self, response: str) -> None:
+        """Persist a 150-char excerpt of the last reply for session resume. FR-JARV-012.
+
+        Args:
+            response: The latest assistant response text.
+        """
+        if not self.session_id:
+            return
+        try:
+            summary = response.strip()[:150].replace("\n", " ")
+            with db.get_connection() as conn:
+                conn.execute(
+                    "UPDATE sessions SET context_summary = ?, last_active = CURRENT_TIMESTAMP "
+                    "WHERE id = ?",
+                    (summary, self.session_id),
+                )
+        except Exception:
+            pass  # NFR-JARV-003: never crash on summary save
 
     def _clean_history(self) -> list[dict]:
         """Strip timestamps and serialize tool turns for LLM calls.

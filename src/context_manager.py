@@ -12,11 +12,16 @@ The ContextManager orchestrates them all and enforces the global token budget.
 
 from __future__ import annotations
 
+import logging
 import os
+import subprocess
 import time
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+_facts_logger = logging.getLogger("xochitl.facts")
 
 # ── Token budget constants ───────────────────────────────────────────────────
 # Local models (Gemma 8k context) vs cloud (Gemini 1M, but we self-limit to 32k)
@@ -102,18 +107,84 @@ class FactsEngine(ContextEngine):
     """Injects hard system facts to prevent LLM hallucination about its environment.
 
     Implements FR-ORCH-003 — PreFlight Fact Injection.
+    Implements FR-JARV-001 (time-of-day), FR-JARV-002 (git state), FR-JARV-003 (Notion freshness).
     Every prompt receives a [SYSTEM_FACTS] block with CWD, active project,
-    local mode status, and WIP count.
+    local mode status, WIP count, time-of-day, git branch, and Notion sync age.
     """
 
     _project: Optional[str] = field(default=None, init=False)
     _wip_count: int = field(default=0, init=False)
     _local_mode: bool = field(default=True, init=False)
+    _git_state: str = field(default="", init=False)
+    _notion_freshness: str = field(default="", init=False)
 
     def __init__(self):
         super().__init__(name="facts")
+        self._git_state = ""
+        self._notion_freshness = ""
+
+    def _fetch_git_state(self) -> str:
+        """Return 'branch=<name> | last=<msg>' or '' if not in a git repo. FR-JARV-002."""
+        try:
+            branch = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if branch.returncode != 0:
+                return ""
+            branch_name = branch.stdout.strip()
+            log = subprocess.run(
+                ["git", "log", "--oneline", "-1"],
+                capture_output=True, text=True, timeout=2,
+            )
+            last_commit = log.stdout.strip()[:80] if log.returncode == 0 else ""
+            if last_commit:
+                return f"branch={branch_name} | last={last_commit}"
+            return f"branch={branch_name}"
+        except Exception as exc:
+            _facts_logger.debug("git_state fetch failed: %s", exc)
+            return ""
+
+    def _fetch_notion_freshness(self) -> str:
+        """Return 'last synced N min ago' or 'never synced'. FR-JARV-003."""
+        try:
+            from src import database as db
+            with db.get_connection() as conn:
+                row = conn.execute(
+                    "SELECT synced_at FROM sync_log ORDER BY id DESC LIMIT 1"
+                ).fetchone()
+            if not row:
+                return "never synced"
+            synced_at = row[0]
+            if isinstance(synced_at, str):
+                from datetime import timezone
+                try:
+                    dt = datetime.fromisoformat(synced_at)
+                except ValueError:
+                    return "synced recently"
+            else:
+                dt = synced_at
+            now = datetime.now()
+            if hasattr(dt, "tzinfo") and dt.tzinfo is not None:
+                now = datetime.now(tz=dt.tzinfo)
+            delta_min = int((now - dt).total_seconds() / 60)
+            if delta_min < 1:
+                return "just synced"
+            if delta_min < 60:
+                return f"last synced {delta_min} min ago"
+            hours = delta_min // 60
+            return f"last synced {hours}h ago"
+        except Exception as exc:
+            _facts_logger.debug("notion_freshness fetch failed: %s", exc)
+            return ""
 
     def ingest(self, project: Optional[str] = None, local_mode: bool = True) -> None:  # type: ignore[override]
+        """Load facts from environment, git, and database. FR-JARV-001/002/003.
+
+        Args:
+            project: Active project ID (or None).
+            local_mode: Whether the session is using local routing.
+        """
         self._project = project
         self._local_mode = local_mode
         try:
@@ -123,21 +194,48 @@ class FactsEngine(ContextEngine):
             self._wip_count = len(queue)
         except Exception:
             self._wip_count = 0
+        self._git_state = self._fetch_git_state()
+        self._notion_freshness = self._fetch_notion_freshness()
         self._loaded_at = time.time()
 
+    @staticmethod
+    def _time_greeting(hour: int) -> str:
+        """Return a greeting appropriate to the time of day. FR-JARV-001."""
+        if 5 <= hour < 12:
+            return "Good morning"
+        if 12 <= hour < 18:
+            return "Good afternoon"
+        return "Good evening"
+
     def assemble(self) -> str:
+        """Return the [SYSTEM_FACTS] block with all environmental context.
+
+        Returns:
+            Multi-line string wrapped in [SYSTEM_FACTS] / [/SYSTEM_FACTS] tags.
+        """
+        now = datetime.now()
+        greeting = self._time_greeting(now.hour)
+        time_line = f"Time: {now.strftime('%H:%M')} ({greeting})"
+
         cwd = str(Path.cwd())
         project_line = f"Active Project: {self._project}" if self._project else "Active Project: None"
         mode = "Local (Ollama)" if self._local_mode else "Cloud"
-        return (
-            f"[SYSTEM_FACTS]\n"
-            f"Current Directory: {cwd}\n"
-            f"{project_line}\n"
-            f"Execution Mode: {mode}\n"
-            f"WIP Queue: {self._wip_count}/3 items\n"
-            f"Platform: {os.name} (Windows)\n"
-            f"[/SYSTEM_FACTS]"
-        )
+
+        lines = [
+            "[SYSTEM_FACTS]",
+            time_line,
+            f"Current Directory: {cwd}",
+            project_line,
+            f"Execution Mode: {mode}",
+            f"WIP Queue: {self._wip_count}/3 items",
+            f"Platform: {os.name} (Windows)",
+        ]
+        if self._git_state:
+            lines.append(f"Git: {self._git_state}")
+        if self._notion_freshness:
+            lines.append(f"Notion: {self._notion_freshness}")
+        lines.append("[/SYSTEM_FACTS]")
+        return "\n".join(lines)
 
     def compact(self, max_tokens: int) -> str:
         # Facts block is always small — never compact it
