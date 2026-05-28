@@ -368,7 +368,7 @@ def execute_workflow(
                 preview = preview[:397] + "..."
             lines.append(f"  {preview}")
         except Exception as exc:
-            lines.append(f"  [fail] {exc}")
+            lines.append(f"  [fail] {type(exc).__name__}: {exc}")
             failures += 1
         lines.append(format_step(i, total, label, done=True))
 

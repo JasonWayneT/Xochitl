@@ -14,16 +14,58 @@ _WHY_PATTERNS = (
 )
 
 def is_why_request(text: str) -> bool:
+    """Return True if the message is asking Xochitl to explain her last action.
+
+    Implements FR-ORCH-044. Matches short phrasings like "why?", "how do you know",
+    "explain your reasoning", etc.
+
+    Args:
+        text: Raw user message text.
+
+    Returns:
+        True if the message matches a known why-request pattern.
+    """
     t = text.strip()
     return any(p.match(t) for p in _WHY_PATTERNS)
 
 def action_summary(label: str) -> str:
+    """Format an action label as a terminal ACTION-status line.
+
+    Args:
+        label: Short human-readable description of the action being taken.
+
+    Returns:
+        Formatted string using the ACTION status style from terminal_output.
+    """
     return format_line(TerminalStatus.ACTION, label)
 
 def step_progress(step: int, total: int, label: str, *, done: bool = False) -> str:
+    """Format a multi-step progress indicator line.
+
+    Args:
+        step: Current step number (1-based).
+        total: Total number of steps.
+        label: Description of this step.
+        done: If True, render as completed; otherwise as in-progress.
+
+    Returns:
+        Formatted step-progress string for terminal display.
+    """
     return format_step(step, total, label, done=done)
 
 def infer_action_label(user_input: str, skill_name: Optional[str] = None) -> str:
+    """Derive a human-readable action label from the user request or skill name.
+
+    Used in the status display shown while Xochitl is working.
+    Implements FR-ORCH-045.
+
+    Args:
+        user_input: The raw user message text.
+        skill_name: If a specific skill was matched, its class name (e.g. 'WeatherSkill').
+
+    Returns:
+        Short label string suitable for the action disclosure line.
+    """
     q = user_input.strip()
     if skill_name:
         nice = skill_name.replace("Skill", "")
@@ -40,6 +82,17 @@ def infer_action_label(user_input: str, skill_name: Optional[str] = None) -> str
     return f"Working on: {q}"
 
 def format_compact_result(action_label: str, body: str) -> str:
+    """Combine an action summary line with a DONE-status result block.
+
+    Implements FR-ORCH-046.
+
+    Args:
+        action_label: Label for the action (e.g. "Checked weather").
+        body: Result text to display below the action line.
+
+    Returns:
+        Combined action + result string, or just the action line if body is empty.
+    """
     summary = action_summary(action_label.rstrip("."))
     formatted = format_block(TerminalStatus.DONE, body.strip()) if body.strip() else ""
     if formatted:
@@ -47,6 +100,18 @@ def format_compact_result(action_label: str, body: str) -> str:
     return summary
 
 def build_why_expansion(session_history: list, last_skill: Optional[str] = None) -> str:
+    """Build a human-readable explanation of what happened in the last turn.
+
+    Implements FR-ORCH-044 — surfaces reasoning on "why?" requests without
+    requiring the LLM to re-infer it.
+
+    Args:
+        session_history: List of message dicts from the current session.
+        last_skill: Class name of the last skill that executed, if any.
+
+    Returns:
+        Multi-line markdown explanation string ready for console display.
+    """
     lines = ["## What happened last turn"]
     if last_skill:
         lines.append(f"- Skill used: {last_skill}")

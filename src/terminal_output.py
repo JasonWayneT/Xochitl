@@ -1,11 +1,17 @@
 """Terminal visual grammar. Implements FR-UI-009, FR-UI-010, NFR-UI-009 (CR-039)."""
+# Implements FR-HARD-004 — dynamic terminal width via shutil.get_terminal_size.
 from __future__ import annotations
 import json
+import shutil
 import textwrap
 from enum import Enum
 from typing import Any, Optional
 
-MAX_LINE_WIDTH = 80
+def _terminal_width() -> int:
+    """Return current terminal column count with an 80-column fallback."""
+    return shutil.get_terminal_size((80, 24)).columns
+
+MAX_LINE_WIDTH: int = _terminal_width()
 
 class TerminalStatus(Enum):
     DONE = "done"

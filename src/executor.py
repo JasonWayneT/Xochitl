@@ -278,12 +278,18 @@ class SafeExecutor:
             raise ExecutorError(f"Command '{cmd}' failed to start: {exc}") from exc
 
         # NFR-EXEC-002: cap output before returning — never pass uncapped to LLM.
+        # FR-HARD-001: split cap 80/20 so stderr is never silently discarded.
         raw = proc.stdout + proc.stderr
         truncated = len(raw) > _OUTPUT_CAP_BYTES
         if truncated:
-            # Cap stdout first; any remainder goes to stderr display.
-            stdout_raw = proc.stdout[:_OUTPUT_CAP_BYTES] + b"\n[truncated]"
-            stderr_raw = b""
+            _stdout_cap = int(_OUTPUT_CAP_BYTES * 0.80)
+            _stderr_cap = _OUTPUT_CAP_BYTES - _stdout_cap
+            stdout_raw = proc.stdout[:_stdout_cap]
+            if len(proc.stdout) > _stdout_cap:
+                stdout_raw += f"\n[stdout truncated — {len(proc.stdout)} bytes total]".encode()
+            stderr_raw = proc.stderr[:_stderr_cap]
+            if len(proc.stderr) > _stderr_cap:
+                stderr_raw += f"\n[stderr truncated — {len(proc.stderr)} bytes total]".encode()
         else:
             stdout_raw = proc.stdout
             stderr_raw = proc.stderr

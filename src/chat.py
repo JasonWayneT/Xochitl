@@ -420,7 +420,7 @@ def _format_active_skill_block(defn: dict) -> str:
         "Invoke proactively when the request falls within this skill's domain — "
         "you do not need exact keyword matches, just clear intent.",
     ]
-    if examples:
+    if isinstance(examples, list) and examples:  # FR-HARD-006: guard against non-list values
         lines.append("")
         lines.append("Example triggers:")
         for ex in examples[:6]:
@@ -530,7 +530,19 @@ class XochitlChat:
             ]
 
         from src.skills.dynamic_skill import load_dynamic_skills
-        return (self._builtin_skills or []) + load_dynamic_skills(self.current_project)
+        all_skills = (self._builtin_skills or []) + load_dynamic_skills(self.current_project)
+        # FR-HARD-007: rebuild name index whenever skill list is recomputed.
+        self._skill_name_index: dict[str, Skill] = {}
+        for _s in all_skills:
+            try:
+                _defn = _s.tool_definition()
+                _key = _defn.get("name", "").lower()
+                if _key:
+                    self._skill_name_index[_key] = _s
+            except Exception:
+                pass
+            self._skill_name_index[type(_s).__name__.lower()] = _s
+        return all_skills
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -1445,14 +1457,21 @@ class XochitlChat:
         return response.rstrip() + build_workflow_save_offer(user_input)
 
     def _find_skill_by_name(self, name: str) -> Optional[Skill]:
-        """Look up a skill by its class name or tool_definition name."""
-        for skill in self.skills:
-            defn = skill.tool_definition()
-            if defn.get("name", "").lower() == name.lower():
-                return skill
-            if type(skill).__name__.lower() == name.lower():
-                return skill
-        return None
+        """Look up a skill by tool_definition name or class name. FR-HARD-007.
+
+        Uses a pre-built name index (populated by the `skills` property) for O(1)
+        lookup instead of calling tool_definition() on every skill on every call.
+
+        Args:
+            name: Skill name to look up (case-insensitive).
+
+        Returns:
+            Matching Skill instance, or None if no skill has that name.
+        """
+        # Ensure skills property has been accessed (builds _skill_name_index).
+        _ = self.skills
+        index = getattr(self, "_skill_name_index", {})
+        return index.get(name.lower())
 
     # ── Post-execution reflection/critic (CR-019) ─────────────────────────────
 
@@ -2077,6 +2096,10 @@ class XochitlChat:
         if verb == "/status":
             return self._handle_status_command()
 
+        # FR-HARD-008: /history — recent session summaries
+        if verb == "/history":
+            return self._handle_history_command(int(arg) if arg.isdigit() else 5)
+
         # CR-038: dismiss a proactive signal category (FR-INIT-002)
         if verb == "/dismiss":
             try:
@@ -2194,7 +2217,8 @@ class XochitlChat:
 
         available = (
             "/next <msg>  /retry  /authorize  /revoke  "
-            "/registry  /audit  /review  /research  /adversarial  /budget  /status  /brief  "
+            "/registry  /audit  /review  /research  /adversarial  "
+            "/budget  /status  /history [N]  /brief  "
             "/dismiss  /workflows  /workflow save <name>  /workflow run <name>  "
             "/debug skill"
         )
@@ -2249,6 +2273,39 @@ class XochitlChat:
 
         lines.append("")
         lines.append("[dim]Use /budget for full token breakdown.[/dim]")
+        return "\n".join(lines)
+
+    def _handle_history_command(self, n: int = 5) -> str:
+        """Return a table of recent session context summaries. FR-HARD-008.
+
+        Args:
+            n: Number of past sessions to show (default 5).
+
+        Returns:
+            Formatted session history string for console display.
+        """
+        try:
+            with db.get_connection() as conn:
+                rows = conn.execute(
+                    "SELECT id, started_at, last_active, context_summary "
+                    "FROM sessions WHERE context_summary IS NOT NULL "
+                    "AND context_summary != '' "
+                    "ORDER BY id DESC LIMIT ?",
+                    (n,),
+                ).fetchall()
+        except Exception as exc:
+            return f"[dim]Could not load session history: {exc}[/dim]"
+
+        if not rows:
+            return "[dim]No session history yet — context summaries are saved as you chat.[/dim]"
+
+        lines = [f"[bold]Last {min(n, len(rows))} sessions[/bold]", ""]
+        for row in rows:
+            started = str(row[1] or "")[:16]
+            summary = (str(row[3] or ""))[:90]
+            lines.append(f"  [dim]{started}[/dim]  {summary}")
+        lines.append("")
+        lines.append("[dim]Tip: /history 10 shows the last 10 sessions.[/dim]")
         return "\n".join(lines)
 
     def _last_user_message(self) -> str:

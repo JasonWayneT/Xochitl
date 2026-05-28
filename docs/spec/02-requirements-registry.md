@@ -919,6 +919,39 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR048-011` | `FR-JARV-011` | `/status` handled by `_handle_slash_command()` | Response contains "Local model" and "WIP" | implemented |
 | `AC-CR048-012` | All | `python smoke_test.py` | ≥ 165 tests pass, 0 failures | implemented |
 
+### Code Hardening (CR-049)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-HARD-001` | functional | P0 | implemented | `executor.py run()` splits `_OUTPUT_CAP_BYTES` 80/20 between stdout and stderr so stderr is never silently discarded on truncation | `AC-CR049-001` | `CR-049` | `src/executor.py` `run()` truncation block |
+| `FR-HARD-002` | functional | P0 | implemented | `database.py record_workflow_run()` uses two static parameterized SQL statements instead of a column-name f-string | `AC-CR049-002` | `CR-049` | `src/database.py` `record_workflow_run()` |
+| `FR-HARD-003` | functional | P1 | implemented | `workflows.py execute_workflow()` step failure message includes the exception class name: `f"[fail] {type(exc).__name__}: {exc}"` | `AC-CR049-003` | `CR-049` | `src/workflows.py` `execute_workflow()` |
+| `FR-HARD-004` | functional | P1 | implemented | `terminal_output.py MAX_LINE_WIDTH` set via `shutil.get_terminal_size((80,24)).columns` instead of hardcoded 80 | `AC-CR049-004` | `CR-049` | `src/terminal_output.py` `_terminal_width()` |
+| `FR-HARD-005` | functional | P1 | implemented | `InitiativeEngine.submit()` emits `logger.debug()` on all three discard paths: mode=OFF, ERRORS_ONLY category filter, and suppressed category | `AC-CR049-005` | `CR-049` | `src/initiative.py` `submit()` |
+| `FR-HARD-006` | functional | P1 | implemented | `_format_active_skill_block()` guards the `examples` iteration with `isinstance(examples, list)` to prevent character-per-character iteration on non-list values | `AC-CR049-006` | `CR-049` | `src/chat.py` `_format_active_skill_block()` |
+| `FR-HARD-007` | functional | P1 | implemented | `XochitlChat._find_skill_by_name()` uses a `_skill_name_index` dict (built lazily by the `skills` property) for O(1) lookup; `tool_definition()` is not called per lookup | `AC-CR049-007` | `CR-049` | `src/chat.py` `skills` property and `_find_skill_by_name()` |
+| `FR-HARD-008` | functional | P1 | implemented | `/history [N]` slash command prints a table of the last N session context summaries with started_at timestamps | `AC-CR049-009` | `CR-049` | `src/chat.py` `_handle_history_command()` |
+| `FR-HARD-010` | functional | P1 | implemented | `Skill` base class provides a default `health_check() -> bool` method returning `True`; skills with external credential requirements override it | `AC-CR049-010` | `CR-049` | `src/skills/base.py` `health_check()` |
+| `NFR-HARD-001` | non-functional | P1 | implemented | All public functions in `action_disclosure.py` have return-type annotations and Google-style docstrings (NFR-DEV-002, NFR-DEV-004) | `AC-CR049-008` | `CR-049` | `src/action_disclosure.py` — all 6 functions |
+| `NFR-HARD-002` | non-functional | P1 | implemented | `record_workflow_run()` docstring added with Args section (NFR-DEV-004) | — | `CR-049` | `src/database.py` |
+| `NFR-HARD-003` | non-functional | P0 | implemented | Existing executor truncation smoke test (AC-CR037-005) updated to match new truncation message format | — | `CR-049` | `smoke_test.py` |
+
+### Acceptance criteria — Code Hardening (CR-049)
+
+| ID | Requirements | Scenario | Expected | Status |
+|---|---|---|---|---|
+| `AC-CR049-001` | `FR-HARD-001` | `ExecutorResult` with truncated output inspected | `stderr` field is non-empty when stderr data exists | implemented |
+| `AC-CR049-002` | `FR-HARD-002` | `record_workflow_run` source inspected | No f-string; contains `success_count=success_count+1` static SQL | implemented |
+| `AC-CR049-003` | `FR-HARD-003` | `execute_workflow()` step raises `ValueError` | Output contains `"ValueError:"` prefix | implemented |
+| `AC-CR049-004` | `FR-HARD-004` | `_terminal_width()` called | Returns `shutil.get_terminal_size().columns` | implemented |
+| `AC-CR049-005` | `FR-HARD-005` | `submit()` with `mode=OFF` | `logger.debug` called with "OFF" or "discarded" | implemented |
+| `AC-CR049-006` | `FR-HARD-006` | `_format_active_skill_block(examples="string")` | No crash; no character-per-line output | implemented |
+| `AC-CR049-007` | `FR-HARD-007` | `skills` property accessed | `_skill_name_index` dict populated | implemented |
+| `AC-CR049-008` | `NFR-HARD-001` | AST inspection of `action_disclosure.py` | All 6 public functions have `returns` annotation | implemented |
+| `AC-CR049-009` | `FR-HARD-008` | `_handle_history_command(5)` with mock data | Response contains session timestamp string | implemented |
+| `AC-CR049-010` | `FR-HARD-010` | `Skill().health_check()` on base subclass | Returns `True` | implemented |
+| `AC-CR049-011` | All | `python smoke_test.py` | 186 tests pass, 0 failures | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

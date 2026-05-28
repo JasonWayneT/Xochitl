@@ -124,11 +124,23 @@ class InitiativeEngine:
         """
         try:
             if self._mode == ProactiveMode.OFF:
+                logger.debug(
+                    "initiative: discarded [mode=OFF] category=%s msg=%.60s",
+                    signal.category.value, signal.message,
+                )
                 return
             if self._mode == ProactiveMode.ERRORS_ONLY:
                 if signal.category not in _ERRORS_ONLY_CATEGORIES:
+                    logger.debug(
+                        "initiative: discarded [ERRORS_ONLY] category=%s msg=%.60s",
+                        signal.category.value, signal.message,
+                    )
                     return
             if signal.category in self._suppressed:
+                logger.debug(
+                    "initiative: discarded [suppressed] category=%s msg=%.60s",
+                    signal.category.value, signal.message,
+                )
                 return
             if signal.confidence < _CONFIDENCE_THRESHOLD:
                 logger.debug(

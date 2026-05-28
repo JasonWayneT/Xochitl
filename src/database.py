@@ -789,14 +789,26 @@ def record_workflow_run(
     *,
     success: bool,
 ) -> None:
-    """Increment success or failure count and touch last_used_at (FR-MEM-008)."""
+    """Increment success or failure count and touch last_used_at (FR-MEM-008, FR-HARD-002).
+
+    Args:
+        conn: Active SQLite connection.
+        workflow_id: Primary key of the workflow to update.
+        success: True increments success_count; False increments failure_count.
+    """
     _ensure_workflows_table(conn)
-    col = "success_count" if success else "failure_count"
-    conn.execute(
-        f"""UPDATE workflows SET {col}={col}+1, last_used_at=CURRENT_TIMESTAMP
-            WHERE id=?""",
-        (workflow_id,),
-    )
+    if success:
+        conn.execute(
+            "UPDATE workflows SET success_count=success_count+1, "
+            "last_used_at=CURRENT_TIMESTAMP WHERE id=?",
+            (workflow_id,),
+        )
+    else:
+        conn.execute(
+            "UPDATE workflows SET failure_count=failure_count+1, "
+            "last_used_at=CURRENT_TIMESTAMP WHERE id=?",
+            (workflow_id,),
+        )
 
 
 def supersede_workflow(conn: sqlite3.Connection, name: str) -> bool:

@@ -40,3 +40,16 @@ class Skill(ABC):
           examples    — list of ≥3 verbatim user phrases that trigger this skill
                         (injected into active-skill block so LLM has concrete reference)
         """
+
+    def health_check(self) -> bool:
+        """Return True if this skill is ready to execute. FR-HARD-010, FR-JARV-007.
+
+        Override in skills that depend on external credentials or tokens.
+        The default implementation always returns True (no health requirements).
+        Called once at session start; False result queues a SKILL_HEALTH signal.
+
+        Returns:
+            True if the skill can execute normally; False if credentials are missing
+            or the skill is otherwise unavailable.
+        """
+        return True
