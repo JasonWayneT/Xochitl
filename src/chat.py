@@ -17,6 +17,7 @@ Design principles (from XOCHITL_CONVERSATIONAL_HARNESS.md):
 - Orchestrator is a tool Xochitl uses when user says "delegate it" — not a default
 """
 
+import concurrent.futures
 import json
 import os
 import re
@@ -477,9 +478,10 @@ class XochitlChat:
         self._background_review.start()
 
         # CR-038: controlled initiative engine (FR-INIT-001)
+        # FR-RELY-004 (CR-050 B5): pass db_path so dismissals survive session restarts.
         try:
             from src.initiative import InitiativeEngine
-            self._initiative = InitiativeEngine()
+            self._initiative = InitiativeEngine(db_path=str(db.DB_PATH))
             self._background_review._initiative_engine = self._initiative
         except Exception:
             self._initiative = None  # type: ignore[assignment]
@@ -504,6 +506,23 @@ class XochitlChat:
         # FR-ORCH-025: session token budget governor — tracks estimated spend and
         # applies progressive routing restrictions (FULL → PREFER_LOCAL → LOCAL_ONLY → HARD_STOP).
         self._governor = SessionGovernor()
+
+        # FR-RELY-005 (CR-050 B6): decay stale memory facts in a background thread
+        # so it never blocks session start.
+        def _decay_bg() -> None:
+            try:
+                with db.get_connection() as _conn:
+                    db.decay_memory_facts(_conn)
+            except Exception:
+                pass
+        threading.Thread(target=_decay_bg, daemon=True).start()
+
+        # FR-PERF-002 (CR-050 B2): turn-level ContextManager cache.
+        # Static engines (soul, profile, config) are reused across turns.
+        # Key: (history_len, last_mutating_skill, route).
+        self._cm_cache: Optional[ContextManager] = None
+        self._cm_cache_key: Optional[tuple] = None
+        self._last_mutating_skill: str = ""
 
     @property
     def skills(self) -> list[Skill]:
@@ -854,18 +873,33 @@ class XochitlChat:
             return self._record(preference_resp)
 
         route = "cloud" if self.force_cloud else "local"
-        # CR-035: pass milestone block so assemble_system_prompt() can inject it (FR-PREF-005)
-        cm = ContextManager(
-            route=route,
-            skills=self.skills,
-            milestone_block=getattr(self, "_milestone_block", ""),
-        )
-        cm.ingest(
-            query=user_input,
-            history=self._clean_history(),
-            project=self.current_project,
-            local_mode=(route == "local"),
-        )
+        # FR-PERF-002 (CR-050 B2): turn-level cache for static CM engines.
+        # Cache key captures inputs that invalidate the static content.
+        _history = self._clean_history()
+        _cm_key = (len(_history), getattr(self, "_last_mutating_skill", ""), route)
+        if getattr(self, "_cm_cache", None) is not None and getattr(self, "_cm_cache_key", None) == _cm_key:
+            cm = self._cm_cache
+            # Always refresh query-dependent and per-turn engines.
+            cm.memory.ingest(query=user_input, project=self.current_project)
+            cm.preferences.ingest(query=user_input, project=self.current_project)
+            cm.files.ingest(query=user_input, history=_history)
+            # FactsEngine has its own TTL — let it self-skip if still fresh.
+            cm.facts.ingest(project=self.current_project, local_mode=(route == "local"))
+        else:
+            # CR-035: pass milestone block so assemble_system_prompt() can inject it (FR-PREF-005)
+            cm = ContextManager(
+                route=route,
+                skills=self.skills,
+                milestone_block=getattr(self, "_milestone_block", ""),
+            )
+            cm.ingest(
+                query=user_input,
+                history=_history,
+                project=self.current_project,
+                local_mode=(route == "local"),
+            )
+            self._cm_cache = cm
+            self._cm_cache_key = _cm_key
         # CR-042: workflow executor needs live skill instances (FR-MEM-014)
         self.current_context["_chat_skills"] = self.skills
 
@@ -1005,6 +1039,9 @@ class XochitlChat:
 
         if status == "err":
             return f"[dim]{_ERR} — skill error: {value}[/dim]"
+
+        # FR-PERF-002 (CR-050 B2): mark skill as last mutating so CM cache key invalidates.
+        self._last_mutating_skill = type(skill).__name__
         return value or ""
 
     def _emit_action_line(self, label: str) -> None:
@@ -1052,6 +1089,21 @@ class XochitlChat:
           5. If found: execute skill, record in history, append result to response
           6. Strip any stray <skill_call> tags from visible output
         """
+        # FR-RELY-003 (CR-050 B4): watchdog — restart daemon if it died silently.
+        _br = getattr(self, "_background_review", None)
+        if _br is not None and not _br.is_alive():
+            try:
+                self._background_review = BackgroundReview()
+                self._background_review.start()
+                if getattr(self, "_initiative", None):
+                    self._background_review._initiative_engine = self._initiative
+                _events.emit("SYSTEM_FAILURE", {
+                    "component": "BackgroundReview",
+                    "action": "restarted",
+                })
+            except Exception:
+                pass
+
         # CR-021: generate per-turn trace_id for observability correlation (FR-ORCH-036)
         import secrets as _secrets
         _trace_id = _secrets.token_hex(6)
@@ -1124,21 +1176,49 @@ class XochitlChat:
             pass
 
         # ── Phase 2: deterministic skill scoring pre-turn ─────────────────────
-        # Score every loaded skill against the user's message BEFORE the LLM
-        # call. The top scorer above threshold gets its full schema injected into
-        # the system prompt so the model has the invocation format in front of it.
-        # This is deterministic (no LLM call) and replaces the old approach where
-        # the model had to guess the <skill_call> format from the global manifest.
+        # FR-PERF-003 (CR-050 B3): score all skills concurrently via ThreadPoolExecutor
+        # with a 100ms total timeout.  A per-turn hash cache avoids re-scoring when
+        # _agent_loop() is called twice for the same input (e.g. staged messages).
         top_skill = None
         top_score = 0.0
-        for skill in self.skills:
+        _skills_snap = self.skills
+        _score_key = (hash(user_input), len(_skills_snap))
+        _cache: Optional[tuple] = getattr(self, "_skill_score_cache", None)
+        _cache_key = getattr(self, "_skill_score_cache_key", None)
+
+        if _cache is not None and _cache_key == _score_key:
+            _cached_name, top_score = _cache
+            top_skill = next((s for s in _skills_snap if type(s).__name__ == _cached_name), None)
+        else:
+            # Reset stale cache entry at start of each scoring pass.
+            self._skill_score_cache = None
+            self._skill_score_cache_key = None
+
+            def _score_one(skill: Skill) -> tuple[Skill, float]:
+                try:
+                    return skill, skill.can_handle(user_input, self.current_context)
+                except Exception:
+                    return skill, 0.0
+
+            _max_workers = min(len(_skills_snap), 8) if _skills_snap else 1
             try:
-                score = skill.can_handle(user_input, self.current_context)
-            except Exception:
-                score = 0.0
-            if score > top_score:
-                top_score = score
-                top_skill = skill
+                with concurrent.futures.ThreadPoolExecutor(max_workers=_max_workers) as _pool:
+                    _futs = {_pool.submit(_score_one, sk): sk for sk in _skills_snap}
+                    for _fut in concurrent.futures.as_completed(_futs, timeout=0.10):
+                        try:
+                            _sk, _sc = _fut.result(timeout=0)
+                        except Exception:
+                            continue
+                        if _sc > top_score:
+                            top_score = _sc
+                            top_skill = _sk
+            except concurrent.futures.TimeoutError:
+                pass  # partial results — use whatever scored in time
+
+            # Cache result for potential same-input re-entry this session turn.
+            if top_skill is not None:
+                self._skill_score_cache = (type(top_skill).__name__, top_score)
+                self._skill_score_cache_key = _score_key
 
         if top_skill is not None and top_score >= _SKILL_INJECT_THRESHOLD:
             defn = top_skill.tool_definition()

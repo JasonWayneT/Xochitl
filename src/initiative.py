@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -100,11 +101,80 @@ class InitiativeEngine:
     are ever relaxed, add a threading.Lock around _pending mutations.
     """
 
-    def __init__(self, mode: ProactiveMode = ProactiveMode.ERRORS_ONLY) -> None:
+    def __init__(
+        self,
+        mode: ProactiveMode = ProactiveMode.ERRORS_ONLY,
+        db_path: Optional[str] = None,
+    ) -> None:
+        """Initialise the engine, loading persisted state when db_path is supplied.
+
+        Args:
+            mode: Initial proactive mode (default ERRORS_ONLY).
+            db_path: Optional path to the SQLite database.  When set, dismissal
+                counts and suppressed categories are loaded on construction and
+                written back on every :meth:`dismiss` call.  FR-RELY-004.
+        """
         self._mode: ProactiveMode = mode
         self._pending: list[ProactiveSignal] = []
         self._dismissal_counts: dict[InitiativeCategory, int] = {}
         self._suppressed: set[InitiativeCategory] = set()
+        self._db_path: Optional[str] = db_path
+        if db_path:
+            self._load_state(db_path)
+
+    # ── Internal persistence ──────────────────────────────────────────────────
+
+    def _load_state(self, db_path: str) -> None:
+        """Load dismissal counts and suppressed categories from SQLite (FR-RELY-004).
+
+        Args:
+            db_path: Path to the SQLite database file.
+        """
+        try:
+            import sqlite3
+            from src import database as _db
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                rows = _db.load_initiative_state(conn)
+                for row in rows:
+                    try:
+                        cat = InitiativeCategory(row["category"])
+                    except ValueError:
+                        continue
+                    self._dismissal_counts[cat] = int(row["dismissal_count"])
+                    if row["suppressed"]:
+                        self._suppressed.add(cat)
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.debug("initiative: _load_state failed: %s", exc)
+
+    def _persist_category(self, category: InitiativeCategory) -> None:
+        """Write one category's state to SQLite (FR-RELY-004).
+
+        Args:
+            category: The category whose state should be persisted.
+        """
+        if not self._db_path:
+            return
+        try:
+            import sqlite3
+            from src import database as _db
+            conn = sqlite3.connect(self._db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                _db.save_initiative_state(
+                    conn,
+                    category.value,
+                    self._dismissal_counts.get(category, 0),
+                    category in self._suppressed,
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        except Exception as exc:
+            logger.debug("initiative: _persist_category failed: %s", exc)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -178,6 +248,7 @@ class InitiativeEngine:
                     category.value,
                     count,
                 )
+            self._persist_category(category)
         except Exception as exc:
             logger.debug("initiative: dismiss() error: %s", exc)
 

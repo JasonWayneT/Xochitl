@@ -38,6 +38,10 @@ def _estimate_tokens(text: str) -> int:
 
 _PROJECT_ROOT = Path(__file__).parent.parent
 
+# FR-PERF-002 (CR-050 B2): FactsEngine TTL — skip expensive git/DB queries when
+# the previous ingest is still fresh. Override with XCH_FACTS_TTL env var.
+_FACTS_TTL: float = float(os.getenv("XCH_FACTS_TTL", "60"))
+
 
 def _first_existing(paths: list[Path]) -> Optional[Path]:
     for path in paths:
@@ -181,10 +185,18 @@ class FactsEngine(ContextEngine):
     def ingest(self, project: Optional[str] = None, local_mode: bool = True) -> None:  # type: ignore[override]
         """Load facts from environment, git, and database. FR-JARV-001/002/003.
 
+        FR-PERF-002 (CR-050 B2): skips git/DB queries when previous load is
+        within _FACTS_TTL seconds, except when project or mode changed.
+
         Args:
             project: Active project ID (or None).
             local_mode: Whether the session is using local routing.
         """
+        age = time.time() - self._loaded_at
+        same_context = (project == self._project and local_mode == self._local_mode)
+        if self._loaded_at > 0 and age < _FACTS_TTL and same_context:
+            return
+
         self._project = project
         self._local_mode = local_mode
         try:

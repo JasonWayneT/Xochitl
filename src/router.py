@@ -64,6 +64,9 @@ def _load_temperatures() -> None:
 
 _load_temperatures()
 
+# FR-PERF-001 (CR-050 B1): fast-path threshold — skip LLM classifier when confidence meets this.
+_FAST_CLASSIFY_THRESHOLD: float = float(os.getenv("XCH_FAST_CLASSIFY_THRESHOLD", "0.85"))
+
 # Phrases that mean "your own directory" without naming an explicit path
 _SELF_DIR_PHRASES = [
     "your directory", "your folder", "your files", "the directory you're in",
@@ -411,10 +414,41 @@ _ZETTEL_RE = re.compile(
 )
 
 
+_SHORT_CONFIRM_RE = re.compile(
+    r'^(?:yes|no|ok|okay|done|sure|nope|yep|yeah|nah|thanks|ty|got it|sounds good|agreed|correct|right|nah|maybe)$',
+    re.IGNORECASE,
+)
+
+
 def _fast_classify(query: str) -> Optional[tuple[str, float]]:
-    """Keyword-based classification — always returns confidence 1.0 on match."""
+    """Keyword-based classification — returns (category, confidence) or None.
+
+    Args:
+        query: Raw user input string.
+
+    Returns:
+        Tuple of (category, confidence) if a rule fires, else None.
+        High-confidence rules return 1.0; weaker structural rules return < 1.0.
+    """
     q = query.lower()
-    # Zettelkasten check first — a path like C:\Vaults\... must not override zettel intent
+    stripped = query.strip()
+
+    # FR-PERF-001 (CR-050 B1): structural fast rules — no LLM needed for these patterns.
+    # Slash command prefix → task_management (chat.py may intercept before routing, but
+    # classifying here avoids the LLM round-trip for any that do reach the router).
+    if stripped.startswith("/"):
+        return "task_management", 1.0
+    # @SkillName prefix → xochitl_help (direct skill address)
+    if stripped.startswith("@"):
+        return "xochitl_help", 1.0
+    # Single-token yes/no/ok/done confirmations — definitely conversational, not task work
+    if _SHORT_CONFIRM_RE.match(stripped):
+        return "simple_qa", 0.95
+    # Very short inputs (≤12 chars) that aren't empty — likely greetings or one-word queries
+    if 0 < len(stripped) <= 12:
+        return "simple_qa", 0.88
+
+    # Zettelkasten check — a path like C:\Vaults\... must not override zettel intent
     if _ZETTEL_RE.search(query):
         return "zettelkasten_mode", 1.0
     # Bare absolute path (Windows or Unix) → file operation
@@ -428,7 +462,6 @@ def _fast_classify(query: str) -> Optional[tuple[str, float]]:
         return "file_operations", 1.0
     # Top-priority BMAD check — before task_management so "run through bmad" never hijacked
     if re.search(r'\bbmad\b|\bsdd\b|spec.driven|run.*through.*bmad|bmad.*method|bmad.*workflow', q):
-        # Distinguish complex from simple based on depth keywords
         if any(w in q for w in ["architecture", "traceability", "design spec", "full bmad", "full sdd"]):
             return "bmad_complex", 1.0
         if any(w in q for w in ["party", "multi-agent", "roundtable"]):
@@ -553,13 +586,30 @@ class TieredRouter:
             )
 
     def _classify(self, query: str) -> tuple[str, float]:
-        """Implements FR-ORCH-001 — returns (category, confidence) from router model."""
+        """Implements FR-ORCH-001 — returns (category, confidence) from router model.
+
+        FR-PERF-001 (CR-050 B1): calls _fast_classify() first; if confidence meets
+        _FAST_CLASSIFY_THRESHOLD the LLM call is skipped entirely.
+
+        Args:
+            query: Raw user input string.
+
+        Returns:
+            Tuple of (category, confidence).
+        """
+        fast = _fast_classify(query)
+        if fast is not None and fast[1] >= _FAST_CLASSIFY_THRESHOLD:
+            return fast
+
         prompt = _CLASSIFICATION_PROMPT.format(query=query)
         result = call_local(
             messages=[{"role": "user", "content": prompt}],
             model=ROUTER_MODEL,
         )
         if result.error:
+            # Fall back to fast result (any confidence) if LLM is unavailable
+            if fast is not None:
+                return fast
             return "simple_qa", 0.0
         return _parse_classification(result.content)
 

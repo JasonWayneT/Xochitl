@@ -594,6 +594,12 @@ def _ensure_memory_facts_table(conn: sqlite3.Connection) -> None:
             superseded_by INTEGER REFERENCES memory_facts(id)
         )
     """)
+    # FR-RELY-005 (CR-050 B6): migration guard — add updated_at if absent.
+    existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(memory_facts)").fetchall()}
+    if "updated_at" not in existing_cols:
+        conn.execute(
+            "ALTER TABLE memory_facts ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"
+        )
 
 
 def upsert_memory_fact(
@@ -653,6 +659,56 @@ def get_memory_facts(
            ORDER BY confidence DESC, last_seen_at DESC LIMIT ?""",
         (min_confidence, limit),
     ).fetchall()
+
+
+def decay_memory_facts(conn: sqlite3.Connection) -> int:
+    """Apply time-based confidence decay to stale memory facts (FR-RELY-005).
+
+    Decay schedule (based on days since last_seen_at):
+      ≥ 90 days  → confidence × 0.5 (steep decay)
+      ≥ 30 days  → confidence × 0.9 (gentle decay)
+    Facts that decay below 0.1 are soft-deleted (superseded_by=id).
+
+    Args:
+        conn: Active SQLite connection (caller must commit).
+
+    Returns:
+        Number of rows updated.
+    """
+    _ensure_memory_facts_table(conn)
+    updated = 0
+
+    # Steep decay: unseen for 90+ days
+    conn.execute("""
+        UPDATE memory_facts
+        SET confidence = MAX(0.0, confidence * 0.5),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE superseded_by IS NULL
+          AND julianday('now') - julianday(last_seen_at) >= 90
+    """)
+    updated += conn.execute("SELECT changes()").fetchone()[0]
+
+    # Gentle decay: unseen 30–89 days (avoid double-applying to the 90+ group)
+    conn.execute("""
+        UPDATE memory_facts
+        SET confidence = MAX(0.0, confidence * 0.9),
+            updated_at = CURRENT_TIMESTAMP
+        WHERE superseded_by IS NULL
+          AND julianday('now') - julianday(last_seen_at) >= 30
+          AND julianday('now') - julianday(last_seen_at) < 90
+    """)
+    updated += conn.execute("SELECT changes()").fetchone()[0]
+
+    # Soft-delete facts that have decayed below the minimum threshold
+    conn.execute("""
+        UPDATE memory_facts
+        SET superseded_by = id,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE superseded_by IS NULL
+          AND confidence < 0.1
+    """)
+
+    return updated
 
 
 # ── Procedural memory (workflows) — CR-041 ───────────────────────────────────
@@ -857,6 +913,61 @@ def supersede_workflow(conn: sqlite3.Connection, name: str) -> bool:
         (row["id"],),
     )
     return True
+
+
+# ── Initiative state persistence (CR-050 B5) ─────────────────────────────────
+# FR-RELY-004: persist InitiativeEngine dismissal counts and suppressed set so
+# user opt-outs survive session restarts.
+
+def _ensure_initiative_state_table(conn: sqlite3.Connection) -> None:
+    """Create initiative_state table for upgraded databases (FR-RELY-004)."""
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS initiative_state (
+            category TEXT PRIMARY KEY,
+            dismissal_count INTEGER NOT NULL DEFAULT 0,
+            suppressed INTEGER NOT NULL DEFAULT 0
+        )
+    """)
+
+
+def save_initiative_state(
+    conn: sqlite3.Connection,
+    category: str,
+    dismissal_count: int,
+    suppressed: bool,
+) -> None:
+    """Upsert dismissal count and suppression flag for one initiative category.
+
+    Args:
+        conn: Active SQLite connection.
+        category: ``InitiativeCategory.value`` string.
+        dismissal_count: Cumulative number of dismissals.
+        suppressed: True when category is permanently suppressed.
+    """
+    _ensure_initiative_state_table(conn)
+    conn.execute(
+        """INSERT INTO initiative_state (category, dismissal_count, suppressed)
+           VALUES (?, ?, ?)
+           ON CONFLICT(category) DO UPDATE SET
+               dismissal_count=excluded.dismissal_count,
+               suppressed=excluded.suppressed""",
+        (category, dismissal_count, int(suppressed)),
+    )
+
+
+def load_initiative_state(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Return all stored initiative state rows.
+
+    Args:
+        conn: Active SQLite connection.
+
+    Returns:
+        List of rows with columns: category, dismissal_count, suppressed.
+    """
+    _ensure_initiative_state_table(conn)
+    return conn.execute(
+        "SELECT category, dismissal_count, suppressed FROM initiative_state"
+    ).fetchall()
 
 
 # ── Observability ─────────────────────────────────────────────────────────────
