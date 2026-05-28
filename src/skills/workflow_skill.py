@@ -63,4 +63,11 @@ class WorkflowSkill(Skill):
             "description": "Run a saved multi-step procedural workflow by name.",
             "when": "User asks to run a saved routine or /workflow run",
             "params": {"name": "workflow name (optional if intent match)"},
+            "examples": [
+                "run workflow daily standup",
+                "/workflow run morning-review",
+                "run my weekly review workflow",
+                "execute the deployment checklist workflow",
+                "run the code review workflow",
+            ],
         }

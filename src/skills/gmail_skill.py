@@ -152,6 +152,14 @@ class GmailSkill(Skill):
                 "body": "Email body text for send",
                 "max_results": "Number of emails to list (default 5)",
             },
+            "examples": [
+                "check my email",
+                "what's in my inbox",
+                "any new messages?",
+                "send an email to mom",
+                "find emails from my boss",
+                "read the first email",
+            ],
         }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:

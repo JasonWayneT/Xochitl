@@ -122,6 +122,13 @@ class MapsSkill(Skill):
                 "location": "Location to search near (omit to use saved home location)",
                 "mode": "'driving' | 'walking' | 'transit' | 'bicycling'  (default: driving)",
             },
+            "examples": [
+                "how do I get to downtown San Diego?",
+                "directions to the nearest coffee shop",
+                "how far is Tijuana from here?",
+                "find a taco shop near me",
+                "what's the drive time to the airport?",
+            ],
         }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:

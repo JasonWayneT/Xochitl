@@ -140,6 +140,13 @@ class ExplorerSkill(Skill):
             "params": {
                 "query": "The research question or topic to investigate",
             },
+            "examples": [
+                "investigate the causes of tech layoffs in 2024",
+                "research the best approaches to microservices",
+                "deep dive into Python async patterns",
+                "explore how LLMs handle context windows",
+                "analyze the relationship between diet and productivity",
+            ],
         }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:

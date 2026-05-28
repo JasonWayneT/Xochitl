@@ -75,6 +75,13 @@ class SDDSkill(Skill):
                 "action": "generate_specs | list_requirements | analyze_issue",
                 "project_id": "(optional) project ID, defaults to active project",
             },
+            "examples": [
+                "generate specs for my project",
+                "list all requirements",
+                "show me the FR- requirements",
+                "analyze this bug against specs",
+                "what's the traceability status?",
+            ],
         }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:

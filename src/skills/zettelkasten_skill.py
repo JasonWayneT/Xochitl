@@ -631,4 +631,14 @@ class ZettelkastenSkill(Skill):
                 "claim": "The claim title for a new permanent note (title-as-argument)",
                 "source": "The source name for a new literature note",
             },
+            "examples": [
+                "let's work on zettles",
+                "open the vault",
+                "zettel mode",
+                "new note: habits are identity-based, not outcome-based",
+                "process my fleeting notes",
+                "what's connecting in my vault?",
+                "initiate a zettelkasten project",
+                "done for today",
+            ],
         }

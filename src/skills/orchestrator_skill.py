@@ -53,6 +53,13 @@ class OrchestratorSkill(Skill):
             "params": {
                 "task_id": "(optional) task ID to delegate; omit to show status",
             },
+            "examples": [
+                "delegate this task to an agent",
+                "run this in the background",
+                "handle it autonomously",
+                "spin up an agent for this",
+                "how's the background task doing?",
+            ],
         }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:

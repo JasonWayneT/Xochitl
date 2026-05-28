@@ -32,9 +32,11 @@ class Skill(ABC):
     def tool_definition(self) -> dict:
         """Return a descriptor dict for LLM system prompt injection.
 
-        Implements FR-ORCH-005. Required keys:
+        Implements FR-ORCH-005, FR-ORCH-039. Required keys:
           name        — class name matching <skill_call name="...">
           description — one sentence describing what the skill does
           when        — natural language trigger conditions for the LLM
           params      — dict of {param_name: "description | options"}
+          examples    — list of ≥3 verbatim user phrases that trigger this skill
+                        (injected into active-skill block so LLM has concrete reference)
         """

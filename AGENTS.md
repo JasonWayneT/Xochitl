@@ -143,6 +143,40 @@ For refactors:
 4. Implement in small steps.
 5. Update design docs only if the architecture actually changed.
 
+## Adding a new skill (mandatory checklist)
+
+Every new skill added to `src/skills/` must complete all five steps before the PR is merged.
+Incomplete skills are the leading cause of "skill not found" failures at runtime.
+
+1. **Keyword vocabulary** — `can_handle()` must cover at least 5 natural-language phrasings of the
+   intent, including common typos and synonyms. Check against `_DISPATCH_THRESHOLD = 0.65` in
+   `chat.py`; any phrasing the user might say must score ≥ 0.65.
+
+2. **`examples` field in `tool_definition()`** — Add 5+ concrete example phrases to the `examples`
+   key. These are injected into the LLM system prompt so the model knows exactly when to emit a
+   `<skill_call>` tag for this skill. Without examples, the LLM cannot reliably invoke the skill.
+
+   ```python
+   "examples": [
+       "phrase a user would say",
+       "another phrasing",
+       ...  # at least 5 entries
+   ],
+   ```
+
+3. **Registration in `_builtin_skills`** — The skill instance must be added to the
+   `_builtin_skills` list in `XochitlChat.__init__()` in `src/chat.py`. Skills not on this list
+   are invisible to the dispatcher and will never run.
+
+4. **Smoke test assertions** — Add at least two assertions to `smoke_test.py`:
+   - `can_handle()` scores a known trigger phrase ≥ 0.65
+   - `can_handle()` scores 0.0 for an unrelated phrase (negative test)
+
+5. **`CAPABILITIES.md` update** — Document the new skill in `CAPABILITIES.md` with:
+   - What it does (one sentence)
+   - Example phrases that trigger it
+   - Any required secrets or env vars
+
 ## Xochitl-specific invariants
 
 These invariants must never be violated by any agent:

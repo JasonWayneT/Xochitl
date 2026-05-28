@@ -297,6 +297,10 @@ _RESEARCH_KEYWORDS = [
 
 # ── Skill-call parsing (FR-ORCH-008) ─────────────────────────────────────────
 
+# FR-ORCH-042: @SkillName explicit routing — user bypasses can_handle() scoring.
+# Matches "@GmailSkill ...", "@gmail ...", "@maps ..." at start of message.
+_AT_SKILL_RE = re.compile(r'^@(\w+)\b', re.IGNORECASE)
+
 _SKILL_CALL_RE = re.compile(
     r'<skill_call\s+name=["\'](\w+)["\']>(.*?)</skill_call>',
     re.DOTALL | re.IGNORECASE,
@@ -356,10 +360,12 @@ def _format_active_skill_block(defn: dict) -> str:
     without the noise of the full manifest — fixes the hallucinated-XML problem
     by showing the exact <skill_call> format only when a skill is actually needed.
     """
+    # Implements FR-ORCH-039 (examples injection), FR-ORCH-040 (proactive invocation)
     name        = defn.get("name", "")
     description = defn.get("description", "")
     when        = defn.get("when", "")
     params      = defn.get("params", {})
+    examples    = defn.get("examples", [])
 
     lines = [
         "## Active Skill",
@@ -373,9 +379,14 @@ def _format_active_skill_block(defn: dict) -> str:
         "",
         "Read-only skills execute immediately. "
         "Mutating skills are staged for user approval first.",
-        "Only invoke if the user clearly wants that action — "
-        "not for planning or open-ended discussion.",
+        "Invoke proactively when the request falls within this skill's domain — "
+        "you do not need exact keyword matches, just clear intent.",
     ]
+    if examples:
+        lines.append("")
+        lines.append("Example triggers:")
+        for ex in examples[:6]:
+            lines.append(f'  · "{ex}"')
     if params:
         lines.append("")
         lines.append(f"Parameters for {name}:")
@@ -729,6 +740,8 @@ class XochitlChat:
             "content": user_input,
             "timestamp": datetime.now().isoformat(),
         })
+        # FR-ORCH-041: track last user message for /debug skill scoring
+        self.current_context["_last_debug_input"] = user_input
 
         if is_why_request(user_input):
             expansion = build_why_expansion(
@@ -796,6 +809,26 @@ class XochitlChat:
         # where the single LLM classifier in router._classify() makes the call.
         if _status:
             _status.update("choosing path")
+
+        # FR-ORCH-042: @SkillName explicit routing — bypass can_handle() scoring.
+        # User writes "@gmail check my inbox"; we strip the @prefix, find the skill,
+        # and execute directly, short-circuiting the entire agent loop (AC-CR047-007).
+        _at_match = _AT_SKILL_RE.match(user_input.strip())
+        if _at_match:
+            _at_name    = _at_match.group(1)
+            _at_payload = user_input[_at_match.end():].strip()
+            _at_skill   = self._find_skill_by_name(_at_name)
+            if _at_skill:
+                self._emit_action_line(f"Running {_at_name} (explicit)...")
+                _at_result = _at_skill.execute(
+                    _at_payload or user_input, self.current_context, {}
+                )
+                response = _at_result or f"[dim]{_at_name} returned no output.[/dim]"
+                response = self._maybe_offer_skill_creation(user_input, response)
+                response = self._maybe_offer_workflow_save(user_input, response)
+                return self._record(response)
+            # Unrecognised @name — fall through to normal routing with a hint
+            user_input = user_input  # keep original; skill not found is non-fatal
 
         q_lower = user_input.lower()
 
@@ -2006,10 +2039,40 @@ class XochitlChat:
             except Exception as exc:
                 return f"[dim]{_FYI} — couldn't build brief: {exc}[/dim]"
 
+        # FR-ORCH-041: /debug skill — show per-skill can_handle() scores (AC-CR047-006)
+        if verb == "/debug" and arg.lower().startswith("skill"):
+            last_input = self.current_context.get("_last_debug_input", "")
+            if not last_input:
+                # Fall back to last session history user message
+                for msg in reversed(self.session_history):
+                    if msg.get("role") == "user":
+                        last_input = msg.get("content", "")
+                        break
+            if not last_input:
+                return "[dim]No recent message to score against — say something first.[/dim]"
+            lines = [f"[bold]can_handle scores[/bold] for: {last_input[:80]}"]
+            rows = []
+            for skill in self.skills:
+                try:
+                    score = skill.can_handle(last_input, self.current_context)
+                except Exception:
+                    score = -1.0
+                name = type(skill).__name__
+                marker = " ← injected" if score >= _SKILL_INJECT_THRESHOLD else (
+                    " ← near-miss" if score >= _OPEN_ENDED_SCORE_THRESHOLD else ""
+                )
+                rows.append((score, f"  {score:.2f}  {name}{marker}"))
+            rows.sort(key=lambda r: r[0], reverse=True)
+            lines.extend(r[1] for r in rows)
+            lines.append(f"\n  inject threshold: {_SKILL_INJECT_THRESHOLD}  "
+                         f"near-miss threshold: {_OPEN_ENDED_SCORE_THRESHOLD}")
+            return "\n".join(lines)
+
         available = (
             "/next <msg>  /retry  /authorize  /revoke  "
             "/registry  /audit  /review  /research  /adversarial  /budget  /brief  "
-            "/dismiss  /workflows  /workflow save <name>  /workflow run <name>"
+            "/dismiss  /workflows  /workflow save <name>  /workflow run <name>  "
+            "/debug skill"
         )
         return f"[dim]{_FYI} — unknown command: {verb}\nAvailable: {available}[/dim]"
 

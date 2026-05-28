@@ -79,6 +79,13 @@ class CodeSkill(Skill):
                 "requirement_id": "FR-* ID (for implement)",
                 "project_id": "(optional) project ID, defaults to active project",
             },
+            "examples": [
+                "scaffold the backend for my project",
+                "implement FR-CORE-001",
+                "generate tests for FR-AUTH-002",
+                "fix the bug in issue BUG-003",
+                "write the API layer from specs",
+            ],
         }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:

@@ -173,6 +173,13 @@ class WeatherSkill(Skill):
                 "location": "City/state/country location text, for example 'Escondido, CA'",
                 "query": "Original weather question when location is not extracted",
             },
+            "examples": [
+                "what's the weather in San Diego?",
+                "is it going to rain today?",
+                "how cold is it outside?",
+                "weather forecast for this week",
+                "what's the temperature right now?",
+            ],
         }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:

@@ -46,6 +46,13 @@ class NotionSkill(Skill):
             "params": {
                 "direction": "pull | push",
             },
+            "examples": [
+                "sync my Notion tasks",
+                "pull the latest from Notion",
+                "push my completed tasks to Notion",
+                "update my task list from Notion",
+                "sync Notion",
+            ],
         }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:

@@ -858,6 +858,30 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR046a-008` | `FR-GMAIL-003` | `_build_raw_message()` | non-empty base64, contains recipient | implemented |
 | `AC-CR046a-009` | `NFR-GMAIL-001` | Auth FileNotFoundError | returns descriptive string, no exception raised | implemented |
 
+### Orchestration — Skill Reliability Hardening (CR-047)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-ORCH-047` | functional | P1 | implemented | Every `tool_definition()` must include an `examples` key — a list of ≥3 verbatim user phrases that trigger the skill; `_format_active_skill_block()` injects them as "Example triggers:" so the LLM has concrete invocation reference | `AC-CR047-001`, `AC-CR047-002`, `AC-CR047-003` | `CR-047` | `src/skills/base.py` docstring; `src/chat.py` `_format_active_skill_block()`; all skill `tool_definition()` methods |
+| `FR-ORCH-048` | functional | P1 | implemented | The active-skill invocation instruction replaces "Only invoke if the user clearly wants that action" with a proactive instruction: invoke when the request falls within the skill's domain without requiring exact keyword matches | `AC-CR047-004`, `AC-CR047-005` | `CR-047` | `src/chat.py` `_format_active_skill_block()` |
+| `FR-ORCH-049` | functional | P1 | implemented | `/debug skill` in-chat slash command prints a scored table of all loaded skills against the most recently processed user message, showing each skill's `can_handle()` score and inject-threshold status | `AC-CR047-006` | `CR-047` | `src/chat.py` `_handle_slash_command()` |
+| `FR-ORCH-050` | functional | P1 | implemented | A user message beginning with `@SkillName` (case-insensitive) bypasses `can_handle()` scoring and routes directly to the named skill; the `@SkillName` prefix is stripped before passing `user_input` to `execute()` | `AC-CR047-007` | `CR-047` | `src/chat.py` `process_message()` |
+| `NFR-DEV-009` | non-functional | P1 | implemented | `AGENTS.md` includes a mandatory "Adding a Skill" checklist; all five steps (keyword list, `examples` field, `_builtin_skills` registration, smoke test assertions, `CAPABILITIES.md` update) must be satisfied before a skill is considered complete | `AC-CR047-008` | `CR-047` | `AGENTS.md` |
+
+### Acceptance criteria — Skill Reliability Hardening (CR-047)
+
+| ID | Requirements | Scenario | Expected | Status |
+|---|---|---|---|---|
+| `AC-CR047-001` | `FR-ORCH-047` | `GmailSkill().tool_definition()["examples"]` inspected | Returns a list of ≥ 3 strings | implemented |
+| `AC-CR047-002` | `FR-ORCH-047` | All 12 registered skills inspected | Every skill returns a non-empty `examples` list | implemented |
+| `AC-CR047-003` | `FR-ORCH-047` | `_format_active_skill_block()` output inspected | Contains "Example triggers:" | implemented |
+| `AC-CR047-004` | `FR-ORCH-048` | `_format_active_skill_block()` output inspected | Does NOT contain "Only invoke if the user clearly wants" | implemented |
+| `AC-CR047-005` | `FR-ORCH-048` | `_format_active_skill_block()` output inspected | DOES contain "Invoke proactively" | implemented |
+| `AC-CR047-006` | `FR-ORCH-049` | User types `/debug skill` in chat | Response contains "can_handle scores" | implemented |
+| `AC-CR047-007` | `FR-ORCH-050` | Message `@GmailSkill check my inbox` processed | `GmailSkill.execute()` called; no `can_handle()` scoring occurs | implemented |
+| `AC-CR047-008` | `NFR-DEV-009` | `AGENTS.md` read | Contains section "Adding a Skill" with a numbered checklist | implemented |
+| `AC-CR047-009` | All CR-047 | `python smoke_test.py` runs | ≥ 167 tests pass, 0 failures | implemented |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

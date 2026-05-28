@@ -56,6 +56,13 @@ class WebLookupSkill(Skill):
             "params": {
                 "query": "Search query text",
             },
+            "examples": [
+                "search the web for latest AI news",
+                "look up how to fix a Python import error",
+                "find current information about climate change",
+                "what's happening in the news today?",
+                "search online for the best Python testing frameworks",
+            ],
         }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:
