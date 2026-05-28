@@ -32,7 +32,10 @@ _RICH = {
     TerminalStatus.FAIL: "[red]\u2717[/red] ",
 }
 
-def wrap_text(text: str, width: int = MAX_LINE_WIDTH) -> list[str]:
+def wrap_text(text: str, width: int | None = None) -> list[str]:
+    # Implements FR-UX-001 (CR-050 A1): call get_terminal_size inline so resizing is reflected.
+    if width is None:
+        width = shutil.get_terminal_size((80, 24)).columns
     lines: list[str] = []
     for raw in text.splitlines() or [""]:
         stripped = raw.lstrip()
@@ -49,7 +52,7 @@ def wrap_text(text: str, width: int = MAX_LINE_WIDTH) -> list[str]:
 def format_line(status: TerminalStatus, text: str, indent: int = 0, *, rich: bool = True) -> str:
     pad = "  " * indent
     prefix = (_RICH if rich else _PLAIN)[status]
-    body = wrap_text(text, MAX_LINE_WIDTH)[0] if text else ""
+    body = wrap_text(text)[0] if text else ""
     return f"{pad}{prefix}{body}"
 
 def format_block(status: TerminalStatus, text: str, indent: int = 0, *, rich: bool = True) -> str:

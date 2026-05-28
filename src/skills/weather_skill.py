@@ -173,6 +173,7 @@ class WeatherSkill(Skill):
                 "location": "City/state/country location text, for example 'Escondido, CA'",
                 "query": "Original weather question when location is not extracted",
             },
+            "timeout_secs": 15,
             "examples": [
                 "what's the weather in San Diego?",
                 "is it going to rain today?",

@@ -315,9 +315,11 @@ def increment_rollover(conn: sqlite3.Connection) -> None:
 # ── Queue ─────────────────────────────────────────────────────────────────────
 
 def get_queue(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    # Includes t.created_at so callers (brief.py) can show task age (FR-UX-003, CR-050 A3).
     return conn.execute("""
         SELECT q.position, t.id, t.description, t.time_estimate_minutes,
-               t.days_rolled_over, p.name AS project_name, p.priority
+               t.days_rolled_over, p.name AS project_name, p.priority,
+               t.created_at
         FROM queue q
         JOIN tasks t ON q.task_id = t.id
         JOIN projects p ON t.project_id = p.id
@@ -683,6 +685,32 @@ def _ensure_workflows_table(conn: sqlite3.Connection) -> None:
     """)
 
 
+# FR-RELY-006 (CR-050 A8): required keys in each workflow step dict.
+_REQUIRED_STEP_KEYS: frozenset[str] = frozenset({"skill", "description"})
+
+
+def validate_workflow_steps(steps: list) -> list[str]:
+    """Check that each step dict contains the required keys.
+
+    Implements FR-RELY-006 (CR-050 A8).
+
+    Args:
+        steps: List of step dicts to validate.
+
+    Returns:
+        List of error strings; empty list means all steps are valid.
+    """
+    errors: list[str] = []
+    for i, step in enumerate(steps):
+        if not isinstance(step, dict):
+            errors.append(f"Step {i}: expected dict, got {type(step).__name__}")
+            continue
+        missing = _REQUIRED_STEP_KEYS - step.keys()
+        if missing:
+            errors.append(f"Step {i}: missing required key(s): {', '.join(sorted(missing))}")
+    return errors
+
+
 def upsert_workflow(
     conn: sqlite3.Connection,
     name: str,
@@ -695,13 +723,14 @@ def upsert_workflow(
     source: str = "user_defined",
     confidence: float = 0.8,
 ) -> int:
-    """Insert or update an active workflow by name (FR-MEM-008).
+    """Insert or update an active workflow by name (FR-MEM-008, FR-RELY-006).
 
     Args:
         conn: SQLite connection.
         name: Unique workflow slug/display name.
         trigger_pattern: Phrases that should recall this workflow.
-        steps: Ordered step dicts (skill/tool descriptions).
+        steps: Ordered step dicts (skill/tool descriptions). Each must contain
+            ``skill`` and ``description`` keys.
         expected_outputs: Optional expected outcome text.
         failure_modes: Optional known failure notes.
         project: Optional project scope.
@@ -710,7 +739,13 @@ def upsert_workflow(
 
     Returns:
         Row id of the workflow.
+
+    Raises:
+        ValueError: If any step dict is missing required keys.
     """
+    errors = validate_workflow_steps(steps)
+    if errors:
+        raise ValueError(f"Invalid workflow steps: {'; '.join(errors)}")
     _ensure_workflows_table(conn)
     steps_json = json.dumps(steps, ensure_ascii=False)
     existing = conn.execute(

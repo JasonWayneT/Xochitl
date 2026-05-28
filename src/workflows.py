@@ -290,17 +290,20 @@ def save_workflow_from_session(
     if len(steps) < 2:
         raise ValueError("Need at least two steps to save a workflow")
     trigger = trigger_pattern.strip() or distilled.get("trigger_pattern") or name
-    with db.get_connection() as conn:
-        wid = db.upsert_workflow(
-            conn,
-            name,
-            trigger,
-            steps,
-            expected_outputs=distilled.get("expected_outputs") or None,
-            failure_modes=distilled.get("failure_modes") or None,
-            project=project,
-            source=source if distilled.get("source") != "llm" else "distilled",
-        )
+    try:
+        with db.get_connection() as conn:
+            wid = db.upsert_workflow(
+                conn,
+                name,
+                trigger,
+                steps,
+                expected_outputs=distilled.get("expected_outputs") or None,
+                failure_modes=distilled.get("failure_modes") or None,
+                project=project,
+                source=source if distilled.get("source") != "llm" else "distilled",
+            )
+    except ValueError as exc:
+        raise ValueError(str(exc)) from exc
     _index_workflow_embedding(wid, name, trigger, project)
     return wid
 

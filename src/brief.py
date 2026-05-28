@@ -26,7 +26,7 @@ Usage::
 from __future__ import annotations
 
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 # Maximum items rendered per section — prevents brief bloat.
@@ -74,7 +74,9 @@ def build_structured_brief(
         lines = ["**Priorities**"]
         for i, task in enumerate(queue[:_MAX_LINES_PER_SECTION], start=1):
             desc = str(task.get("description", "(no description)"))[:72]
-            lines.append(f"  {i}. {desc}")
+            duration = _format_duration(str(task.get("created_at", "") or ""))
+            suffix = f" ({duration})" if duration else ""
+            lines.append(f"  {i}. {desc}{suffix}")
         sections.append("\n".join(lines))
 
     # ── 4. Async queue — Notion items needing decisions ────────────────────
@@ -94,6 +96,39 @@ def build_structured_brief(
         return "_(brief is empty — no WIP tasks, no Notion queue, git unavailable)_"
 
     return "\n\n---\n\n".join(sections)
+
+
+# ── Duration helper ───────────────────────────────────────────────────────────
+
+
+def _format_duration(created_at: str) -> str:
+    """Return a human-readable age label for a task created_at timestamp.
+
+    Implements FR-UX-003 (CR-050 A3). Returns "today", "Nd", or "Nw Nd".
+    Returns empty string on parse failure so callers can skip the label safely.
+
+    Args:
+        created_at: ISO-format datetime string from ``tasks.created_at``.
+
+    Returns:
+        Human-readable duration string, or ``""`` on failure.
+    """
+    if not created_at:
+        return ""
+    try:
+        ts = datetime.fromisoformat(created_at)
+        now = datetime.now(tz=ts.tzinfo) if ts.tzinfo else datetime.now()
+        days = max(0, (now - ts).days)
+        if days == 0:
+            return "today"
+        if days < 7:
+            return f"{days}d"
+        weeks, remainder = divmod(days, 7)
+        if remainder == 0:
+            return f"{weeks}w"
+        return f"{weeks}w {remainder}d"
+    except Exception:
+        return ""
 
 
 # ── Git helper ────────────────────────────────────────────────────────────────

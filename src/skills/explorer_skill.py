@@ -140,6 +140,7 @@ class ExplorerSkill(Skill):
             "params": {
                 "query": "The research question or topic to investigate",
             },
+            "timeout_secs": 120,
             "examples": [
                 "investigate the causes of tech layoffs in 2024",
                 "research the best approaches to microservices",

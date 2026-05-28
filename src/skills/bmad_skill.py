@@ -70,6 +70,7 @@ class BMADSkill(Skill):
                 "action": "init_project | walk_workflow",
                 "name": "(optional) project name extracted from user message",
             },
+            "timeout_secs": 180,
             "examples": [
                 "I want to build a recipe app",
                 "let's start a new project",

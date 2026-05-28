@@ -951,16 +951,25 @@ class XochitlChat:
     ) -> str:
         """Wrap skill.execute() with a timeout to prevent hung sessions. FR-JARV-006.
 
+        Implements FR-PERF-005 (CR-050 A7): reads ``timeout_secs`` from
+        ``skill.tool_definition()`` when the caller does not supply an explicit timeout.
+
         Args:
             skill: The skill instance to execute.
             user_input: Forwarded to skill.execute().
             context: Session context dict, mutated in place by the skill.
             params: Extracted parameters for the skill.
-            timeout: Maximum seconds to wait before returning a timeout error.
+            timeout: Maximum seconds to wait. Overridden by ``tool_definition()["timeout_secs"]``
+                when that key is present and the caller did not set a non-default value.
 
         Returns:
             Skill output string, or a user-visible timeout error message.
         """
+        # FR-PERF-005: read per-skill timeout from tool_definition(); fall back to 30s default.
+        try:
+            timeout = float(skill.tool_definition().get("timeout_secs", timeout))
+        except Exception:
+            pass
         import queue as _q
         import logging as _lg
         _timeout_log = _lg.getLogger("xochitl.skill_timeout")
@@ -2270,6 +2279,32 @@ class XochitlChat:
             lines.append(f"  WIP Queue     : {len(_q)}/3 items")
         except Exception:
             lines.append("  WIP Queue     : [dim]unavailable[/dim]")
+
+        # FR-UX-004 (CR-050 A4): memory tier stats and daemon health
+        try:
+            with db.get_connection() as _conn:
+                _mf_count = _conn.execute("SELECT COUNT(*) FROM memory_facts").fetchone()[0]
+                _wf_count = _conn.execute("SELECT COUNT(*) FROM workflows WHERE superseded_by IS NULL").fetchone()[0]
+            lines.append(f"  Memory facts  : {_mf_count} rows")
+            lines.append(f"  Workflows     : {_wf_count} saved")
+        except Exception:
+            lines.append("  Memory facts  : [dim]unavailable[/dim]")
+
+        try:
+            _br = getattr(self, "_background_review", None)
+            _br_status = "[green]active[/green]" if (_br and _br.is_alive()) else "[yellow]stopped[/yellow]"
+            lines.append(f"  Background    : {_br_status}")
+        except Exception:
+            lines.append("  Background    : [dim]unknown[/dim]")
+
+        try:
+            _ini = getattr(self, "_initiative", None)
+            if _ini is not None:
+                lines.append(f"  Initiative    : {_ini.mode.value}")
+            else:
+                lines.append("  Initiative    : [dim]not loaded[/dim]")
+        except Exception:
+            lines.append("  Initiative    : [dim]unknown[/dim]")
 
         lines.append("")
         lines.append("[dim]Use /budget for full token breakdown.[/dim]")

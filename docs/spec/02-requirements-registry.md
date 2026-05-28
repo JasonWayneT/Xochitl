@@ -952,6 +952,58 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR049-010` | `FR-HARD-010` | `Skill().health_check()` on base subclass | Returns `True` | implemented |
 | `AC-CR049-011` | All | `python smoke_test.py` | 186 tests pass, 0 failures | implemented |
 
+### Performance, Reliability, and Local Model Optimization (CR-050)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-PERF-001` | functional | P0 | accepted | `_fast_classify()` returns `(category, confidence)`; `_classify()` skips the LLM when confidence ≥ 0.85 | `AC-CR050-009` | `CR-050` | B1 — fast path |
+| `FR-PERF-002` | functional | P0 | accepted | `ChatSession` caches assembled system prompt keyed by `(session_id, history_len, last_mutating_skill)` | `AC-CR050-010` | `CR-050` | B2 — context cache |
+| `FR-PERF-003` | functional | P1 | accepted | `can_handle()` runs inside a `ThreadPoolExecutor` future with 100ms timeout; result cached per turn message hash | `AC-CR050-011` | `CR-050` | B3 — score timeout+cache |
+| `FR-PERF-004` | functional | P1 | accepted | `_resolve_file_context()` enforces 8 KB total cap; most-recently-modified files first; truncation notice appended | `AC-CR050-006` | `CR-050` | A6 — file context cap |
+| `FR-PERF-005` | functional | P1 | accepted | `_execute_skill_safe()` reads `skill.tool_definition().get("timeout_secs", 30)` instead of hardcoded 30s | `AC-CR050-007` | `CR-050` | A7 — per-skill timeout |
+| `FR-PERF-006` | functional | P2 | accepted | `_route_local()` passes per-category temperature to Ollama; configurable via `XCH_TEMP_{CATEGORY}` env vars | `AC-CR050-005` | `CR-050` | A5 — temperature routing |
+| `FR-PERF-007` | functional | P1 | accepted | `_parse_skill_calls()` uses `re.findall()`; agent loop executes all blocks per response in sequence | `AC-CR050-017` | `CR-050` | C3 — multi-skill-call |
+| `FR-PERF-008` | functional | P2 | accepted | Skill-injected turns stream tokens live; `<skill_call>` parsing runs on completed buffer after stream ends | `AC-CR050-N/A` | `CR-050` | D2 — streaming |
+| `NFR-PERF-012` | non-functional | P1 | accepted | `can_handle()` must complete or time out within 100ms per skill | `AC-CR050-011` | `CR-050` | B3 |
+| `NFR-PERF-013` | non-functional | P1 | accepted | File context injected per turn must not exceed 8 KB total | `AC-CR050-006` | `CR-050` | A6 |
+| `NFR-PERF-014` | non-functional | P2 | accepted | ContextManager cache hit rate ≥ 50% across consecutive turns | `AC-CR050-010` | `CR-050` | B2 |
+| `NFR-PERF-015` | non-functional | P1 | accepted | Per-skill `timeout_secs` must not change default for skills that omit it | `AC-CR050-007` | `CR-050` | A7 |
+| `FR-RELY-001` | functional | P1 | accepted | `ChatSession` restarts `BackgroundReview` when `is_alive()` is False; emits `SYSTEM_FAILURE` initiative signal | `AC-CR050-012` | `CR-050` | B4 — daemon watchdog |
+| `FR-RELY-002` | functional | P1 | accepted | `InitiativeEngine` persists dismissal counts and suppressed categories to `initiative_state` SQLite table | `AC-CR050-013` | `CR-050` | B5 — dismiss persistence |
+| `FR-RELY-003` | functional | P1 | accepted | `decay_memory_facts()` applies `0.95^days` confidence decay at session start; deletes rows below 0.2 | `AC-CR050-014` | `CR-050` | B6 — fact TTL |
+| `FR-RELY-004` | functional | P2 | accepted | `Skill.cleanup()` default no-op method; called in daemon thread (5s limit) after execution timeout | `AC-CR050-018` | `CR-050` | D1 — cleanup hook |
+| `FR-RELY-005` | functional | P2 | accepted | `UserProfileEngine` re-embeds Me.md in background thread when MD5 hash changes | `AC-CR050-015` | `CR-050` | C1 — re-embed on change |
+| `FR-RELY-006` | functional | P1 | accepted | `upsert_workflow()` validates step dicts; raises `ValueError` on invalid steps | `AC-CR050-008` | `CR-050` | A8 — workflow validation |
+| `FR-UX-001` | functional | P2 | accepted | `wrap_text()` calls `shutil.get_terminal_size()` inline at call time for dynamic width | `AC-CR050-001` | `CR-050` | A1 — terminal width |
+| `FR-UX-002` | functional | P2 | accepted | `strip_filler_opener()` iterates up to 5× to remove consecutive openers | `AC-CR050-002` | `CR-050` | A2 — multi-pass cleaner |
+| `FR-UX-003` | functional | P2 | accepted | `build_structured_brief()` includes duration label ("today", "3d", "1w 2d") per WIP task | `AC-CR050-003` | `CR-050` | A3 — task age |
+| `FR-UX-004` | functional | P1 | accepted | `/status` shows memory_facts count, workflows count, daemon health, and initiative mode | `AC-CR050-004` | `CR-050` | A4 — extended status |
+| `FR-UX-005` | functional | P1 | accepted | `tasks` and `projects` use soft-delete (`deleted_at`); all SELECTs filter `deleted_at IS NULL` | `AC-CR050-016` | `CR-050` | C2 — soft delete |
+| `FR-UX-006` | functional | P1 | accepted | `save_workflow_from_session()` catches `ValueError` from `upsert_workflow()` and returns user-visible error string | `AC-CR050-008` | `CR-050` | A8 companion |
+
+### Acceptance criteria — CR-050
+
+| ID | Requirement | Scenario | Expected | Status |
+|---|---|---|---|---|
+| `AC-CR050-001` | `FR-UX-001` | `wrap_text("x"*200)` with mocked terminal size 40 | All lines ≤ 40 chars | draft |
+| `AC-CR050-002` | `FR-UX-002` | `strip_filler_opener("Certainly! Of course! Let me help — here is the answer.")` | Both openers stripped | draft |
+| `AC-CR050-003` | `FR-UX-003` | Brief with task created_at 8 days ago | Output contains "1w 1d" | draft |
+| `AC-CR050-004` | `FR-UX-004` | `/status` output | Contains "memory_facts" and "workflows" | draft |
+| `AC-CR050-005` | `FR-PERF-006` | `_CATEGORY_TEMPERATURE` ordering | `code_generation < general < creative` | draft |
+| `AC-CR050-006` | `FR-PERF-004` | `_resolve_file_context()` with 10 × 2 KB files | Result ≤ 8 KB + 200 bytes | draft |
+| `AC-CR050-007` | `FR-PERF-005` | Skill with `timeout_secs: 1` sleeping 2s | Returns timeout message within ~1s | draft |
+| `AC-CR050-008` | `FR-RELY-006`, `FR-UX-006` | `upsert_workflow()` with step missing `"description"` | Raises `ValueError` | draft |
+| `AC-CR050-009` | `FR-PERF-001` | `/today` → `_fast_classify` | Returns `task_management`; no LLM call | draft |
+| `AC-CR050-010` | `FR-PERF-002` | Two consecutive identical messages | `subprocess.run` for git called once | draft |
+| `AC-CR050-011` | `FR-PERF-003` | Skill `can_handle()` sleeping 2s | Agent loop returns within 500ms | draft |
+| `AC-CR050-012` | `FR-RELY-001` | `is_alive()` mocked False | `BackgroundReview.start()` invoked | draft |
+| `AC-CR050-013` | `FR-RELY-002` | Dismiss DEADLINE 3×; restart engine from same db | `DEADLINE in engine._suppressed` | draft |
+| `AC-CR050-014` | `FR-RELY-003` | `memory_facts` row 180 days old | Confidence < original or row deleted | draft |
+| `AC-CR050-015` | `FR-RELY-005` | Me.md content change detected | `re_embed_profile()` called once | draft |
+| `AC-CR050-016` | `FR-UX-005` | Task soft-deleted | Not in queue; row still in DB with `deleted_at` set | draft |
+| `AC-CR050-017` | `FR-PERF-007` | LLM response with two `<skill_call>` blocks | Both `execute()` methods called | draft |
+| `AC-CR050-018` | `FR-RELY-004` | Skill `cleanup()` mock; timeout triggered | Sentinel set within 6 seconds | draft |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.

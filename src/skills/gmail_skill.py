@@ -152,6 +152,7 @@ class GmailSkill(Skill):
                 "body": "Email body text for send",
                 "max_results": "Number of emails to list (default 5)",
             },
+            "timeout_secs": 20,
             "examples": [
                 "check my email",
                 "what's in my inbox",

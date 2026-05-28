@@ -28,6 +28,42 @@ from src import database as db
 
 _PROJECT_ROOT = Path(__file__).parent.parent
 
+# FR-PERF-006 (CR-050 A5): per-category temperature for local Ollama calls.
+# Lower = more deterministic; higher = more creative. Override with XCH_TEMP_<CATEGORY>.
+_CATEGORY_TEMPERATURE: dict[str, float] = {
+    "code_generation":       0.1,
+    "code_review":           0.15,
+    "file_operations":       0.15,
+    "task_management":       0.3,
+    "simple_qa":             0.4,
+    "memory_recall":         0.4,
+    "xochitl_help":          0.4,
+    "general":               0.55,
+    "architecture_planning": 0.6,
+    "bmad_simple":           0.65,
+    "bmad_complex":          0.7,
+    "zettelkasten_mode":     0.7,
+    "bmad_brainstorm":       0.85,
+    "creative_writing":      0.85,
+    "bmad_party_mode":       0.85,
+}
+_DEFAULT_TEMPERATURE: float = float(os.getenv("XCH_DEFAULT_TEMP", "0.5"))
+
+
+def _load_temperatures() -> None:
+    """Merge XCH_TEMP_<CATEGORY> env-var overrides into _CATEGORY_TEMPERATURE."""
+    for category in list(_CATEGORY_TEMPERATURE):
+        env_key = f"XCH_TEMP_{category.upper()}"
+        raw = os.getenv(env_key)
+        if raw is not None:
+            try:
+                _CATEGORY_TEMPERATURE[category] = max(0.0, min(1.0, float(raw)))
+            except ValueError:
+                pass
+
+
+_load_temperatures()
+
 # Phrases that mean "your own directory" without naming an explicit path
 _SELF_DIR_PHRASES = [
     "your directory", "your folder", "your files", "the directory you're in",
@@ -207,15 +243,28 @@ def _resolve_file_context(query: str, history: list[dict] | None = None) -> str:
         tree = _dir_tree(d, depth=2)
         parts.append(f"## Directory: {d}\n" + "\n".join(tree))
 
-    # File contents
-    for path in sorted(resolved_files):
+    # FR-PERF-004 (CR-050 A6): 8 KB total cap across all injected files.
+    _FILE_CONTEXT_TOTAL_CAP: int = int(os.getenv("XCH_FILE_CONTEXT_CAP", str(8 * 1024)))
+    total_bytes = 0
+
+    # Sort by most-recently-modified first so the freshest files win the budget.
+    sorted_files = sorted(resolved_files, key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    omitted = 0
+    for path in sorted_files:
         try:
             content = security.read_file(path)
             if len(content) > 10_000:
                 content = content[:10_000] + f"\n\n[truncated — {len(content)} chars total]"
-            parts.append(f"## {path.name} ({path})\n```\n{content}\n```")
+            chunk = f"## {path.name} ({path})\n```\n{content}\n```"
+            if total_bytes + len(chunk) > _FILE_CONTEXT_TOTAL_CAP:
+                omitted += 1
+                continue
+            parts.append(chunk)
+            total_bytes += len(chunk)
         except Exception:
             pass
+    if omitted:
+        parts.append(f"[File context limit reached — {omitted} file(s) omitted]")
 
     if not parts:
         return ""
@@ -524,8 +573,15 @@ class TieredRouter:
     ) -> LLMResponse:
         trimmed = trim_history_for_local(history)
         messages = trimmed + [{"role": "user", "content": query}]
+        temperature = _CATEGORY_TEMPERATURE.get(category, _DEFAULT_TEMPERATURE)
         t0 = time.monotonic()
-        result = call_with_retry(call_local, messages=messages, system=system, model=model)
+        result = call_with_retry(
+            call_local,
+            messages=messages,
+            system=system,
+            model=model,
+            temperature=temperature,
+        )
         elapsed_ms = (time.monotonic() - t0) * 1000
 
         if result.error:

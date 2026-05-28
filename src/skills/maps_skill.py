@@ -122,6 +122,7 @@ class MapsSkill(Skill):
                 "location": "Location to search near (omit to use saved home location)",
                 "mode": "'driving' | 'walking' | 'transit' | 'bicycling'  (default: driving)",
             },
+            "timeout_secs": 15,
             "examples": [
                 "how do I get to downtown San Diego?",
                 "directions to the nearest coffee shop",

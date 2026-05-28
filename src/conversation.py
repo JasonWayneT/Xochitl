@@ -48,27 +48,31 @@ _FILLER_RE: re.Pattern = re.compile(
 def strip_filler_opener(response: str) -> str:
     """Remove sycophantic filler phrases from the start of a response.
 
-    Implements FR-CONV-001 (A1 presence cues). Applies at most one strip per
-    response to avoid over-processing. Re-capitalises the first letter of the
-    remaining text if it was lowercased by the strip.
+    Implements FR-CONV-001 (A1 presence cues), FR-UX-002 (CR-050 A2 multi-pass).
+    Iterates up to 5 times to strip consecutive openers (e.g. "Certainly! Of course!").
+    Re-capitalises the first letter of the remaining text after stripping.
 
     Args:
         response: Raw LLM response text.
 
     Returns:
-        Response with leading filler phrase removed and first letter
+        Response with leading filler phrase(s) removed and first letter
         capitalised, or the original response if no filler was found.
     """
-    m = _FILLER_RE.match(response)
-    if not m:
-        return response
-    remainder = response[m.end():].lstrip()
-    if not remainder:
-        return response  # entire response was filler — return original
-    # Re-capitalise first character if it was lowercased by stripping
-    if remainder[0].islower():
-        remainder = remainder[0].upper() + remainder[1:]
-    return remainder
+    result = response
+    stripped_any = False
+    for _ in range(5):
+        m = _FILLER_RE.match(result)
+        if not m:
+            break
+        remainder = result[m.end():].lstrip()
+        if not remainder:
+            return response  # entire remaining text was filler — return original
+        result = remainder
+        stripped_any = True
+    if stripped_any and result and result[0].islower():
+        result = result[0].upper() + result[1:]
+    return result
 
 
 # ── A5: Uncertainty hedge utility ─────────────────────────────────────────────
