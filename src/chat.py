@@ -827,6 +827,74 @@ class XochitlChat:
             console.print(word, end="")
             time.sleep(0.012)
 
+    def _stream_and_buffer(
+        self,
+        user_input: str,
+        messages: list,
+        system_prompt: str,
+        force: Optional[str],
+        _status: Optional["_StatusContext"],
+    ) -> tuple[str, str]:
+        """Stream tokens live; stop displaying at first <skill_call>; return (displayed, full).
+
+        FR-PERF-008 (CR-050 D2). Unifies pure and skill-injected streaming paths so
+        the user always sees real-time output. The full buffer is returned so the
+        caller can parse <skill_call> blocks from it after streaming ends.
+
+        Args:
+            user_input: Original user query forwarded to route_stream.
+            messages: Conversation history for the LLM.
+            system_prompt: Assembled system prompt (may include active skill block).
+            force: Optional force_route value.
+            _status: Live status context (stopped before streaming to avoid Rich conflict).
+
+        Returns:
+            Tuple of (displayed_text, full_response). displayed_text is what was printed
+            to the terminal (tokens before the first <skill_call> boundary).
+            full_response is the complete buffer including any <skill_call> XML.
+        """
+        if _status is not None:
+            _status._stop_event.set()
+            if _status._refresh_thread:
+                _status._refresh_thread.join(timeout=0.3)
+                _status._refresh_thread = None
+            live = _status._live
+            _status._live = None
+            if live:
+                try:
+                    live.stop()
+                except Exception:
+                    pass
+
+        buffer: list[str] = []
+        displayed: list[str] = []
+        printed_header = False
+        skill_call_started = False
+
+        for token in self.router.route_stream(
+            query=user_input,
+            conversation_history=messages,
+            system_prompt=system_prompt,
+            force_route=force,
+        ):
+            buffer.append(token)
+            if skill_call_started:
+                continue
+            # Stop displaying once the accumulated text contains a <skill_call opener.
+            if "<skill_call" in "".join(buffer):
+                skill_call_started = True
+                continue
+            if not printed_header:
+                console.print(f"\n[bold]Xochitl[/bold]: ", end="")
+                printed_header = True
+            console.print(token, end="")
+            displayed.append(token)
+
+        if displayed:
+            console.print()  # trailing newline after visible stream
+
+        return "".join(displayed), "".join(buffer)
+
     def process_message(
         self,
         user_input: str,
@@ -1040,6 +1108,15 @@ class XochitlChat:
             _timeout_log.warning(
                 "skill_timeout skill=%s timeout=%.0fs", skill_name, timeout
             )
+            # FR-RELY-004 (CR-050 D1): give the skill 5s to release its resources.
+            def _safe_cleanup() -> None:
+                try:
+                    skill.cleanup()
+                except Exception:
+                    pass
+            _ct = threading.Thread(target=_safe_cleanup, daemon=True)
+            _ct.start()
+            _ct.join(timeout=5.0)
             context["last_skill_timeout"] = True
             return (
                 f"[dim]{_ERR} — {skill_name} took longer than {int(timeout)}s to respond. "
@@ -1292,16 +1369,17 @@ class XochitlChat:
                 force = _gov_force
 
         # ── FR-UI-005: Real LLM token streaming (CR-031) ─────────────────────
-        # Stream when: _stream is True, no skill schema was injected (because
-        # skill-call parsing requires the full response), and we're not in
-        # force_cloud mode (which targets code generation, always non-streaming).
-        use_streaming = (
-            _stream
-            and not self.force_cloud
-            and (top_skill is None or top_score < _SKILL_INJECT_THRESHOLD)
+        _disable_skill_stream = os.getenv("XCH_DISABLE_SKILL_STREAMING") == "1"
+        _skill_injected = top_skill is not None and top_score >= _SKILL_INJECT_THRESHOLD
+
+        # Pure streaming: no skill schema injected; return immediately (no skill-call parsing).
+        use_streaming_pure = _stream and not self.force_cloud and not _skill_injected
+        # FR-PERF-008 (D2): skill-injected streaming — stream live, parse full buffer after.
+        use_streaming_skill = (
+            _stream and not self.force_cloud and _skill_injected and not _disable_skill_stream
         )
 
-        if use_streaming:
+        if use_streaming_pure:
             # Stop the Live refresh context before printing streaming tokens to
             # avoid Rich display conflicts. The main thread's with-status_ctx
             # block will see _live=None and skip its own cleanup.
@@ -1346,26 +1424,42 @@ class XochitlChat:
                 # but guard anyway: strip any stray XML and return clean text.
                 return _SKILL_CALL_RE.sub("", response_text).strip() or response_text
             # Empty stream → fall through to non-streaming path below
+
         # ── Non-streaming path (skill calls, special routes, streaming fallback) ──
+        # FR-PERF-008 (D2): if skill streaming enabled, stream and buffer first.
+        response_text = ""
+        if use_streaming_skill:
+            _displayed, response_text = self._stream_and_buffer(
+                user_input, messages, system_prompt, force, _status
+            )
+            if response_text:
+                self._last_response_streamed = True
+                _events.emit("llm_complete", {
+                    "route": "stream_skill",
+                    "tokens_in": 0,
+                    "tokens_out": len(response_text),
+                    "cost_usd": 0.0,
+                })
 
-        result = self.router.route(
-            query=user_input,
-            conversation_history=messages,
-            system_prompt=system_prompt,
-            force_route=force,
-        )
+        if not response_text:
+            result = self.router.route(
+                query=user_input,
+                conversation_history=messages,
+                system_prompt=system_prompt,
+                force_route=force,
+            )
 
-        if result.error:
-            return f"{_ERR} — {result.error}"
+            if result.error:
+                return f"{_ERR} — {result.error}"
 
-        _events.emit("llm_complete", {  # FR-ORCH-036 (CR-021)
-            "route": str(result.route),
-            "tokens_in": result.tokens_in,
-            "tokens_out": result.tokens_out,
-            "cost_usd": result.cost_usd,
-        })
+            _events.emit("llm_complete", {  # FR-ORCH-036 (CR-021)
+                "route": str(result.route),
+                "tokens_in": result.tokens_in,
+                "tokens_out": result.tokens_out,
+                "cost_usd": result.cost_usd,
+            })
 
-        response_text = result.content or ""
+            response_text = result.content or ""
 
         # FR-PERF-007 (CR-050 C3): parse ALL skill calls (re.findall), not just the first.
         skill_calls = _parse_skill_calls(response_text)

@@ -4,7 +4,7 @@
 |---|---|
 | ID | CR-050 |
 | Title | Performance, Reliability, and Local Model Optimization |
-| Status | in-progress |
+| Status | implemented |
 | Priority | P0–P2 |
 | Source | Post-CR-049 audit |
 | Implements | FR-PERF-001–008, NFR-PERF-012–015, FR-RELY-001–006, FR-UX-001–006 |

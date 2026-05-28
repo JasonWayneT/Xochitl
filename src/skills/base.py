@@ -41,6 +41,17 @@ class Skill(ABC):
                         (injected into active-skill block so LLM has concrete reference)
         """
 
+    def cleanup(self) -> None:
+        """Release resources after a timeout or cancellation. FR-RELY-004.
+
+        Called by _execute_skill_safe() in a short-lived thread (5s join max) when
+        skill.execute() exceeds its timeout. Default is a no-op; override in skills
+        that hold external connections or long-running sub-processes.
+
+        Returns:
+            None — any exception is silently suppressed by the caller.
+        """
+
     def health_check(self) -> bool:
         """Return True if this skill is ready to execute. FR-HARD-010, FR-JARV-007.
 

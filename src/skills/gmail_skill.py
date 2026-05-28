@@ -89,6 +89,13 @@ _MARK_KEYWORDS = (
 class GmailSkill(Skill):
     """Read, search, send, and manage Gmail messages."""
 
+    def __init__(self) -> None:
+        self._cancelled: bool = False
+
+    def cleanup(self) -> None:
+        """Signal ongoing Gmail operations to abort. FR-RELY-004."""
+        self._cancelled = True
+
     # ── Skill interface ───────────────────────────────────────────────────────
 
     def can_handle(self, user_input: str, context: dict) -> float:

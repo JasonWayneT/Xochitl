@@ -84,6 +84,13 @@ class ExplorerSkill(Skill):
     After _MAX_STEPS without stopping: synthesize with budget-exhausted note.
     """
 
+    def __init__(self) -> None:
+        self._cancelled: bool = False
+
+    def cleanup(self) -> None:
+        """Signal the investigation loop to stop on next iteration. FR-RELY-004."""
+        self._cancelled = True
+
     def can_handle(self, user_input: str, context: dict) -> float:
         """Score investigative queries for skill routing.
 
@@ -181,6 +188,10 @@ class ExplorerSkill(Skill):
         seen_hashes: set[str] = set()
 
         for step in range(1, _MAX_STEPS + 1):
+            # FR-RELY-004: honour cancellation from cleanup().
+            if self._cancelled:
+                return self._synthesize(query, evidence, notes="Investigation cancelled.")
+
             # Phase 1: form subquestion for this step.
             subquestion = self._form_subquestion(query, step, evidence)
 
