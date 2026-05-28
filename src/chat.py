@@ -346,22 +346,38 @@ _SKILL_CALL_RE = re.compile(
 )
 
 
+def _parse_skill_calls(response: str) -> list[tuple[str, dict]]:
+    """Extract all <skill_call name="X">{...}</skill_call> blocks from an LLM response.
+
+    FR-PERF-007 (CR-050 C3): extends FR-ORCH-008 to return ALL skill calls rather
+    than only the first match. Each entry is (skill_name, params).
+    Tolerant of missing/malformed JSON in the body.
+
+    Args:
+        response: Full LLM response text.
+
+    Returns:
+        Ordered list of (skill_name, params_dict) tuples; empty when none found.
+    """
+    results = []
+    for skill_name, body in _SKILL_CALL_RE.findall(response):
+        body = body.strip()
+        try:
+            params = json.loads(body) if body else {}
+        except json.JSONDecodeError:
+            params = {}
+        results.append((skill_name, params))
+    return results
+
+
 def _parse_skill_call(response: str) -> Optional[tuple[str, dict]]:
-    """Extract <skill_call name="X">{...}</skill_call> from an LLM response.
+    """Extract the first <skill_call name="X">{...}</skill_call> from an LLM response.
 
     Implements FR-ORCH-008. Returns (skill_name, params) or None.
-    Tolerant of missing/malformed JSON in the body.
+    Backward-compatible wrapper around _parse_skill_calls().
     """
-    m = _SKILL_CALL_RE.search(response)
-    if not m:
-        return None
-    skill_name = m.group(1)
-    body = m.group(2).strip()
-    try:
-        params = json.loads(body) if body else {}
-    except json.JSONDecodeError:
-        params = {}
-    return skill_name, params
+    calls = _parse_skill_calls(response)
+    return calls[0] if calls else None
 
 
 _MUTATING_SKILL_ACTIONS = {
@@ -1351,26 +1367,35 @@ class XochitlChat:
 
         response_text = result.content or ""
 
-        # Parse for skill call (NFR-PERF-006 — regex only, <10ms)
-        skill_call = _parse_skill_call(response_text)
+        # FR-PERF-007 (CR-050 C3): parse ALL skill calls (re.findall), not just the first.
+        skill_calls = _parse_skill_calls(response_text)
 
-        # Strip <skill_call> XML from the visible part of the response
+        # Strip ALL <skill_call> XML from the visible part of the response
         visible = _SKILL_CALL_RE.sub("", response_text).strip()
 
         # CR-019: track whether a skill executed this turn (FR-ORCH-037 trigger)
         _tool_calls_made = False
 
-        if skill_call:
-            skill_name, params = skill_call
-            skill = self._find_skill_by_name(skill_name)
-            if skill:
+        if skill_calls:
+            _result_parts: list[str] = [visible] if visible else []
+            _remaining = len(skill_calls)
+            for _sc_idx, (skill_name, params) in enumerate(skill_calls):
+                _remaining -= 1
+                skill = self._find_skill_by_name(skill_name)
+                if not skill:
+                    _result_parts.append(f"[dim][{skill_name}: skill not found][/dim]")
+                    continue
+
                 if self._skill_call_requires_approval(skill, params):
                     _events.emit("hitl_required", {
                         "action": str(params.get("action", skill_name)),
                         "risk": self._risk_label_for_skill(type(skill).__name__, params),
                     })
-                    # Staged for approval — no critique (action hasn't run yet)
-                    return self._stage_skill_call_plan(skill, params, user_input, visible)
+                    if _remaining > 0:
+                        _result_parts.append(
+                            f"[dim][Note: {_remaining} additional skill call(s) queued — approve this one first][/dim]"
+                        )
+                    return self._stage_skill_call_plan(skill, params, user_input, "\n\n".join(_result_parts))
 
                 _events.emit("skill_started", {"skill": skill_name, "params": list(params.keys())})
                 if _status:
@@ -1400,14 +1425,11 @@ class XochitlChat:
                     "content": tool_result,
                     "timestamp": datetime.now().isoformat(),
                 })
+                _result_parts.append(format_compact_result(
+                    self.current_context["last_action_summary"], formatted or tool_result
+                ))
 
-                body = formatted or tool_result
-                if visible:
-                    _final = f"{visible}\n\n{format_compact_result(self.current_context['last_action_summary'], body)}"
-                else:
-                    _final = format_compact_result(self.current_context['last_action_summary'], body)
-            else:
-                _final = visible or response_text
+            _final = "\n\n".join(_result_parts) if _result_parts else response_text
         else:
             _final = visible or response_text
 

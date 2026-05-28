@@ -15,6 +15,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -292,6 +293,30 @@ class VectorMemory:
             return table.count_rows()
         except Exception:
             return 0
+
+    def re_embed_profile(self, profile_text: str) -> None:
+        """Re-embed the user profile in LanceDB after a Me.md change (FR-RELY-005).
+
+        Runs in a background daemon thread so it never blocks the turn.
+        Upserts a single record tagged source='profile' — idempotent on re-run.
+
+        Args:
+            profile_text: Full text of Me.md (already loaded by UserProfileEngine).
+        """
+        def _worker() -> None:
+            try:
+                text = profile_text.strip()
+                if not text:
+                    return
+                self.memorize(
+                    topic="user_profile",
+                    summary=text[:2000],
+                    tags=["profile", "me"],
+                )
+            except Exception:
+                pass
+
+        threading.Thread(target=_worker, daemon=True).start()
 
 
 # ── FR-MEM-005: Reranking Protocol ───────────────────────────────────────────

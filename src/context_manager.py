@@ -12,6 +12,7 @@ The ContextManager orchestrates them all and enforces the global token budget.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import subprocess
@@ -364,8 +365,15 @@ class UserProfileEngine(ContextEngine):
 
     def __init__(self):
         super().__init__(name="user_profile")
+        self._last_profile_hash: str = ""
+        self.profile_changed: bool = False
 
     def ingest(self) -> None:  # type: ignore[override]
+        """Load Me.md; set profile_changed=True when content hash differs (FR-RELY-005).
+
+        Returns:
+            None — updates internal state; check profile_changed for re-embed trigger.
+        """
         # Implements NFR-ORCH-002 — warn when Me.md exceeds the 80-line target.
         profile_path = _first_existing(_persona_search_paths("Me.md", "Me.md.example"))
         if profile_path:
@@ -378,6 +386,10 @@ class UserProfileEngine(ContextEngine):
                 )
         else:
             self._content = ""
+        # FR-RELY-005 (CR-050 C1): detect content change to trigger LanceDB re-embed.
+        new_hash = hashlib.md5(self._content.encode("utf-8", errors="ignore")).hexdigest()
+        self.profile_changed = (self._last_profile_hash != "" and new_hash != self._last_profile_hash)
+        self._last_profile_hash = new_hash
         self._loaded_at = time.time()
 
     def assemble(self) -> str:
@@ -819,6 +831,15 @@ class ContextManager:
         self.files.ingest(query=query, history=history)
         self.skills.ingest(skills=self._skills_list)  # FR-ORCH-005
         self._ingested = True
+
+        # FR-RELY-005 (CR-050 C1): trigger background re-embed when Me.md changed.
+        if self.user_profile.profile_changed:
+            try:
+                from src.memory import VectorMemory
+                VectorMemory().re_embed_profile(self.user_profile._content)
+            except Exception:
+                pass
+            self.user_profile.profile_changed = False
 
     def _total_tokens(self, *texts: str) -> int:
         return sum(_estimate_tokens(t) for t in texts if t)

@@ -175,6 +175,13 @@ def init_db() -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_name_active
                 ON workflows(name) WHERE superseded_by IS NULL;
         """)
+        # FR-UX-005 (CR-050 C2): soft-delete migration guards.
+        # ALTER TABLE ignores the request silently via try/except if column already exists.
+        for _tbl in ("tasks", "projects"):
+            try:
+                conn.execute(f"ALTER TABLE {_tbl} ADD COLUMN deleted_at TEXT")
+            except Exception:
+                pass
 
 
 def _ensure_preferences_table(conn: sqlite3.Connection) -> None:
@@ -211,13 +218,15 @@ def upsert_project(conn: sqlite3.Connection, project: dict) -> None:
 
 def get_active_projects(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT * FROM projects WHERE status='active' ORDER BY "
+        "SELECT * FROM projects WHERE status='active' AND deleted_at IS NULL ORDER BY "
         "CASE priority WHEN 'high' THEN 1 WHEN 'medium' THEN 2 ELSE 3 END"
     ).fetchall()
 
 
 def get_project(conn: sqlite3.Connection, project_id: str) -> Optional[sqlite3.Row]:
-    return conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    return conn.execute(
+        "SELECT * FROM projects WHERE id=? AND deleted_at IS NULL", (project_id,)
+    ).fetchone()
 
 
 # ── Areas ─────────────────────────────────────────────────────────────────────
@@ -277,18 +286,79 @@ def update_task_status(conn: sqlite3.Connection, task_id: str, status: str) -> N
         )
 
 
+def soft_delete_task(conn: sqlite3.Connection, task_id: str) -> bool:
+    """Soft-delete a task by setting deleted_at (FR-UX-005).
+
+    Args:
+        conn: Active SQLite connection.
+        task_id: Primary key of the task to delete.
+
+    Returns:
+        True if a row was updated, False if task not found.
+    """
+    conn.execute(
+        "UPDATE tasks SET deleted_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL",
+        (task_id,),
+    )
+    return conn.execute("SELECT changes()").fetchone()[0] > 0
+
+
+def soft_delete_project(conn: sqlite3.Connection, project_id: str) -> bool:
+    """Soft-delete a project and all its tasks (FR-UX-005).
+
+    Args:
+        conn: Active SQLite connection.
+        project_id: Primary key of the project to delete.
+
+    Returns:
+        True if a row was updated, False if project not found.
+    """
+    conn.execute(
+        "UPDATE tasks SET deleted_at=CURRENT_TIMESTAMP WHERE project_id=? AND deleted_at IS NULL",
+        (project_id,),
+    )
+    conn.execute(
+        "UPDATE projects SET deleted_at=CURRENT_TIMESTAMP WHERE id=? AND deleted_at IS NULL",
+        (project_id,),
+    )
+    return conn.execute("SELECT changes()").fetchone()[0] > 0
+
+
+def purge_deleted(conn: sqlite3.Connection, days_old: int = 30) -> int:
+    """Hard-delete rows where deleted_at is older than days_old days (FR-UX-005).
+
+    Args:
+        conn: Active SQLite connection.
+        days_old: Rows older than this many days are permanently removed.
+
+    Returns:
+        Total number of rows permanently deleted.
+    """
+    removed = 0
+    for tbl in ("tasks", "projects"):
+        conn.execute(
+            f"DELETE FROM {tbl} WHERE deleted_at IS NOT NULL "
+            f"AND julianday('now') - julianday(deleted_at) > ?",
+            (days_old,),
+        )
+        removed += conn.execute("SELECT changes()").fetchone()[0]
+    return removed
+
+
 def get_next_eligible_tasks(conn: sqlite3.Connection, limit: int = 10) -> list[sqlite3.Row]:
     """Tasks that are todo, not blocked, ordered by project priority then created_at."""
     return conn.execute("""
         SELECT t.* FROM tasks t
         JOIN projects p ON t.project_id = p.id
         WHERE t.status = 'todo'
+          AND t.deleted_at IS NULL
           AND p.status = 'active'
+          AND p.deleted_at IS NULL
           AND t.id NOT IN (SELECT task_id FROM queue)
           AND (
               t.blocked_by IS NULL
               OR t.blocked_by NOT IN (
-                  SELECT id FROM tasks WHERE status != 'done'
+                  SELECT id FROM tasks WHERE status != 'done' AND deleted_at IS NULL
               )
           )
         ORDER BY
@@ -300,7 +370,7 @@ def get_next_eligible_tasks(conn: sqlite3.Connection, limit: int = 10) -> list[s
 
 def get_rollover_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute(
-        "SELECT * FROM tasks WHERE days_rolled_over >= 3 AND status='todo'"
+        "SELECT * FROM tasks WHERE days_rolled_over >= 3 AND status='todo' AND deleted_at IS NULL"
     ).fetchall()
 
 
