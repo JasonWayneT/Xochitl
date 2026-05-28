@@ -100,3 +100,10 @@ Phase A → Phase B → Phase C → Phase D (see CR-050-session-plan.md for step
 | After Phase B | ~210 |
 | After Phase C | ~220 |
 | After Phase D | ~226 |
+
+## Verification Result
+
+**Date:** 2026-05-28
+**Smoke test:** `python smoke_test.py` — **241 passed, 0 failed** (baseline was 186; +55 new tests)
+**All 19 AC-CR050-* criteria:** implemented and passing in smoke_test.py
+**Manual testing required:** FR-PERF-008 (D2 streaming) — flag `XCH_DISABLE_SKILL_STREAMING=1` available as fallback if regressions found in live session.
