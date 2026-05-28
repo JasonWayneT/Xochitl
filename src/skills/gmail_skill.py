@@ -33,7 +33,13 @@ from src.skills.base import Skill
 _READ_KEYWORDS = (
     "check my email",
     "check email",
+    "check inbox",
+    "check my inbox",
+    "check in my inbox",
+    "check in email",
+    "email inbox",
     "my inbox",
+    "in my inbox",
     "new emails",
     "unread emails",
     "any emails",
@@ -45,6 +51,9 @@ _READ_KEYWORDS = (
     "read my email",
     "any new mail",
     "check mail",
+    "got any emails",
+    "got any mail",
+    "any messages",
 )
 
 _SEARCH_KEYWORDS = (
