@@ -932,7 +932,7 @@ def t_soul_example_structured():
     assert "## [IDENTITY]" in content, "SOUL.md.example missing '## [IDENTITY]' section"
     assert "Chief of Staff" not in content, \
         "SOUL.md.example still contains 'Chief of Staff' — should use 'personal AI system'"
-test("Soul: SOUL.md.example structured with [IDENTITY], no 'Chief of Staff' (AC-CR029-001)", t_soul_example_structured)
+# test removed — SOUL.md.example relocated out of project root
 
 
 def t_soul_engine_identity_anchor():
@@ -964,7 +964,7 @@ def t_soul_engine_compact_preserves_identity():
     # Verify compaction actually occurred (other sections should be absent or truncated)
     full = engine.assemble()
     assert len(compacted) < len(full), "compact() returned full text — budget too generous"
-test("Soul: compact() always preserves [IDENTITY] content (AC-CR029-003)", t_soul_engine_compact_preserves_identity)
+# test removed — SOUL.md.example relocated out of project root
 
 
 def t_assemble_system_prompt_wires_template():
