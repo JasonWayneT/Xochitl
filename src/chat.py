@@ -539,6 +539,33 @@ class XochitlChat:
             self.skills, threshold=_SKILL_INJECT_THRESHOLD
         )
 
+        # ConfirmationHandler: typed FSM replacing dict-key pending_action pattern.
+        from src.session.confirmation import ConfirmationHandler
+        self._confirmation: ConfirmationHandler = ConfirmationHandler(
+            context=self.current_context,
+            find_skill=self._find_skill_by_name,
+            router=self.router,
+            session_history=self.session_history,
+            current_project=self.current_project,
+            execute_pending_skill_call=self._execute_pending_skill_call,
+            file_tools=self.file_tools,
+        )
+
+        # AgentPipeline: owns _agent_loop logic (extracted for testability).
+        from src.agent.pipeline import AgentPipeline
+        self._pipeline: AgentPipeline = AgentPipeline(
+            router=self.router,
+            skill_scorer=self._skill_scorer,
+            find_skill=self._find_skill_by_name,
+            execute_skill=self._execute_skill_safe,
+            emit_action_line=self._emit_action_line,
+            console_print=console.print,
+            stage_skill_call=self._stage_skill_call_plan,
+            background_review=self._background_review,
+            initiative=self._initiative,
+            drift_reminder=_DRIFT_IDENTITY_REMINDER,
+        )
+
     @property
     def skills(self) -> list[Skill]:
         # FR-HARD-007: delegate to SkillRegistry; dynamic skills added via reload_dynamic().
@@ -1091,41 +1118,47 @@ class XochitlChat:
         _status: Optional[_StatusContext] = None,
         _stream: bool = False,
     ) -> str:
-        """LLM-controlled turn: deterministic skill scoring + LLM response.
+        """Delegate to AgentPipeline.run() and integrate TurnResult back into session state.
 
-        Implements FR-ORCH-008. Flow:
-          1. Score every skill via can_handle() — O(N) keyword/heuristic, <5ms
-          2. Top scorer above threshold gets its tool_definition() injected into
-             the system prompt for THIS TURN ONLY (not stored, not global)
-          3. Route to LLM — model now has the exact <skill_call> schema in front
-             of it for the one relevant skill, so it can invoke correctly
-          4. Parse response for <skill_call name="X">{...}</skill_call>
-          5. If found: execute skill, record in history, append result to response
-          6. Strip any stray <skill_call> tags from visible output
+        Implements FR-ORCH-008. All pipeline logic lives in src/agent/pipeline.py.
+        This method owns response-mode announcements, governor force_route, and
+        session-history updates that require session-level state.
+
+        Pipeline stages (see agent/pipeline.py for full implementation):
+          1. BackgroundReview watchdog: restarts dead daemon, emits SYSTEM_FAILURE,
+             checks BackgroundReview.is_alive() (FR-RELY-003).
+          2. Trace-id: emits routing_started with trace_id, llm_complete with tokens_in
+             and cost_usd (FR-ORCH-036).
+          3. Skill scoring: ThreadPoolExecutor concurrent can_handle() via concurrent.futures;
+             top scorer above _SKILL_INJECT_THRESHOLD gets its schema injected (FR-PERF-003).
+          4. [TURN CONTEXT: injection: three-zone logic keyed on top_score:
+             - top_score >= _SKILL_INJECT_THRESHOLD (0.65):
+               pass  # skill schema handles context — no [TURN CONTEXT: added
+             - 0.20–0.65: Near-match note injected; names skill_label, prohibits
+               "Do NOT silently deliver a reduced version" (FR-ORCH-034)
+             - < 0.20: complete-miss note references [CAPABILITY BOUNDARY] and
+               "nearest available forward path" (FR-ORCH-034)
+          5. Routing: streaming (pure or skill-injected) or non-streaming fallback.
+          6. Skill-call dispatch: parses <skill_call> blocks; tracks _tool_calls_made.
+          7. Post-execution critique via _maybe_critique / _MAX_CRITIC_ITERATIONS.
         """
-        # FR-RELY-003 (CR-050 B4): watchdog — restart daemon if it died silently.
-        _br = getattr(self, "_background_review", None)
-        if _br is not None and not _br.is_alive():
-            try:
-                self._background_review = BackgroundReview()
-                self._background_review.start()
-                if getattr(self, "_initiative", None):
-                    self._background_review._initiative_engine = self._initiative
-                _events.emit("SYSTEM_FAILURE", {
-                    "component": "BackgroundReview",
-                    "action": "restarted",
-                })
-            except Exception:
-                pass
+        import concurrent.futures  # ThreadPoolExecutor used by SkillScorer in pipeline
+        from src.agent.turn import AgentTurnInput
 
-        # CR-021: generate per-turn trace_id for observability correlation (FR-ORCH-036)
-        import secrets as _secrets
-        _trace_id = _secrets.token_hex(6)
-        _events.emit("routing_started", {"query": user_input[:100], "trace_id": _trace_id})
+        # FR-RELY-003: pass current BackgroundReview to pipeline watchdog.
+        # Pipeline calls is_alive() and restarts with BackgroundReview() + SYSTEM_FAILURE.
+        self._pipeline._background_review = self._background_review
+        self._pipeline._initiative = self._initiative
 
-        # CR-025: infer response mode and announce transitions (FR-ORCH-032, NFR-ORCH-007)
+        # FR-ORCH-036 (CR-021): pipeline emits these events with enriched payloads:
+        #   routing_started  {"query": ..., "trace_id": ...}
+        #   llm_complete     {"route": ..., "tokens_in": ..., "tokens_out": ..., "cost_usd": ...}
+        # Emit keys: "trace_id", "tokens_in", "cost_usd" are set in agent/pipeline.py.
+
+        # CR-025: infer response mode and announce transition (FR-ORCH-032).
+        # Done here (not in pipeline) because _current_mode is session state.
         try:
-            from src.response_mode import infer_mode as _infer_mode, MODE_CONVERSATIONAL
+            from src.response_mode import infer_mode as _infer_mode
             _new_mode = _infer_mode(user_input)
             if _new_mode != self._current_mode:
                 _mode_labels = {
@@ -1140,284 +1173,38 @@ class XochitlChat:
         except ImportError:
             _new_mode = "conversational"
 
+        # Assemble system prompt and messages via ContextManager.
         system_prompt = cm.assemble_system_prompt(mode=_new_mode)
         messages = cm.assemble_messages(self._clean_history(), user_input, tag_provenance=True)
 
-        # CR-033: inject identity reminder when BackgroundReview detected persona drift
-        # (FR-ORCH-043). Appended after assemble_system_prompt() so it appears at the
-        # end of the prompt — transformer recency bias amplifies the effect.
-        if getattr(self, "_background_review", None) and self._background_review.drift_detected:
-            system_prompt += _DRIFT_IDENTITY_REMINDER
-            self._background_review.clear_drift()
+        # FR-ORCH-025: governor routing constraint — local only / hard stop.
+        force_cloud = self.force_cloud
 
-        # CR-038: drain pending proactive signals and inject as system hint (FR-INIT-001)
-        try:
-            if getattr(self, "_initiative", None):
-                signals = self._initiative.drain()
-                if signals:
-                    sig = signals[0]  # surface one signal per turn maximum
-                    system_prompt += (
-                        "\n\n---\n"
-                        "[PROACTIVE ALERT]\n"
-                        f"{sig.message}\n"
-                        f"{sig.action_hint}\n"
-                        "---"
-                    )
-        except Exception:
-            pass
-
-        # CR-041: recall procedural workflow by intent (FR-MEM-010)
-        self.current_context.pop("active_workflow_id", None)
-        self.current_context.pop("active_workflow_name", None)
-        try:
-            from src.workflows import format_workflow_block, search_workflows_by_intent
-
-            _wf = search_workflows_by_intent(
-                user_input,
-                project=self.current_project,
-            )
-            if _wf:
-                system_prompt += (
-                    "\n\n---\n"
-                    + format_workflow_block(_wf)
-                    + "\n---"
-                )
-                self.current_context["active_workflow_id"] = _wf["id"]
-                self.current_context["active_workflow_name"] = _wf["name"]
-                if _status:
-                    _status.update(f"workflow: {_wf['name']}")
-        except Exception:
-            pass
-
-        # ── Phase 2: deterministic skill scoring pre-turn ─────────────────────
-        # FR-PERF-003 (CR-050 B3): delegated to SkillScorer (src/agent/skill_scorer.py).
-        # The scorer runs concurrently via ThreadPoolExecutor with a 100ms timeout and
-        # caches results per input hash to avoid re-scoring staged messages.
-        _skills_snap = self.skills
-        self._skill_scorer.update_skills(_skills_snap)
-        _score_key = (hash(user_input), len(_skills_snap))
-        top_skill, top_score, _score_key = self._skill_scorer.score(
-            user_input, self.current_context, score_key=_score_key
+        turn = AgentTurnInput(
+            user_input=user_input,
+            system_prompt=system_prompt,
+            messages=messages,
+            skills=self.skills,
+            current_project=self.current_project,
+            force_cloud=force_cloud,
+            stream=_stream,
+            context=self.current_context,
+            session_history=self.session_history,
         )
 
-        if top_skill is not None and top_score >= _SKILL_INJECT_THRESHOLD:
-            defn = top_skill.tool_definition()
-            system_prompt = system_prompt + "\n\n---\n\n" + _format_active_skill_block(defn)
-            _events.emit("skill_matched", {"skill": defn.get("name", ""), "score": top_score})
-            if _status:
-                _status.update(f"skill ready: {defn.get('name', type(top_skill).__name__)}")
+        result = self._pipeline.run(turn, _status=_status)
 
-        # ── CR-032 + CR-036: Per-turn capability context (FR-ORCH-026, FR-ORCH-034) ──
-        # Three scoring zones determine what [TURN CONTEXT] is injected:
-        #
-        #  ≥ 0.65  SKILL MATCHED   — skill schema already injected; no [TURN CONTEXT]
-        #  0.20–0.65  NEAR-MISS    — skill partially matched; inject near-miss note
-        #  < 0.20  COMPLETE MISS   — no skill matched; inject capability boundary note
-        #
-        # All non-skill turns retain the [UNCERTAINTY TIERS] reminder (CR-032).
-        if top_skill is not None and top_score >= _SKILL_INJECT_THRESHOLD:
-            pass  # skill schema handles context — no extra [TURN CONTEXT] needed
+        # Sync pipeline's possibly-restarted BackgroundReview back to session.
+        if self._pipeline._background_review is not self._background_review:
+            self._background_review = self._pipeline._background_review
 
-        elif top_skill is not None and top_score >= _OPEN_ENDED_SCORE_THRESHOLD:
-            # Near-miss: a skill partially matched but didn't cross the inject threshold.
-            # Tell the model which skill came closest so it can reason about partial coverage.
-            # Implements FR-ORCH-034 (CR-036).
-            skill_label = type(top_skill).__name__.replace("Skill", "").strip() or "Unknown"
-            system_prompt = (
-                system_prompt
-                + f"\n\n[TURN CONTEXT: Near-match — '{skill_label}' skill scored "
-                f"{top_score:.2f} (below injection threshold of {_SKILL_INJECT_THRESHOLD}). "
-                "State clearly what this skill can and cannot cover for the current request. "
-                "Do NOT silently deliver a reduced version — if partial handling is possible, "
-                "say so explicitly. Apply [UNCERTAINTY TIERS] vocabulary as appropriate.]\n"
-            )
+        # Integrate TurnResult back into session state.
+        if result.was_streamed:
+            self._last_response_streamed = True
+        if result.last_mutating_skill:
+            self._last_mutating_skill = result.last_mutating_skill
 
-        else:
-            # Complete miss: no skill scored above the open-ended threshold.
-            # Direct the model to consult [CAPABILITY BOUNDARY] and offer a specific forward path.
-            # Implements FR-ORCH-026 (CR-032) and FR-ORCH-034 (CR-036).
-            system_prompt = (
-                system_prompt
-                + "\n\n[TURN CONTEXT: No specific skill matched this request "
-                f"(top score {top_score:.2f}, threshold {_OPEN_ENDED_SCORE_THRESHOLD}). "
-                "If this request falls outside Xochitl's capabilities, state specifically "
-                "what is missing and offer the nearest available forward path — see [CAPABILITY BOUNDARY]. "
-                "Apply [UNCERTAINTY TIERS] vocabulary as appropriate.]\n"
-            )
-
-        force = "code_generation" if self.force_cloud else None
-
-        # FR-ORCH-025: apply governor routing constraint when LOCAL_ONLY or HARD_STOP.
-        # Governor force_route only overrides when no other force is already set
-        # (e.g., force_cloud / code_generation always wins).
-        if force is None:
-            _gov_force = self._governor.force_route()
-            if _gov_force:
-                force = _gov_force
-
-        # ── FR-UI-005: Real LLM token streaming (CR-031) ─────────────────────
-        _disable_skill_stream = os.getenv("XCH_DISABLE_SKILL_STREAMING") == "1"
-        _skill_injected = top_skill is not None and top_score >= _SKILL_INJECT_THRESHOLD
-
-        # Pure streaming: no skill schema injected; return immediately (no skill-call parsing).
-        use_streaming_pure = _stream and not self.force_cloud and not _skill_injected
-        # FR-PERF-008 (D2): skill-injected streaming — stream live, parse full buffer after.
-        use_streaming_skill = (
-            _stream and not self.force_cloud and _skill_injected and not _disable_skill_stream
-        )
-
-        if use_streaming_pure:
-            # Stop the Live refresh context before printing streaming tokens to
-            # avoid Rich display conflicts. The main thread's with-status_ctx
-            # block will see _live=None and skip its own cleanup.
-            if _status is not None:
-                _status._stop_event.set()
-                if _status._refresh_thread:
-                    _status._refresh_thread.join(timeout=0.3)
-                    _status._refresh_thread = None
-                live = _status._live
-                _status._live = None  # prevent double-exit in _StatusContext.__exit__
-                if live:
-                    try:
-                        live.stop()
-                    except Exception:
-                        pass
-
-            buffer: list[str] = []
-            printed_header = False
-            for token in self.router.route_stream(
-                query=user_input,
-                conversation_history=messages,
-                system_prompt=system_prompt,
-                force_route=force,
-            ):
-                if not printed_header:
-                    console.print(f"\n[bold]Xochitl[/bold]: ", end="")
-                    printed_header = True
-                console.print(token, end="")
-                buffer.append(token)
-
-            if buffer:
-                console.print()  # trailing newline after stream
-                self._last_response_streamed = True
-                _events.emit("llm_complete", {  # FR-ORCH-036 (CR-021)
-                    "route": "stream",
-                    "tokens_in": 0,
-                    "tokens_out": len(buffer),
-                    "cost_usd": 0.0,
-                })
-                response_text = "".join(buffer)
-                # Skill calls are not expected on streaming turns (no schema injected),
-                # but guard anyway: strip any stray XML and return clean text.
-                return _SKILL_CALL_RE.sub("", response_text).strip() or response_text
-            # Empty stream → fall through to non-streaming path below
-
-        # ── Non-streaming path (skill calls, special routes, streaming fallback) ──
-        # FR-PERF-008 (D2): if skill streaming enabled, stream and buffer first.
-        response_text = ""
-        if use_streaming_skill:
-            _displayed, response_text = self._stream_and_buffer(
-                user_input, messages, system_prompt, force, _status
-            )
-            if response_text:
-                self._last_response_streamed = True
-                _events.emit("llm_complete", {
-                    "route": "stream_skill",
-                    "tokens_in": 0,
-                    "tokens_out": len(response_text),
-                    "cost_usd": 0.0,
-                })
-
-        if not response_text:
-            result = self.router.route(
-                query=user_input,
-                conversation_history=messages,
-                system_prompt=system_prompt,
-                force_route=force,
-            )
-
-            if result.error:
-                return f"{_ERR} — {result.error}"
-
-            _events.emit("llm_complete", {  # FR-ORCH-036 (CR-021)
-                "route": str(result.route),
-                "tokens_in": result.tokens_in,
-                "tokens_out": result.tokens_out,
-                "cost_usd": result.cost_usd,
-            })
-
-            response_text = result.content or ""
-
-        # FR-PERF-007 (CR-050 C3): parse ALL skill calls (re.findall), not just the first.
-        skill_calls = _parse_skill_calls(response_text)
-
-        # Strip ALL <skill_call> XML from the visible part of the response
-        visible = _SKILL_CALL_RE.sub("", response_text).strip()
-
-        # CR-019: track whether a skill executed this turn (FR-ORCH-037 trigger)
-        _tool_calls_made = False
-
-        if skill_calls:
-            _result_parts: list[str] = [visible] if visible else []
-            _remaining = len(skill_calls)
-            for _sc_idx, (skill_name, params) in enumerate(skill_calls):
-                _remaining -= 1
-                skill = self._find_skill_by_name(skill_name)
-                if not skill:
-                    _result_parts.append(f"[dim][{skill_name}: skill not found][/dim]")
-                    continue
-
-                if self._skill_call_requires_approval(skill, params):
-                    _events.emit("hitl_required", {
-                        "action": str(params.get("action", skill_name)),
-                        "risk": self._risk_label_for_skill(type(skill).__name__, params),
-                    })
-                    if _remaining > 0:
-                        _result_parts.append(
-                            f"[dim][Note: {_remaining} additional skill call(s) queued — approve this one first][/dim]"
-                        )
-                    return self._stage_skill_call_plan(skill, params, user_input, "\n\n".join(_result_parts))
-
-                _events.emit("skill_started", {"skill": skill_name, "params": list(params.keys())})
-                if _status:
-                    _status.update(f"running skill: {skill_name}")
-                self._emit_action_line(infer_action_label(user_input, skill_name))
-                tool_result = self._execute_skill_safe(
-                    skill, user_input, self.current_context, params
-                )
-                _events.emit("skill_complete", {"skill": skill_name, "success": True})
-                _tool_calls_made = True
-                formatted = format_skill_output(tool_result)
-                self.current_context["last_skill_name"] = skill_name
-                self.current_context["last_action_summary"] = infer_action_label(user_input, skill_name)
-                # CR-041: record procedural workflow usage (FR-MEM-008)
-                _wf_id = self.current_context.get("active_workflow_id")
-                if _wf_id:
-                    try:
-                        from src.workflows import record_match_usage
-                        record_match_usage(int(_wf_id), success=True)
-                    except Exception:
-                        pass
-
-                # Implements FR-ORCH-009 — persist tool turn in session history
-                self.session_history.append({
-                    "role": "tool",
-                    "skill": skill_name,
-                    "content": tool_result,
-                    "timestamp": datetime.now().isoformat(),
-                })
-                _result_parts.append(format_compact_result(
-                    self.current_context["last_action_summary"], formatted or tool_result
-                ))
-
-            _final = "\n\n".join(_result_parts) if _result_parts else response_text
-        else:
-            _final = visible or response_text
-
-        # CR-019: post-execution reflection/critique on non-streaming turns (FR-ORCH-037)
-        return self._maybe_critique(
-            _final, user_input, top_score, _tool_calls_made, messages, system_prompt, force
-        )
+        return result.response
 
     def _skill_call_requires_approval(self, skill: Skill, params: dict) -> bool:
         """Return True when a skill call can mutate files, state, or services.
@@ -1585,6 +1372,17 @@ class XochitlChat:
             response:        The assembled response text to evaluate.
             goal:            The original user input.
             top_score:       Highest skill can_handle() score for this turn.
+            tool_calls_made: True if a skill executed this turn (_tool_calls_made flag).
+            messages:        Assembled conversation history (for correction retries).
+            system_prompt:   Base system prompt (amended with critic note on retry).
+            force:           Optional force_route value (preserved on retries).
+
+        Enforces _MAX_CRITIC_ITERATIONS cap (NFR-ORCH-012) to bound retry depth.
+
+        Args:
+            response:        The assembled response text to evaluate.
+            goal:            The original user input.
+            top_score:       Highest skill can_handle() score for this turn.
             tool_calls_made: True if a skill was executed this turn.
             messages:        Assembled conversation history (for correction retries).
             system_prompt:   Base system prompt (amended with critic note on retry).
@@ -1727,46 +1525,12 @@ class XochitlChat:
         return f"{category}:{slug}"
 
     def _classify_intent(self, user_input: str) -> dict:
-        # Legacy method — no longer called from process_message() (Phase 1 refactor
-        # replaced the triple-classification system with direct keyword dispatch).
-        # Retained for test compatibility. Uses a local import to avoid a top-level
-        # dependency on intent.py from the main chat flow.
+        """Classify user intent for legacy test compatibility only. Not called by the main flow."""
         from src.intent import classify_conversation_intent
         return classify_conversation_intent(
             user_input,
             current_project=self.current_project,
         ).to_dict()
-
-        q = user_input.lower()
-
-        has_extension = any(ext in q for ext in _FILE_EXTENSIONS)
-        has_path = "\\" in user_input or (
-            "/" in user_input and any(c.isalpha() for c in user_input.split("/")[0])
-        )
-        has_file_kw = any(kw in q for kw in _FILE_READ_KW + _FILE_WRITE_KW + _FILE_DELETE_KW)
-        has_file_verb = any(kw in q for kw in _FILE_VERB_KW)
-        has_path_indicator = has_extension or has_path or any(kw in q for kw in _PATH_INDICATOR_KW)
-
-        # BUG-CHAT-001 fix: file_operation checked FIRST — explicit path/extension wins
-        if has_extension or has_path or has_file_kw or (has_file_verb and has_path_indicator):
-            if any(kw in q for kw in _FILE_DELETE_KW):
-                op = "delete"
-            elif any(kw in q for kw in _FILE_WRITE_KW):
-                op = "write"
-            else:
-                op = "read"
-            return {"type": "file_operation", "operation": op}
-
-        # Research checked before task keywords
-        if any(kw in q for kw in _RESEARCH_KEYWORDS):
-            adversarial = any(kw in q for kw in ["devil", "adversarial", "challenge", "poke holes", "stress test", "steelman"])
-            return {"type": "research", "adversarial": adversarial}
-
-        if any(kw in q for kw in _TASK_KEYWORDS):
-            return {"type": "task_query"}
-
-        # Everything else goes to the agent loop — the LLM handles it
-        return {"type": "general"}
 
     # ── Intent handlers ───────────────────────────────────────────────────────
 
@@ -1892,177 +1656,20 @@ class XochitlChat:
     # ── Confirmation handlers ─────────────────────────────────────────────────
 
     def _handle_permission_response(self, user_input: str) -> Optional[str]:
-        q = user_input.lower().strip()
-        op_id = self.current_context.get("pending_file_operation")
-        if not op_id:
-            return None
-
-        if q in _CONFIRM_YES:
-            result = self.file_tools.confirm_operation(op_id)
-            del self.current_context["pending_file_operation"]
-            return result["message"]
-
-        if q in _CONFIRM_NO:
-            result = self.file_tools.cancel_operation(op_id)
-            del self.current_context["pending_file_operation"]
-            return result["message"]
-
-        return None
+        """Delegate to ConfirmationHandler. Implements FR-ORCH-011."""
+        self._confirmation._ctx = self.current_context
+        return self._confirmation.handle_permission_response(user_input)
 
     def _handle_action_confirmation(self, user_input: str) -> Optional[str]:
-        # Implements FR-ORCH-007 — LLM fallback when exact-match fails
-        q = user_input.lower().strip()
-        action = self.current_context.get("pending_action")
-        if not action:
-            return None
-
-        # Fast path: exact-match sets
-        if q in _CONFIRM_YES:
-            verdict = "yes"
-        elif q in _CONFIRM_NO:
-            verdict = "no"
-        else:
-            # FR-ORCH-007: LLM micro-call to interpret natural confirmation
-            verdict = self._llm_classify_confirm(action, user_input)
-            if verdict == "unclear":
-                return None  # fall through to normal conversation
-
-        if verdict == "yes":
-            del self.current_context["pending_action"]
-
-            if action == "execute_skill_call":
-                return self._execute_pending_skill_call()
-
-            if action == "sync_notion":
-                from src.skills.notion_skill import NotionSkill
-                return NotionSkill().execute(user_input, self.current_context, {"direction": "pull"})
-
-            if action == "push_notion":
-                from src.skills.notion_skill import NotionSkill
-                return NotionSkill().execute(user_input, self.current_context, {"direction": "push"})
-
-            if action == "init_project":
-                from src.skills.bmad_skill import BMADSkill
-                skill = BMADSkill()
-                project_id = self.current_context.pop("pending_project_id", "new-project")
-                name = self.current_context.pop("pending_project_name", project_id)
-                desc = self.current_context.pop("pending_project_description", "")
-                skill.init_project(project_id, name, desc)
-
-                # BUG-ORCH-002 fix: seed Business Model from spec if one was mentioned
-                from src.router import _resolve_file_context
-                file_ctx = _resolve_file_context("", self.session_history)
-                if file_ctx:
-                    prompt = (
-                        f"I have just initialized the project '{name}'.\n"
-                        f"Based on the following product specification, please draft a "
-                        "Business Model (BMM) summary including: Core Value Prop, "
-                        "Target Users, and Key Features.\n\n"
-                        f"{file_ctx}"
-                    )
-                    result = self.router.route(
-                        query=prompt,
-                        conversation_history=[],
-                        system_prompt="You are a Product Manager drafting a Business Model (BMM) artifact.",
-                        force_route="general",
-                    )
-                    if not result.error:
-                        skill.save_bmad_artifact(project_id, "business-model", result.content)
-                        return (
-                            f"{_OK} — Created **{name}**.\n\n"
-                            "I've read the spec and drafted the **Business Model** for you:\n\n"
-                            f"{result.content}\n\n"
-                            "Shall we move to **Architecture**?"
-                        )
-
-                return (
-                    f"{_OK} — Created **{name}** at `projects/{project_id}/`.\n\n"
-                    "Let's start with the Business Model. "
-                    "What's the core struggle this app solves? "
-                    "Who's experiencing it, and what do they do today instead?"
-                )
-
-            if action == "generate_specs":
-                from src.skills.sdd_skill import SDDSkill
-                project_id = self.current_project or self.current_context.get("pending_project_id", "")
-                return SDDSkill().generate_specs_from_bmad(project_id)
-
-            if action == "analyze_issue":
-                from src.skills.sdd_skill import SDDSkill
-                project_id = self.current_project or ""
-                issue_desc = self.current_context.pop("pending_issue_description", "")
-                sdd = SDDSkill()
-                result = sdd.analyze_issue(project_id, issue_desc)
-                if "error" in result:
-                    return f"Analysis failed: {result['error']}"
-                confidence = result.get("confidence", 0)
-                summary = result.get("summary", "")
-                changes = result.get("spec_changes_needed", [])
-                guidance = result.get("implementation_guidance", [])
-
-                lines = [f"**Analysis:** {result.get('analysis_type', '?')}"]
-                if summary:
-                    lines.append(f"\n{summary}")
-                if changes:
-                    lines.append("\n**Spec changes needed:**")
-                    for c in changes:
-                        lines.append(f"- `{c.get('requirement_id', '?')}`: {c.get('rationale', '')}")
-                if guidance:
-                    lines.append("\n**Implementation guidance:**")
-                    for g in guidance:
-                        lines.append(f"- {g}")
-                if confidence < 0.75:
-                    lines.append(f"\n⚠ Confidence {confidence:.0%} — review before applying changes.")
-                if changes:
-                    self.current_context["pending_spec_changes"] = changes
-                    lines.append("\nWant me to apply the spec changes and create an issue?")
-                return "\n".join(lines)
-
-            if action == "scaffold_code":
-                from src.skills.code_skill import CodeSkill
-                project_id = self.current_project or ""
-                component = self.current_context.pop("pending_component", "backend")
-                return CodeSkill().scaffold_from_specs(project_id, component)
-
-        if verdict == "no":
-            del self.current_context["pending_action"]
-            self.current_context.pop("pending_project_id", None)
-            self.current_context.pop("pending_project_name", None)
-            self.current_context.pop("pending_project_description", None)
-            self.current_context.pop("pending_issue_description", None)
-            self.current_context.pop("pending_component", None)
-            self.current_context.pop("pending_skill_call", None)
-            return f"{_OK}, no problem."
-
-        return None
+        """Delegate to ConfirmationHandler. Implements FR-ORCH-007."""
+        self._confirmation._ctx = self.current_context
+        self._confirmation._project = self.current_project
+        self._confirmation._history = self.session_history
+        return self._confirmation.handle_action_confirmation(user_input)
 
     def _llm_classify_confirm(self, pending_action: str, user_input: str) -> str:
-        """LLM micro-call to interpret a natural-language yes/no response.
-
-        Implements FR-ORCH-007. Returns 'yes' | 'no' | 'unclear'.
-        Uses force_route='simple_qa' to keep it local and fast.
-        """
-        prompt = (
-            f"Pending action: {pending_action}\n"
-            f"User says: \"{user_input}\"\n\n"
-            "Does the user want to confirm (yes), cancel (no), or is it unclear?\n"
-            "Reply with exactly one word: yes | no | unclear"
-        )
-        result = self.router.route(
-            query=prompt,
-            conversation_history=[],
-            system_prompt="Classify user intent as: yes, no, or unclear. Reply with one word only.",
-            force_route="simple_qa",
-        )
-        if result.error:
-            return "unclear"
-        raw = (result.content or "").strip().lower()
-        first = raw.split()[0] if raw.split() else "unclear"
-        if first in {"yes", "y", "confirm", "sure", "ok", "okay", "yep", "yeah", "do", "go", "proceed"}:
-            return "yes"
-        if first in {"no", "n", "cancel", "stop", "don't", "nope", "never", "abort"}:
-            return "no"
-        return "unclear"
+        """Delegate to ConfirmationHandler. Implements FR-ORCH-007."""
+        return self._confirmation._llm_classify_confirm(pending_action, user_input)
 
     # ── Project context detection ─────────────────────────────────────────────
 
@@ -2117,311 +1724,27 @@ class XochitlChat:
     # ── Slash command dispatch (FR-SEC-001, FR-SEC-003, FR-SEC-004) ──────────
 
     def _handle_slash_command(self, raw: str) -> str:
-        """Dispatch /command [args] without going through the LLM."""
-        from src.security import cmd_authorize, cmd_revoke, cmd_list_registry, cmd_audit
+        """Delegate to session/slash_commands.py. Implements FR-SEC-001."""
+        from src.session.slash_commands import handle_slash_command
+        return handle_slash_command(raw, self)
 
-        parts = raw.split(maxsplit=1)
-        verb = parts[0].lower()
-        arg = parts[1].strip() if len(parts) > 1 else ""
-
-        # FR-UI-007: Stage next message to run after current response finishes
-        if verb == "/next":
-            if not arg:
-                if self._staged_message:
-                    return f"[dim]Staged message cleared.[/dim]"
-                return "Usage: /next <message to send after this response>"
-            self._staged_message = arg
-            return f"[dim]✓ Staged: '{arg}' — will run after current response.[/dim]"
-
-        # FR-UI-006: Retry the last cancelled message
-        if verb == "/retry":
-            if not self._last_cancelled:
-                return "[dim]Nothing to retry — no message was cancelled.[/dim]"
-            self._staged_message = self._last_cancelled
-            self._last_cancelled = None
-            return f"[dim]✓ Re-queued: '{self._staged_message}'[/dim]"
-
-        if verb == "/authorize":
-            return cmd_authorize(arg)
-        if verb == "/revoke":
-            return cmd_revoke(arg)
-        if verb == "/registry":
-            return cmd_list_registry()
-        if verb == "/audit":
-            n = int(arg) if arg.isdigit() else 20
-            return cmd_audit(n)
-
-        # FR-BMAD-003: SDD traceability review
-        if verb == "/review":
-            from src.skills.sdd_skill import SDDSkill
-            project_id = arg or self.current_project or ""
-            return SDDSkill().review_code_traceability(project_id)
-
-        if verb == "/research":
-            if not arg:
-                return "Usage: /research <topic>"
-            from src.research import run_research
-            result = run_research(arg, adversarial=False, check_conflicts=True)
-            parts_out = [f"**Research: {result['topic']}**", f"_{result['budget']}_\n"]
-            if result["synthesis"]:
-                parts_out.append(result["synthesis"])
-            if result["conflicts"]:
-                parts_out.append(f"\n**Conflicts detected ({len(result['conflicts'])}):**")
-                for c in result["conflicts"]:
-                    parts_out.append(f"- {c['source']}: {c['verdict'][:120]}")
-            return "\n".join(parts_out)
-
-        if verb == "/adversarial":
-            if not arg:
-                return "Usage: /adversarial <claim to challenge>"
-            from src.research import adversarial_review
-            return adversarial_review(arg)
-
-        # FR-ORCH-025: show session token budget status (AC-CR026-006)
-        if verb == "/budget":
-            return self._governor.budget_detail()
-
-        # FR-JARV-011: /status — live system health table
-        if verb == "/status":
-            return self._handle_status_command()
-
-        # FR-HARD-008: /history — recent session summaries
-        if verb == "/history":
-            return self._handle_history_command(int(arg) if arg.isdigit() else 5)
-
-        # CR-038: dismiss a proactive signal category (FR-INIT-002)
-        if verb == "/dismiss":
-            try:
-                from src.initiative import InitiativeCategory
-                engine = getattr(self, "_initiative", None)
-                if engine is None:
-                    return "[dim]Initiative engine not active.[/dim]"
-                # Default: dismiss SYSTEM_FAILURE if no arg; otherwise parse arg
-                cat_str = arg.lower() if arg else "system_failure"
-                try:
-                    cat = InitiativeCategory(cat_str)
-                except ValueError:
-                    valid = ", ".join(c.value for c in InitiativeCategory)
-                    return f"[dim]Unknown category '{cat_str}'. Valid: {valid}[/dim]"
-                engine.dismiss(cat)
-                return f"[dim]Dismissed '{cat.value}' alerts. Repeated dismissals auto-suppress.[/dim]"
-            except Exception as exc:
-                return f"[dim]Dismiss failed: {exc}[/dim]"
-
-        # CR-041: procedural memory slash commands (FR-MEM-011)
-        if verb == "/workflows":
-            from src.workflows import list_workflows_formatted
-            return list_workflows_formatted(project=self.current_project)
-
-        if verb == "/workflow":
-            from src.workflows import (
-                execute_workflow,
-                get_workflow_by_name,
-                list_workflows_formatted,
-                save_workflow_from_session,
-            )
-            if not arg:
-                return (
-                    "Usage: /workflow save <name>  |  /workflow run <name>  |  /workflows\n"
-                    + list_workflows_formatted(project=self.current_project)
-                )
-            if arg.lower().startswith("save "):
-                wf_name = arg[5:].strip()
-                if not wf_name:
-                    return "Usage: /workflow save <name>"
-                trigger = self._last_user_message() or wf_name
-                try:
-                    wf_id = save_workflow_from_session(
-                        wf_name,
-                        trigger[:240],
-                        self.session_history,
-                        project=self.current_project,
-                        source="distilled",
-                        use_llm_distill=True,
-                    )
-                    return (
-                        f"Saved workflow **{wf_name}** (id {wf_id}, LLM-distilled). "
-                        f"Recall: mention '{trigger[:80]}' or `/workflow run {wf_name}`"
-                    )
-                except ValueError as exc:
-                    return f"[dim]Could not save workflow: {exc}[/dim]"
-                except Exception as exc:
-                    return f"[dim]Save failed: {exc}[/dim]"
-            if arg.lower().startswith("run "):
-                wf_name = arg[4:].strip()
-                if not wf_name:
-                    return "Usage: /workflow run <name>"
-                wf = get_workflow_by_name(wf_name)
-                if not wf:
-                    return f"No workflow named '{wf_name}'. Use `/workflows` to list."
-                self.current_context["_chat_skills"] = self.skills
-                return execute_workflow(
-                    wf,
-                    self._last_user_message() or wf_name,
-                    self.skills,
-                    self.current_context,
-                )
-            return f"[dim]Unknown /workflow subcommand. Use: save or run[/dim]"
-
-        # A3 — structured daily brief (FR-CONV-003).
-        # Pull-only: never surfaced unsolicited (alert-fatigue risk).
-        if verb == "/brief":
-            try:
-                from src.brief import build_structured_brief
-                from src import database as _db
-                with _db.get_connection() as conn:
-                    _queue = _db.get_queue(conn)
-                return build_structured_brief(_queue, notion_pending=[])
-            except Exception as exc:
-                return f"[dim]{_FYI} — couldn't build brief: {exc}[/dim]"
-
-        # FR-ORCH-041: /debug skill — show per-skill can_handle() scores (AC-CR047-006)
-        if verb == "/debug" and arg.lower().startswith("skill"):
-            last_input = self.current_context.get("_last_debug_input", "")
-            if not last_input:
-                # Fall back to last session history user message
-                for msg in reversed(self.session_history):
-                    if msg.get("role") == "user":
-                        last_input = msg.get("content", "")
-                        break
-            if not last_input:
-                return "[dim]No recent message to score against — say something first.[/dim]"
-            lines = [f"[bold]can_handle scores[/bold] for: {last_input[:80]}"]
-            rows = []
-            for skill in self.skills:
-                try:
-                    score = skill.can_handle(last_input, self.current_context)
-                except Exception:
-                    score = -1.0
-                name = type(skill).__name__
-                marker = " ← injected" if score >= _SKILL_INJECT_THRESHOLD else (
-                    " ← near-miss" if score >= _OPEN_ENDED_SCORE_THRESHOLD else ""
-                )
-                rows.append((score, f"  {score:.2f}  {name}{marker}"))
-            rows.sort(key=lambda r: r[0], reverse=True)
-            lines.extend(r[1] for r in rows)
-            lines.append(f"\n  inject threshold: {_SKILL_INJECT_THRESHOLD}  "
-                         f"near-miss threshold: {_OPEN_ENDED_SCORE_THRESHOLD}")
-            return "\n".join(lines)
-
-        available = (
-            "/next <msg>  /retry  /authorize  /revoke  "
-            "/registry  /audit  /review  /research  /adversarial  "
-            "/budget  /status  /history [N]  /brief  "
-            "/dismiss  /workflows  /workflow save <name>  /workflow run <name>  "
-            "/debug skill"
-        )
-        return f"[dim]{_FYI} — unknown command: {verb}\nAvailable: {available}[/dim]"
-
-    # ── Helpers ───────────────────────────────────────────────────────────────
+    # ── Status / history helpers (kept for backward compat; delegate to module) ─
 
     def _handle_status_command(self) -> str:
         """Return a system health table for /status. Implements FR-JARV-011.
 
-        Returns:
-            Multi-line status string with local model, cloud, API tokens, budget, WIP.
+        Delegates to session/slash_commands._handle_status which queries:
+        - memory_facts and workflows row counts (FR-UX-004)
+        - _background_review.is_alive() daemon health
+        - _initiative engine mode
         """
-        lines = ["[bold]System Status[/bold]", ""]
-
-        # Local model
-        try:
-            from src.stats import health_check
-            health = health_check()
-            local_ok = health.get("local_model", False)
-            lines.append(f"  Local model   : {'[green]online[/green]' if local_ok else '[red]offline[/red]'}")
-        except Exception:
-            lines.append("  Local model   : [dim]unknown[/dim]")
-
-        # Cloud route
-        cloud_ok = bool(
-            os.getenv("ANTHROPIC_API_KEY") or
-            os.getenv("GOOGLE_API_KEY") or
-            os.getenv("GEMINI_API_KEY")
-        )
-        lines.append(f"  Cloud route   : {'[green]available[/green]' if cloud_ok else '[dim]no key set[/dim]'}")
-
-        # Notion token
-        notion_ok = bool(os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_KEY"))
-        lines.append(f"  Notion        : {'[green]token set[/green]' if notion_ok else '[dim]no token[/dim]'}")
-
-        # Gmail token
-        gmail_path = Path.home() / ".xochitl" / "gmail_token.json"
-        gmail_ok = gmail_path.exists()
-        lines.append(f"  Gmail         : {'[green]token found[/green]' if gmail_ok else '[dim]not configured[/dim]'}")
-
-        # Session budget
-        lines.append(f"  Budget        : {self._governor.status_line()}")
-
-        # WIP count
-        try:
-            with db.get_connection() as _conn:
-                _q = db.get_queue(_conn)
-            lines.append(f"  WIP Queue     : {len(_q)}/3 items")
-        except Exception:
-            lines.append("  WIP Queue     : [dim]unavailable[/dim]")
-
-        # FR-UX-004 (CR-050 A4): memory tier stats and daemon health
-        try:
-            with db.get_connection() as _conn:
-                _mf_count = _conn.execute("SELECT COUNT(*) FROM memory_facts").fetchone()[0]
-                _wf_count = _conn.execute("SELECT COUNT(*) FROM workflows WHERE superseded_by IS NULL").fetchone()[0]
-            lines.append(f"  Memory facts  : {_mf_count} rows")
-            lines.append(f"  Workflows     : {_wf_count} saved")
-        except Exception:
-            lines.append("  Memory facts  : [dim]unavailable[/dim]")
-
-        try:
-            _br = getattr(self, "_background_review", None)
-            _br_status = "[green]active[/green]" if (_br and _br.is_alive()) else "[yellow]stopped[/yellow]"
-            lines.append(f"  Background    : {_br_status}")
-        except Exception:
-            lines.append("  Background    : [dim]unknown[/dim]")
-
-        try:
-            _ini = getattr(self, "_initiative", None)
-            if _ini is not None:
-                lines.append(f"  Initiative    : {_ini.mode.value}")
-            else:
-                lines.append("  Initiative    : [dim]not loaded[/dim]")
-        except Exception:
-            lines.append("  Initiative    : [dim]unknown[/dim]")
-
-        lines.append("")
-        lines.append("[dim]Use /budget for full token breakdown.[/dim]")
-        return "\n".join(lines)
+        from src.session.slash_commands import _handle_status
+        return _handle_status(self)
 
     def _handle_history_command(self, n: int = 5) -> str:
-        """Return a table of recent session context summaries. FR-HARD-008.
-
-        Args:
-            n: Number of past sessions to show (default 5).
-
-        Returns:
-            Formatted session history string for console display.
-        """
-        try:
-            with db.get_connection() as conn:
-                rows = conn.execute(
-                    "SELECT id, started_at, last_active, context_summary "
-                    "FROM sessions WHERE context_summary IS NOT NULL "
-                    "AND context_summary != '' "
-                    "ORDER BY id DESC LIMIT ?",
-                    (n,),
-                ).fetchall()
-        except Exception as exc:
-            return f"[dim]Could not load session history: {exc}[/dim]"
-
-        if not rows:
-            return "[dim]No session history yet — context summaries are saved as you chat.[/dim]"
-
-        lines = [f"[bold]Last {min(n, len(rows))} sessions[/bold]", ""]
-        for row in rows:
-            started = str(row[1] or "")[:16]
-            summary = (str(row[3] or ""))[:90]
-            lines.append(f"  [dim]{started}[/dim]  {summary}")
-        lines.append("")
-        lines.append("[dim]Tip: /history 10 shows the last 10 sessions.[/dim]")
-        return "\n".join(lines)
+        """Delegate to session/slash_commands._handle_history. Implements FR-HARD-008."""
+        from src.session.slash_commands import _handle_history
+        return _handle_history(self, n)
 
     def _last_user_message(self) -> str:
         """Return the most recent user message text in this session."""

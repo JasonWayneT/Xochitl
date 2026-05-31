@@ -1079,3 +1079,64 @@ def insert_agent_trace(conn: sqlite3.Connection, trace: dict) -> int:
         ),
     )
     return int(cursor.lastrowid)
+
+
+# ── Context snapshot helpers (used by router.py for prompt injection) ─────────
+
+def get_live_context_snapshot(conn: sqlite3.Connection) -> str:
+    """Return a text block of active projects and current queue for LLM injection.
+
+    Extracted from router._live_db_context() so all SQL stays in database.py.
+    Implements FR-ORCH-003 (PreFlight Fact Injection).
+
+    Args:
+        conn: Active SQLite connection.
+
+    Returns:
+        Formatted text block with active projects and WIP queue.
+    """
+    lines: list[str] = []
+    projects = conn.execute(
+        "SELECT name, priority, status, description FROM projects "
+        "WHERE status='active' ORDER BY priority DESC"
+    ).fetchall()
+    if projects:
+        lines.append("## Active Projects (from local database)")
+        for p in projects:
+            desc = (p["description"] or "")[:80]
+            lines.append(f"  [{p['priority'].upper()}] {p['name']} — {desc}")
+    else:
+        lines.append("## Active Projects\n  (none — run `xochitl pull` to sync from Notion)")
+
+    queue = conn.execute("""
+        SELECT t.description, t.time_estimate_minutes, p.name as project_name, q.position
+        FROM queue q
+        JOIN tasks t ON q.task_id = t.id
+        JOIN projects p ON t.project_id = p.id
+        ORDER BY q.position
+    """).fetchall()
+    if queue:
+        lines.append("\n## Current WIP Queue")
+        for r in queue:
+            lines.append(
+                f"  [{r['position']}] {r['description']} "
+                f"({r['time_estimate_minutes']}m | {r['project_name']})"
+            )
+    else:
+        lines.append("\n## Current WIP Queue\n  (empty — run `xochitl today` to fill)")
+    return "\n".join(lines)
+
+
+def get_wip_count(conn: sqlite3.Connection) -> int:
+    """Return the number of tasks currently in the WIP queue.
+
+    Used by router._build_preflight_facts() for the SYSTEM_FACTS block.
+
+    Args:
+        conn: Active SQLite connection.
+
+    Returns:
+        Integer count of queue rows; 0 on any error.
+    """
+    row = conn.execute("SELECT COUNT(*) FROM queue").fetchone()
+    return int(row[0]) if row else 0

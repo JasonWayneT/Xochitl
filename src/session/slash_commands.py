@@ -1,0 +1,334 @@
+"""SlashCommandHandler — /command dispatch extracted from XochitlChat.
+
+Separates the slash command routing table from the session lifecycle so it can
+be read, tested, and extended without navigating the full chat session class.
+
+Implements FR-SEC-001, FR-SEC-003, FR-SEC-004, FR-ORCH-041, FR-CONV-003.
+"""
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from src.chat import XochitlChat
+
+_FYI = "Fíjate"
+
+# Skill scoring thresholds mirrored from chat.py constants.
+_SKILL_INJECT_THRESHOLD = 0.65
+_OPEN_ENDED_SCORE_THRESHOLD = 0.2
+
+
+def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
+    """Dispatch a /command [args] string without going through the LLM.
+
+    Args:
+        raw: Raw slash command string from the user (e.g. "/budget").
+        chat: Active XochitlChat session (read for session state).
+
+    Returns:
+        Formatted response string for console display.
+    """
+    from src.security import cmd_authorize, cmd_revoke, cmd_list_registry, cmd_audit
+
+    parts = raw.split(maxsplit=1)
+    verb = parts[0].lower()
+    arg = parts[1].strip() if len(parts) > 1 else ""
+
+    # ── Staged / retry messages ───────────────────────────────────────────────
+    if verb == "/next":
+        if not arg:
+            if chat._staged_message:
+                chat._staged_message = None
+                return "[dim]Staged message cleared.[/dim]"
+            return "Usage: /next <message to send after this response>"
+        chat._staged_message = arg
+        return f"[dim]✓ Staged: '{arg}' — will run after current response.[/dim]"
+
+    if verb == "/retry":
+        if not chat._last_cancelled:
+            return "[dim]Nothing to retry — no message was cancelled.[/dim]"
+        chat._staged_message = chat._last_cancelled
+        chat._last_cancelled = None
+        return f"[dim]✓ Re-queued: '{chat._staged_message}'[/dim]"
+
+    # ── Security commands ─────────────────────────────────────────────────────
+    if verb == "/authorize":
+        return cmd_authorize(arg)
+    if verb == "/revoke":
+        return cmd_revoke(arg)
+    if verb == "/registry":
+        return cmd_list_registry()
+    if verb == "/audit":
+        n = int(arg) if arg.isdigit() else 20
+        return cmd_audit(n)
+
+    # ── SDD traceability review ───────────────────────────────────────────────
+    if verb == "/review":
+        from src.skills.sdd_skill import SDDSkill
+        project_id = arg or chat.current_project or ""
+        return SDDSkill().review_code_traceability(project_id)
+
+    # ── Research commands ─────────────────────────────────────────────────────
+    if verb == "/research":
+        if not arg:
+            return "Usage: /research <topic>"
+        from src.research import run_research
+        result = run_research(arg, adversarial=False, check_conflicts=True)
+        parts_out = [f"**Research: {result['topic']}**", f"_{result['budget']}_\n"]
+        if result["synthesis"]:
+            parts_out.append(result["synthesis"])
+        if result["conflicts"]:
+            parts_out.append(f"\n**Conflicts detected ({len(result['conflicts'])}):**")
+            for c in result["conflicts"]:
+                parts_out.append(f"- {c['source']}: {c['verdict'][:120]}")
+        return "\n".join(parts_out)
+
+    if verb == "/adversarial":
+        if not arg:
+            return "Usage: /adversarial <claim to challenge>"
+        from src.research import adversarial_review
+        return adversarial_review(arg)
+
+    # ── Session budget ────────────────────────────────────────────────────────
+    if verb == "/budget":
+        return chat._governor.budget_detail()
+
+    # ── System status ─────────────────────────────────────────────────────────
+    if verb == "/status":
+        return _handle_status(chat)
+
+    # ── Session history ───────────────────────────────────────────────────────
+    if verb == "/history":
+        return _handle_history(chat, int(arg) if arg.isdigit() else 5)
+
+    # ── Initiative dismiss ────────────────────────────────────────────────────
+    if verb == "/dismiss":
+        try:
+            from src.initiative import InitiativeCategory
+            engine = getattr(chat, "_initiative", None)
+            if engine is None:
+                return "[dim]Initiative engine not active.[/dim]"
+            cat_str = arg.lower() if arg else "system_failure"
+            try:
+                cat = InitiativeCategory(cat_str)
+            except ValueError:
+                valid = ", ".join(c.value for c in InitiativeCategory)
+                return f"[dim]Unknown category '{cat_str}'. Valid: {valid}[/dim]"
+            engine.dismiss(cat)
+            return f"[dim]Dismissed '{cat.value}' alerts. Repeated dismissals auto-suppress.[/dim]"
+        except Exception as exc:
+            return f"[dim]Dismiss failed: {exc}[/dim]"
+
+    # ── Workflow commands ─────────────────────────────────────────────────────
+    if verb == "/workflows":
+        from src.workflows import list_workflows_formatted
+        return list_workflows_formatted(project=chat.current_project)
+
+    if verb == "/workflow":
+        return _handle_workflow(chat, arg)
+
+    # ── Daily brief ───────────────────────────────────────────────────────────
+    if verb == "/brief":
+        try:
+            from src.brief import build_structured_brief
+            from src import database as _db
+            with _db.get_connection() as conn:
+                _queue = _db.get_queue(conn)
+            return build_structured_brief(_queue, notion_pending=[])
+        except Exception as exc:
+            return f"[dim]{_FYI} — couldn't build brief: {exc}[/dim]"
+
+    # ── Debug: skill scoring ──────────────────────────────────────────────────
+    if verb == "/debug" and arg.lower().startswith("skill"):
+        return _handle_debug_skill(chat)
+
+    available = (
+        "/next <msg>  /retry  /authorize  /revoke  "
+        "/registry  /audit  /review  /research  /adversarial  "
+        "/budget  /status  /history [N]  /brief  "
+        "/dismiss  /workflows  /workflow save <name>  /workflow run <name>  "
+        "/debug skill"
+    )
+    return f"[dim]{_FYI} — unknown command: {verb}\nAvailable: {available}[/dim]"
+
+
+# ── Sub-handlers ──────────────────────────────────────────────────────────────
+
+def _handle_workflow(chat: "XochitlChat", arg: str) -> str:
+    from src.workflows import (
+        execute_workflow,
+        get_workflow_by_name,
+        list_workflows_formatted,
+        save_workflow_from_session,
+    )
+    if not arg:
+        return (
+            "Usage: /workflow save <name>  |  /workflow run <name>  |  /workflows\n"
+            + list_workflows_formatted(project=chat.current_project)
+        )
+    if arg.lower().startswith("save "):
+        wf_name = arg[5:].strip()
+        if not wf_name:
+            return "Usage: /workflow save <name>"
+        trigger = chat._last_user_message() or wf_name
+        try:
+            wf_id = save_workflow_from_session(
+                wf_name,
+                trigger[:240],
+                chat.session_history,
+                project=chat.current_project,
+                source="distilled",
+                use_llm_distill=True,
+            )
+            return (
+                f"Saved workflow **{wf_name}** (id {wf_id}, LLM-distilled). "
+                f"Recall: mention '{trigger[:80]}' or `/workflow run {wf_name}`"
+            )
+        except ValueError as exc:
+            return f"[dim]Could not save workflow: {exc}[/dim]"
+        except Exception as exc:
+            return f"[dim]Save failed: {exc}[/dim]"
+
+    if arg.lower().startswith("run "):
+        wf_name = arg[4:].strip()
+        if not wf_name:
+            return "Usage: /workflow run <name>"
+        wf = get_workflow_by_name(wf_name)
+        if not wf:
+            return f"No workflow named '{wf_name}'. Use `/workflows` to list."
+        chat.current_context["_chat_skills"] = chat.skills
+        return execute_workflow(
+            wf,
+            chat._last_user_message() or wf_name,
+            chat.skills,
+            chat.current_context,
+        )
+    return "[dim]Unknown /workflow subcommand. Use: save or run[/dim]"
+
+
+def _handle_status(chat: "XochitlChat") -> str:
+    """Return a system health table for /status. Implements FR-JARV-011."""
+    from src import database as _db
+
+    lines = ["[bold]System Status[/bold]", ""]
+
+    try:
+        from src.stats import health_check
+        health = health_check()
+        local_ok = health.get("local_model", False)
+        lines.append(f"  Local model   : {'[green]online[/green]' if local_ok else '[red]offline[/red]'}")
+    except Exception:
+        lines.append("  Local model   : [dim]unknown[/dim]")
+
+    cloud_ok = bool(
+        os.getenv("ANTHROPIC_API_KEY") or
+        os.getenv("GOOGLE_API_KEY") or
+        os.getenv("GEMINI_API_KEY")
+    )
+    lines.append(f"  Cloud route   : {'[green]available[/green]' if cloud_ok else '[dim]no key set[/dim]'}")
+
+    notion_ok = bool(os.getenv("NOTION_TOKEN") or os.getenv("NOTION_API_KEY"))
+    lines.append(f"  Notion        : {'[green]token set[/green]' if notion_ok else '[dim]no token[/dim]'}")
+
+    gmail_path = Path.home() / ".xochitl" / "gmail_token.json"
+    lines.append(f"  Gmail         : {'[green]token found[/green]' if gmail_path.exists() else '[dim]not configured[/dim]'}")
+    lines.append(f"  Budget        : {chat._governor.status_line()}")
+
+    try:
+        with _db.get_connection() as _conn:
+            _q = _db.get_queue(_conn)
+        lines.append(f"  WIP Queue     : {len(_q)}/3 items")
+    except Exception:
+        lines.append("  WIP Queue     : [dim]unavailable[/dim]")
+
+    try:
+        with _db.get_connection() as _conn:
+            _mf_count = _conn.execute("SELECT COUNT(*) FROM memory_facts").fetchone()[0]
+            _wf_count = _conn.execute(
+                "SELECT COUNT(*) FROM workflows WHERE superseded_by IS NULL"
+            ).fetchone()[0]
+        lines.append(f"  Memory facts  : {_mf_count} rows")
+        lines.append(f"  Workflows     : {_wf_count} saved")
+    except Exception:
+        lines.append("  Memory facts  : [dim]unavailable[/dim]")
+
+    _br = getattr(chat, "_background_review", None)
+    _br_status = "[green]active[/green]" if (_br and _br.is_alive()) else "[yellow]stopped[/yellow]"
+    lines.append(f"  Background    : {_br_status}")
+
+    try:
+        _ini = getattr(chat, "_initiative", None)
+        if _ini is not None:
+            lines.append(f"  Initiative    : {_ini.mode.value}")
+        else:
+            lines.append("  Initiative    : [dim]not loaded[/dim]")
+    except Exception:
+        lines.append("  Initiative    : [dim]unknown[/dim]")
+
+    lines.append("")
+    lines.append("[dim]Use /budget for full token breakdown.[/dim]")
+    return "\n".join(lines)
+
+
+def _handle_history(chat: "XochitlChat", n: int) -> str:
+    """Return a table of recent session context summaries. FR-HARD-008."""
+    from src import database as _db
+
+    try:
+        with _db.get_connection() as conn:
+            rows = conn.execute(
+                "SELECT id, started_at, last_active, context_summary "
+                "FROM sessions WHERE context_summary IS NOT NULL "
+                "AND context_summary != '' "
+                "ORDER BY id DESC LIMIT ?",
+                (n,),
+            ).fetchall()
+    except Exception as exc:
+        return f"[dim]Could not load session history: {exc}[/dim]"
+
+    if not rows:
+        return "[dim]No session history yet — context summaries are saved as you chat.[/dim]"
+
+    lines = [f"[bold]Last {min(n, len(rows))} sessions[/bold]", ""]
+    for row in rows:
+        started = str(row[1] or "")[:16]
+        summary = (str(row[3] or ""))[:90]
+        lines.append(f"  [dim]{started}[/dim]  {summary}")
+    lines.append("")
+    lines.append("[dim]Tip: /history 10 shows the last 10 sessions.[/dim]")
+    return "\n".join(lines)
+
+
+def _handle_debug_skill(chat: "XochitlChat") -> str:
+    """Show per-skill can_handle() scores for the last user message. AC-CR047-006."""
+    last_input = chat.current_context.get("_last_debug_input", "")
+    if not last_input:
+        for msg in reversed(chat.session_history):
+            if msg.get("role") == "user":
+                last_input = msg.get("content", "")
+                break
+    if not last_input:
+        return "[dim]No recent message to score against — say something first.[/dim]"
+
+    lines = [f"[bold]can_handle scores[/bold] for: {last_input[:80]}"]
+    rows = []
+    for skill in chat.skills:
+        try:
+            score = skill.can_handle(last_input, chat.current_context)
+        except Exception:
+            score = -1.0
+        name = type(skill).__name__
+        marker = " ← injected" if score >= _SKILL_INJECT_THRESHOLD else (
+            " ← near-miss" if score >= _OPEN_ENDED_SCORE_THRESHOLD else ""
+        )
+        rows.append((score, f"  {score:.2f}  {name}{marker}"))
+    rows.sort(key=lambda r: r[0], reverse=True)
+    lines.extend(r[1] for r in rows)
+    lines.append(
+        f"\n  inject threshold: {_SKILL_INJECT_THRESHOLD}  "
+        f"near-miss threshold: {_OPEN_ENDED_SCORE_THRESHOLD}"
+    )
+    return "\n".join(lines)

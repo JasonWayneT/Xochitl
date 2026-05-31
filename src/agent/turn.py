@@ -39,6 +39,7 @@ class AgentTurnInput:
     force_cloud: bool
     stream: bool
     context: dict = field(default_factory=dict)
+    session_history: list[dict] = field(default_factory=list)
     skill_score_cache: tuple[str, float] | None = None
     score_cache_key: tuple | None = None
 

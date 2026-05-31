@@ -94,11 +94,8 @@ def _build_preflight_facts(project: str | None = None) -> str:
     cwd = str(Path.cwd())
     project_line = f"Active Project: {project}" if project else "Active Project: none"
     try:
-        wip_count = 0
-        from src import database as _db
-        with _db.get_connection() as _conn:
-            _wip = _db.get_queue(_conn)
-        wip_count = len(_wip)
+        with db.get_connection() as _conn:
+            wip_count = db.get_wip_count(_conn)
     except Exception:
         wip_count = 0
     return (
@@ -277,36 +274,11 @@ def _resolve_file_context(query: str, history: list[dict] | None = None) -> str:
 
 def _live_db_context() -> str:
     """Return a text snapshot of current projects and queue for injection into prompts."""
-    lines = []
     try:
         with db.get_connection() as conn:
-            projects = conn.execute(
-                "SELECT name, priority, status, description FROM projects WHERE status='active' ORDER BY priority DESC"
-            ).fetchall()
-            if projects:
-                lines.append("## Active Projects (from local database)")
-                for p in projects:
-                    desc = (p["description"] or "")[:80]
-                    lines.append(f"  [{p['priority'].upper()}] {p['name']} — {desc}")
-            else:
-                lines.append("## Active Projects\n  (none — run `xochitl pull` to sync from Notion)")
-
-            queue = conn.execute("""
-                SELECT t.description, t.time_estimate_minutes, p.name as project_name, q.position
-                FROM queue q
-                JOIN tasks t ON q.task_id = t.id
-                JOIN projects p ON t.project_id = p.id
-                ORDER BY q.position
-            """).fetchall()
-            if queue:
-                lines.append("\n## Current WIP Queue")
-                for r in queue:
-                    lines.append(f"  [{r['position']}] {r['description']} ({r['time_estimate_minutes']}m | {r['project_name']})")
-            else:
-                lines.append("\n## Current WIP Queue\n  (empty — run `xochitl today` to fill)")
-    except Exception as e:
-        lines.append(f"## DB unavailable: {e}")
-    return "\n".join(lines)
+            return db.get_live_context_snapshot(conn)
+    except Exception as exc:
+        return f"## DB unavailable: {exc}"
 
 # Categories that stay local vs go to cloud
 _LOCAL_CATEGORIES = {
