@@ -208,7 +208,10 @@ class AgentPipeline:
         system_prompt = self._apply_turn_context(system_prompt, top_skill, top_score)
 
         # Stage 5 — LLM routing
-        force = "code_generation" if turn.force_cloud else None
+        # FR-ORCH-025: force_cloud wins; governor force_route applies only when
+        # no other force is set (mirrors the logic from the original _agent_loop).
+        # governor.force_route() returns "general" for LOCAL_ONLY / HARD_STOP tiers.
+        force = "code_generation" if turn.force_cloud else (turn.governor_force or None)
         _skill_was_injected = (
             top_skill is not None and top_score >= _SKILL_INJECT_THRESHOLD
         )

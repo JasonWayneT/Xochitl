@@ -1121,8 +1121,11 @@ class XochitlChat:
         """Delegate to AgentPipeline.run() and integrate TurnResult back into session state.
 
         Implements FR-ORCH-008. All pipeline logic lives in src/agent/pipeline.py.
-        This method owns response-mode announcements, governor force_route, and
-        session-history updates that require session-level state.
+        This method owns response-mode announcements, governor force_route
+        (restored: computes _gov_force from self._governor.force_route() and
+        passes it to the pipeline as AgentTurnInput.governor_force so the
+        pipeline applies it as force_route="general" for LOCAL_ONLY/HARD_STOP),
+        and session-history updates that require session-level state.
 
         Pipeline stages (see agent/pipeline.py for full implementation):
           1. BackgroundReview watchdog: restarts dead daemon, emits SYSTEM_FAILURE,
@@ -1178,7 +1181,11 @@ class XochitlChat:
         messages = cm.assemble_messages(self._clean_history(), user_input, tag_provenance=True)
 
         # FR-ORCH-025: governor routing constraint — local only / hard stop.
+        # force_cloud wins over governor; governor only applies when force_cloud is False.
+        # governor.force_route() returns "general" (local-routed category) for
+        # LOCAL_ONLY and HARD_STOP tiers; None for FULL and PREFER_LOCAL.
         force_cloud = self.force_cloud
+        _gov_force = self._governor.force_route() if not force_cloud else None
 
         turn = AgentTurnInput(
             user_input=user_input,
@@ -1190,6 +1197,7 @@ class XochitlChat:
             stream=_stream,
             context=self.current_context,
             session_history=self.session_history,
+            governor_force=_gov_force,
         )
 
         result = self._pipeline.run(turn, _status=_status)

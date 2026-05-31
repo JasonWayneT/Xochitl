@@ -42,6 +42,7 @@ class AgentTurnInput:
     session_history: list[dict] = field(default_factory=list)
     skill_score_cache: tuple[str, float] | None = None
     score_cache_key: tuple | None = None
+    governor_force: str | None = None  # FR-ORCH-025: force_route from SessionGovernor
 
 
 @dataclass
