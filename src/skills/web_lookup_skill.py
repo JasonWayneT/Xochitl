@@ -14,14 +14,37 @@ from src.skills.base import Skill
 
 
 _WEB_KEYWORDS = (
-    "weather",
-    "forecast",
-    "temperature",
     "look it up",
     "search the web",
+    "search for",
     "internet",
     "online",
     "latest news",
+    "current news",
+    "look up",
+    "find out",
+    "research",
+)
+
+# Factual question prefixes that suggest a live internet lookup is needed.
+_FACTUAL_PREFIXES = (
+    "how much",
+    "how many",
+    "what is the",
+    "what are the",
+    "who is",
+    "who was",
+    "when did",
+    "when was",
+    "where is",
+    "why does",
+    "why is",
+    "how does",
+    "how do",
+    "what does",
+    "is it true",
+    "can you tell me",
+    "do you know",
 )
 
 _LOG_DIR = Path(".sdd") / "logs"
@@ -43,6 +66,8 @@ class WebLookupSkill(Skill):
         q = user_input.lower()
         if any(k in q for k in _WEB_KEYWORDS):
             return 0.85
+        if any(q.startswith(p) or f" {p}" in q for p in _FACTUAL_PREFIXES):
+            return 0.60
         return 0.0
 
     def suggest(self, user_input: str, context: dict) -> str:
@@ -51,17 +76,18 @@ class WebLookupSkill(Skill):
     def tool_definition(self) -> dict:
         return {
             "name": "WebLookupSkill",
-            "description": "Searches the public internet and summarizes results for live questions like weather and current events.",
-            "when": "user asks for weather, forecast, latest/current information, or explicitly asks to search online",
+            "description": "Searches the public internet and summarizes results for any factual, current-events, or research question.",
+            "when": "user asks a factual question, wants to look something up, asks about current events, products, people, places, or any topic that benefits from a live internet search",
             "params": {
                 "query": "Search query text",
             },
             "examples": [
+                "how much alcohol does Bud Light Platinum have?",
                 "search the web for latest AI news",
                 "look up how to fix a Python import error",
-                "find current information about climate change",
+                "who is the current CEO of Apple?",
                 "what's happening in the news today?",
-                "search online for the best Python testing frameworks",
+                "how many calories are in a Big Mac?",
             ],
         }
 

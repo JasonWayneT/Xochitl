@@ -196,9 +196,12 @@ class WeatherSkill(Skill):
             context["weather_error_type"] = "missing_location"
             return "I can check the weather, but I need a location first. You can say something like `remember that my default weather location is San Diego County, CA`."
 
+        target_day = self._parse_target_day(user_input)
+        forecast_days = target_day + 2  # fetch enough days (min 2 for tomorrow)
+
         try:
             place = self._geocode(location)
-            forecast = self._forecast(place["latitude"], place["longitude"])
+            forecast = self._forecast(place["latitude"], place["longitude"], forecast_days=forecast_days)
         except Exception as exc:
             context["last_skill_success"] = False
             context["weather_error_type"] = "api"
@@ -207,7 +210,7 @@ class WeatherSkill(Skill):
         context["last_skill_success"] = True
         context["last_weather_location"] = self._format_place(place)
         context.pop("weather_error_type", None)
-        return self._format_weather(place, forecast)
+        return self._format_weather(place, forecast, target_day=target_day, original_query=user_input)
 
     def _geocode(self, location: str) -> dict:
         city_part, country_code = self._split_country(location)
@@ -226,7 +229,7 @@ class WeatherSkill(Skill):
             raise GeocodingError(f"location result for {location!r} did not include coordinates")
         return first
 
-    def _forecast(self, latitude: float, longitude: float) -> dict:
+    def _forecast(self, latitude: float, longitude: float, forecast_days: int = 1) -> dict:
         params = {
             "latitude": latitude,
             "longitude": longitude,
@@ -251,7 +254,7 @@ class WeatherSkill(Skill):
             "wind_speed_unit": "mph",
             "precipitation_unit": "inch",
             "timezone": "auto",
-            "forecast_days": 1,
+            "forecast_days": max(1, forecast_days),
         }
         return self._fetch_json(f"{_FORECAST_URL}?{urlencode(params)}")
 
@@ -383,32 +386,88 @@ class WeatherSkill(Skill):
             parts.append(country)
         return ", ".join(p for p in parts if p)
 
-    def _format_weather(self, place: dict, forecast: dict) -> str:
+    def _format_weather(
+        self,
+        place: dict,
+        forecast: dict,
+        target_day: int = 0,
+        original_query: str = "",
+    ) -> str:
         current = forecast.get("current") or {}
         daily = forecast.get("daily") or {}
         current_units = forecast.get("current_units") or {}
         daily_units = forecast.get("daily_units") or {}
 
-        condition = _WEATHER_CODES.get(int(current.get("weather_code", -1)), "weather code unknown")
-        today_code = self._first(daily.get("weather_code"))
-        today_condition = _WEATHER_CODES.get(int(today_code), condition) if today_code is not None else condition
-
-        temp_unit = current_units.get("temperature_2m", "F")
+        temp_unit = current_units.get("temperature_2m", "°F")
         wind_unit = self._normalize_unit(current_units.get("wind_speed_10m", "mph"))
         precip_unit = self._normalize_unit(current_units.get("precipitation", "in"))
         high_unit = daily_units.get("temperature_2m_max", temp_unit)
 
-        lines = [
-            f"Weather for {self._format_place(place)}:",
-            f"- Current: {self._fmt(current.get('temperature_2m'))}{temp_unit}, {condition}; feels like {self._fmt(current.get('apparent_temperature'))}{temp_unit}.",
-            f"- Today: high {self._fmt(self._first(daily.get('temperature_2m_max')))}{high_unit}, low {self._fmt(self._first(daily.get('temperature_2m_min')))}{high_unit}; {today_condition}.",
-            f"- Wind: {self._fmt(current.get('wind_speed_10m'))} {wind_unit} {self._compass(current.get('wind_direction_10m'))}, gusts to {self._fmt(current.get('wind_gusts_10m'))} {wind_unit}.",
-            f"- Humidity: {self._fmt(current.get('relative_humidity_2m'), decimals=0)}%; cloud cover {self._fmt(current.get('cloud_cover'), decimals=0)}%.",
-            f"- Precipitation: {self._fmt(current.get('precipitation'))} {precip_unit}; today chance {self._fmt(self._first(daily.get('precipitation_probability_max')), decimals=0)}%.",
-            "",
-            "Source: Open-Meteo.",
-        ]
+        place_name = self._format_place(place)
+
+        def _nth(key: str, idx: int):
+            val = daily.get(key)
+            if isinstance(val, list) and len(val) > idx:
+                return val[idx]
+            return None
+
+        if target_day == 0:
+            # Current conditions + today's daily summary
+            condition = _WEATHER_CODES.get(int(current.get("weather_code", -1)), "unknown conditions")
+            today_code = _nth("weather_code", 0)
+            day_condition = _WEATHER_CODES.get(int(today_code), condition) if today_code is not None else condition
+            hi = self._fmt(_nth("temperature_2m_max", 0))
+            lo = self._fmt(_nth("temperature_2m_min", 0))
+            rain_pct = self._fmt(_nth("precipitation_probability_max", 0), decimals=0)
+            feels = self._fmt(current.get("apparent_temperature"))
+            temp = self._fmt(current.get("temperature_2m"))
+            wind = self._fmt(current.get("wind_speed_10m"))
+            direction = self._compass(current.get("wind_direction_10m"))
+            gusts = self._fmt(current.get("wind_gusts_10m"))
+            humidity = self._fmt(current.get("relative_humidity_2m"), decimals=0)
+
+            lines = [
+                f"Right now in {place_name} it's {temp}{temp_unit} and {condition} — feels like {feels}{temp_unit}.",
+                f"Today's looking like a high of {hi}{high_unit} and a low of {lo}{high_unit} with {day_condition}.",
+                f"Wind is {wind} {wind_unit} {direction} with gusts up to {gusts} {wind_unit}, humidity at {humidity}%, and a {rain_pct}% chance of rain.",
+                "",
+                "Source: Open-Meteo.",
+            ]
+        else:
+            # Future day — use daily data only, no current conditions
+            day_label = {1: "Tomorrow", 2: "Day after tomorrow"}.get(target_day, f"In {target_day} days")
+            day_code = _nth("weather_code", target_day)
+            day_condition = _WEATHER_CODES.get(int(day_code), "unknown conditions") if day_code is not None else "unknown conditions"
+            hi = self._fmt(_nth("temperature_2m_max", target_day))
+            lo = self._fmt(_nth("temperature_2m_min", target_day))
+            rain_pct = self._fmt(_nth("precipitation_probability_max", target_day), decimals=0)
+
+            lines = [
+                f"{day_label} in {place_name} should be {day_condition}, with a high of {hi}{high_unit} and a low of {lo}{high_unit}.",
+                f"There's a {rain_pct}% chance of rain.",
+                "",
+                "Source: Open-Meteo.",
+            ]
+
         return "\n".join(lines)
+
+    @staticmethod
+    def _parse_target_day(query: str) -> int:
+        """Return 0 for today, 1 for tomorrow, 2+ for further days."""
+        import datetime
+        q = query.lower()
+        if "tomorrow" in q:
+            return 1
+        if "day after tomorrow" in q:
+            return 2
+        # Named weekday: "weather on friday"
+        days = ("monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday")
+        for i, day in enumerate(days):
+            if day in q:
+                today_idx = datetime.date.today().weekday()
+                delta = (i - today_idx) % 7
+                return delta if delta > 0 else 7  # if same weekday, assume next week
+        return 0
 
     @staticmethod
     def _first(value):

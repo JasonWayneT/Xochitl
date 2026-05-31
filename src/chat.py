@@ -347,11 +347,9 @@ _SKILL_CALL_RE = re.compile(
 
 
 def _parse_skill_calls(response: str) -> list[tuple[str, dict]]:
-    """Extract all <skill_call name="X">{...}</skill_call> blocks from an LLM response.
+    """Extract all <skill_call> blocks from an LLM response. FR-PERF-007 (CR-050 C3).
 
-    FR-PERF-007 (CR-050 C3): extends FR-ORCH-008 to return ALL skill calls rather
-    than only the first match. Each entry is (skill_name, params).
-    Tolerant of missing/malformed JSON in the body.
+    Delegates to src.agent.skill_parser for testable pure-function implementation.
 
     Args:
         response: Full LLM response text.
@@ -359,22 +357,14 @@ def _parse_skill_calls(response: str) -> list[tuple[str, dict]]:
     Returns:
         Ordered list of (skill_name, params_dict) tuples; empty when none found.
     """
-    results = []
-    for skill_name, body in _SKILL_CALL_RE.findall(response):
-        body = body.strip()
-        try:
-            params = json.loads(body) if body else {}
-        except json.JSONDecodeError:
-            params = {}
-        results.append((skill_name, params))
-    return results
+    from src.agent.skill_parser import parse_skill_calls
+    return parse_skill_calls(response)
 
 
 def _parse_skill_call(response: str) -> Optional[tuple[str, dict]]:
-    """Extract the first <skill_call name="X">{...}</skill_call> from an LLM response.
+    """Extract the first <skill_call> from an LLM response. Backward-compatible shim.
 
-    Implements FR-ORCH-008. Returns (skill_name, params) or None.
-    Backward-compatible wrapper around _parse_skill_calls().
+    Implements FR-ORCH-008.
     """
     calls = _parse_skill_calls(response)
     return calls[0] if calls else None
@@ -475,8 +465,11 @@ class XochitlChat:
         self.session_id: Optional[int] = None
         self.current_project: Optional[str] = None
 
+        # Skills are now managed by SkillRegistry (src/skills/__init__.py).
+        # _builtin_skills and _skills retained as Optional stubs for any test
+        # shims that set them directly; the skills property ignores them now.
         self._builtin_skills: Optional[list[Skill]] = None
-        self._skills: Optional[list[Skill]] = None  # Backward-compatible test hook.
+        self._skills: Optional[list[Skill]] = None
 
         # FR-UI-002: Smart Ctrl-C — track last interrupt time for 2-stage exit
         self._last_interrupt: float = 0.0
@@ -540,44 +533,18 @@ class XochitlChat:
         self._cm_cache_key: Optional[tuple] = None
         self._last_mutating_skill: str = ""
 
+        # SkillScorer: created once per session, caches scores per input hash.
+        from src.agent.skill_scorer import SkillScorer
+        self._skill_scorer: SkillScorer = SkillScorer(
+            self.skills, threshold=_SKILL_INJECT_THRESHOLD
+        )
+
     @property
     def skills(self) -> list[Skill]:
-        if getattr(self, "_skills", None) is not None:
-            return self._skills or []
-
-        if getattr(self, "_builtin_skills", None) is None:
-            from src.skills.bmad_skill import BMADSkill
-            from src.skills.sdd_skill import SDDSkill
-            from src.skills.code_skill import CodeSkill
-            from src.skills.notion_skill import NotionSkill
-            from src.skills.orchestrator_skill import OrchestratorSkill
-            from src.skills.weather_skill import WeatherSkill
-            from src.skills.web_lookup_skill import WebLookupSkill
-            from src.skills.zettelkasten_skill import ZettelkastenSkill
-            from src.skills.explorer_skill import ExplorerSkill  # FR-ORCH-041
-            from src.skills.workflow_skill import WorkflowSkill  # FR-MEM-014 / CR-042
-            from src.skills.maps_skill import MapsSkill          # FR-MAPS-001 / CR-045
-            from src.skills.gmail_skill import GmailSkill        # FR-GMAIL-001 / CR-046a
-            self._builtin_skills = [
-                BMADSkill(), SDDSkill(), CodeSkill(), NotionSkill(), OrchestratorSkill(),
-                WeatherSkill(), WebLookupSkill(), ZettelkastenSkill(), ExplorerSkill(),
-                WorkflowSkill(), MapsSkill(), GmailSkill(),
-            ]
-
-        from src.skills.dynamic_skill import load_dynamic_skills
-        all_skills = (self._builtin_skills or []) + load_dynamic_skills(self.current_project)
-        # FR-HARD-007: rebuild name index whenever skill list is recomputed.
-        self._skill_name_index: dict[str, Skill] = {}
-        for _s in all_skills:
-            try:
-                _defn = _s.tool_definition()
-                _key = _defn.get("name", "").lower()
-                if _key:
-                    self._skill_name_index[_key] = _s
-            except Exception:
-                pass
-            self._skill_name_index[type(_s).__name__.lower()] = _s
-        return all_skills
+        # FR-HARD-007: delegate to SkillRegistry; dynamic skills added via reload_dynamic().
+        from src.skills import _registry
+        _registry.reload_dynamic(self.current_project)
+        return _registry.all()
 
     # ── Public interface ──────────────────────────────────────────────────────
 
@@ -1083,59 +1050,13 @@ class XochitlChat:
         Returns:
             Skill output string, or a user-visible timeout error message.
         """
-        # FR-PERF-005: read per-skill timeout from tool_definition(); fall back to 30s default.
-        try:
-            timeout = float(skill.tool_definition().get("timeout_secs", timeout))
-        except Exception:
-            pass
-        import queue as _q
-        import logging as _lg
-        _timeout_log = _lg.getLogger("xochitl.skill_timeout")
-        result_q: _q.Queue = _q.Queue()
-
-        def _worker() -> None:
-            try:
-                result_q.put(("ok", skill.execute(user_input, context, params)))
-            except Exception as exc:
-                result_q.put(("err", str(exc)))
-
-        t = threading.Thread(target=_worker, daemon=True)
-        t.start()
-        t.join(timeout=timeout)
-
-        if t.is_alive():
-            skill_name = type(skill).__name__
-            _timeout_log.warning(
-                "skill_timeout skill=%s timeout=%.0fs", skill_name, timeout
-            )
-            # FR-RELY-004 (CR-050 D1): give the skill 5s to release its resources.
-            def _safe_cleanup() -> None:
-                try:
-                    skill.cleanup()
-                except Exception:
-                    pass
-            _ct = threading.Thread(target=_safe_cleanup, daemon=True)
-            _ct.start()
-            _ct.join(timeout=5.0)
-            context["last_skill_timeout"] = True
-            return (
-                f"[dim]{_ERR} — {skill_name} took longer than {int(timeout)}s to respond. "
-                f"The skill may be waiting on an external API. "
-                f"Please try again or check your connection.[/dim]"
-            )
-
-        context["last_skill_timeout"] = False
-        try:
-            status, value = result_q.get_nowait()
-        except _q.Empty:
-            return f"[dim]{_ERR} — skill returned no result.[/dim]"
-
-        if status == "err":
-            return f"[dim]{_ERR} — skill error: {value}[/dim]"
-
+        # Delegates to src.agent.skill_dispatcher for testable execution + timeout logic.
+        # FR-PERF-005, FR-RELY-004 (CR-050 A7, D1).
+        from src.agent.skill_dispatcher import dispatch as _dispatch
+        result = _dispatch(skill, params, user_input, context, timeout_secs=timeout)
         # FR-PERF-002 (CR-050 B2): mark skill as last mutating so CM cache key invalidates.
         self._last_mutating_skill = type(skill).__name__
-        return value or ""
+        return result
 
     def _emit_action_line(self, label: str) -> None:
         from src.action_disclosure import action_summary
@@ -1269,49 +1190,15 @@ class XochitlChat:
             pass
 
         # ── Phase 2: deterministic skill scoring pre-turn ─────────────────────
-        # FR-PERF-003 (CR-050 B3): score all skills concurrently via ThreadPoolExecutor
-        # with a 100ms total timeout.  A per-turn hash cache avoids re-scoring when
-        # _agent_loop() is called twice for the same input (e.g. staged messages).
-        top_skill = None
-        top_score = 0.0
+        # FR-PERF-003 (CR-050 B3): delegated to SkillScorer (src/agent/skill_scorer.py).
+        # The scorer runs concurrently via ThreadPoolExecutor with a 100ms timeout and
+        # caches results per input hash to avoid re-scoring staged messages.
         _skills_snap = self.skills
+        self._skill_scorer.update_skills(_skills_snap)
         _score_key = (hash(user_input), len(_skills_snap))
-        _cache: Optional[tuple] = getattr(self, "_skill_score_cache", None)
-        _cache_key = getattr(self, "_skill_score_cache_key", None)
-
-        if _cache is not None and _cache_key == _score_key:
-            _cached_name, top_score = _cache
-            top_skill = next((s for s in _skills_snap if type(s).__name__ == _cached_name), None)
-        else:
-            # Reset stale cache entry at start of each scoring pass.
-            self._skill_score_cache = None
-            self._skill_score_cache_key = None
-
-            def _score_one(skill: Skill) -> tuple[Skill, float]:
-                try:
-                    return skill, skill.can_handle(user_input, self.current_context)
-                except Exception:
-                    return skill, 0.0
-
-            _max_workers = min(len(_skills_snap), 8) if _skills_snap else 1
-            try:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=_max_workers) as _pool:
-                    _futs = {_pool.submit(_score_one, sk): sk for sk in _skills_snap}
-                    for _fut in concurrent.futures.as_completed(_futs, timeout=0.10):
-                        try:
-                            _sk, _sc = _fut.result(timeout=0)
-                        except Exception:
-                            continue
-                        if _sc > top_score:
-                            top_score = _sc
-                            top_skill = _sk
-            except concurrent.futures.TimeoutError:
-                pass  # partial results — use whatever scored in time
-
-            # Cache result for potential same-input re-entry this session turn.
-            if top_skill is not None:
-                self._skill_score_cache = (type(top_skill).__name__, top_score)
-                self._skill_score_cache_key = _score_key
+        top_skill, top_score, _score_key = self._skill_scorer.score(
+            user_input, self.current_context, score_key=_score_key
+        )
 
         if top_skill is not None and top_score >= _SKILL_INJECT_THRESHOLD:
             defn = top_skill.tool_definition()
@@ -1664,8 +1551,7 @@ class XochitlChat:
     def _find_skill_by_name(self, name: str) -> Optional[Skill]:
         """Look up a skill by tool_definition name or class name. FR-HARD-007.
 
-        Uses a pre-built name index (populated by the `skills` property) for O(1)
-        lookup instead of calling tool_definition() on every skill on every call.
+        Delegates to SkillRegistry.by_name() for O(1) lookup.
 
         Args:
             name: Skill name to look up (case-insensitive).
@@ -1673,10 +1559,8 @@ class XochitlChat:
         Returns:
             Matching Skill instance, or None if no skill has that name.
         """
-        # Ensure skills property has been accessed (builds _skill_name_index).
-        _ = self.skills
-        index = getattr(self, "_skill_name_index", {})
-        return index.get(name.lower())
+        from src.skills import _registry
+        return _registry.by_name(name)
 
     # ── Post-execution reflection/critic (CR-019) ─────────────────────────────
 

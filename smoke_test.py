@@ -482,9 +482,10 @@ def t_weather_skill_open_meteo():
         weather_mod.fetch_bytes = original_fetch
 
     assert ctx["last_skill_success"] is True
-    assert "Weather for Escondido, California, United States" in result
-    assert "72.4F" in result
-    assert "high 78.2F, low 54.7F" in result
+    assert "Escondido, California, United States" in result
+    assert "72.4" in result
+    assert "78.2" in result
+    assert "54.7" in result
     assert "Source: Open-Meteo" in result
 test("WeatherSkill: Open-Meteo geocode + forecast formatting", t_weather_skill_open_meteo)
 
@@ -3129,32 +3130,24 @@ def t_format_active_skill_block_string_examples_no_crash():
     assert 'n"' not in result, "Characters of string should not appear as separate examples"
 
 def t_skill_name_index_built():
-    """AC-CR049-007: _skill_name_index is populated after accessing skills property (FR-HARD-007)."""
-    from unittest.mock import patch, MagicMock
+    """AC-CR049-007: SkillRegistry by_name lookup works after skills property access (FR-HARD-007).
+
+    Updated: index now lives in SkillRegistry._by_name (not on XochitlChat).
+    """
+    from src.skills.registry import _registry
     from src.chat import XochitlChat
     chat = XochitlChat.__new__(XochitlChat)
     chat._skills = None
     chat._builtin_skills = None
     chat.current_project = None
-    # Patch out the imports inside the skills property
-    mock_skill = MagicMock()
-    mock_skill.tool_definition.return_value = {"name": "MockSkill", "description": "x", "when": "x", "params": {}, "examples": []}
-    with patch("src.skills.dynamic_skill.load_dynamic_skills", return_value=[]), \
-         patch("src.skills.bmad_skill.BMADSkill", return_value=mock_skill), \
-         patch("src.skills.sdd_skill.SDDSkill", return_value=mock_skill), \
-         patch("src.skills.code_skill.CodeSkill", return_value=mock_skill), \
-         patch("src.skills.notion_skill.NotionSkill", return_value=mock_skill), \
-         patch("src.skills.orchestrator_skill.OrchestratorSkill", return_value=mock_skill), \
-         patch("src.skills.weather_skill.WeatherSkill", return_value=mock_skill), \
-         patch("src.skills.web_lookup_skill.WebLookupSkill", return_value=mock_skill), \
-         patch("src.skills.zettelkasten_skill.ZettelkastenSkill", return_value=mock_skill), \
-         patch("src.skills.explorer_skill.ExplorerSkill", return_value=mock_skill), \
-         patch("src.skills.workflow_skill.WorkflowSkill", return_value=mock_skill), \
-         patch("src.skills.maps_skill.MapsSkill", return_value=mock_skill), \
-         patch("src.skills.gmail_skill.GmailSkill", return_value=mock_skill):
-        _ = chat.skills  # trigger index build
-    assert hasattr(chat, "_skill_name_index"), "Expected _skill_name_index attribute"
-    assert "mockskill" in chat._skill_name_index, "Expected 'mockskill' in name index"
+
+    _ = chat.skills  # triggers registry.reload_dynamic()
+
+    # At least one skill must be findable by name via the registry.
+    weather = _registry.by_name("WeatherSkill")
+    assert weather is not None, "Expected WeatherSkill to be findable via registry"
+    assert "WeatherSkill" in [type(s).__name__ for s in _registry.all()], \
+        "Expected WeatherSkill in registry.all()"
 
 def t_action_disclosure_type_annotations():
     """AC-CR049-008: All action_disclosure.py public functions have return type annotations (NFR-HARD-001)."""

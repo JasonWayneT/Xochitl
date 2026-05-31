@@ -234,6 +234,10 @@ class BackgroundReview:
         except queue.Full:
             pass  # queue full — drop silently, never block
 
+    def is_alive(self) -> bool:
+        """Return True if the daemon thread is running and alive."""
+        return self._running and self._thread is not None and self._thread.is_alive()
+
     def shutdown(self, timeout: float = 2.0) -> None:
         """Signal the worker to stop and wait briefly for it to drain."""
         if not self._running:
