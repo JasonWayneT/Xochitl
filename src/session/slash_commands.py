@@ -14,11 +14,7 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from src.chat import XochitlChat
 
-_FYI = "Fíjate"
-
-# Skill scoring thresholds mirrored from chat.py constants.
-_SKILL_INJECT_THRESHOLD = 0.65
-_OPEN_ENDED_SCORE_THRESHOLD = 0.2
+from src.constants import _FYI, _SKILL_INJECT_THRESHOLD, _OPEN_ENDED_SCORE_THRESHOLD
 
 
 def handle_slash_command(raw: str, chat: "XochitlChat") -> str:

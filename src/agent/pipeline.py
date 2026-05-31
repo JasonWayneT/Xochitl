@@ -6,11 +6,16 @@ testable without a full chat session object.
 Pipeline stages (in order):
   1. BackgroundReview watchdog
   2. Observability trace-id
-  3. Response-mode inference + announcement
-  4. System-prompt assembly (workflow recall, skill scoring, context injection)
+  3. System-prompt decoration (drift reminder, initiative signals, workflow recall)
+  4. Skill scoring + schema injection
   5. LLM routing (streaming or non-streaming)
   6. Skill-call parsing + dispatch (with approval gate)
   7. Post-execution critique (optional)
+
+Note: response-mode inference and mode-transition announcements are handled
+by XochitlChat._agent_loop before pipeline.run() is called, since they require
+session-level state (_current_mode).  The pipeline receives the fully assembled
+system_prompt via AgentTurnInput.system_prompt.
 
 Returns TurnResult consumed by XochitlChat.
 
@@ -20,7 +25,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 import time
 from typing import TYPE_CHECKING, Optional
 
@@ -36,30 +40,22 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("xochitl.agent.pipeline")
 
-# Skill injection threshold — must match chat.py constant.
-_SKILL_INJECT_THRESHOLD = 0.65
-_OPEN_ENDED_SCORE_THRESHOLD = 0.2
-
-# Regex used to strip <skill_call> tags from visible output.
-_SKILL_CALL_RE = re.compile(
-    r'<skill_call\s+name=["\'](\w+)["\']>(.*?)</skill_call>',
-    re.DOTALL | re.IGNORECASE,
+from src.constants import (
+    _SKILL_INJECT_THRESHOLD,
+    _OPEN_ENDED_SCORE_THRESHOLD,
+    _SKILL_CALL_RE,
+    _ERR,
+    _FYI,
+    _MUTATING_SKILL_ACTIONS,
+    _ALWAYS_APPROVE,
 )
 
-_ERR = "Ay no"
-_FYI = "Fíjate"
 
-# Skill actions that require user approval before execution.
-_MUTATING_SKILL_ACTIONS: dict[str, set[str]] = {
-    "BMADSkill": {"init_project", "save_bmad_artifact"},
-    "SDDSkill": {"generate_specs", "create_requirement", "create_issue", "update_requirement", "close_issue"},
-    "CodeSkill": {"scaffold", "implement", "fix", "tests", "test"},
-}
-
-# Approval requirement by skill name (regardless of action param).
-_ALWAYS_APPROVE: frozenset[str] = frozenset({"NotionSkill", "CodeSkill"})
-
-
+# NOTE: _format_active_skill_block is intentionally duplicated in src/chat.py.
+# The chat.py copy is the test-imported canonical (smoke test AC-CR049-006
+# does `from src.chat import _format_active_skill_block`).
+# Keep the isinstance(examples, list) guard in sync between both copies.
+# TODO: consolidate into src/skill_format.py once a shared utilities module exists.
 def _format_active_skill_block(defn: dict) -> str:
     """Format one skill's tool_definition() as a per-turn system prompt block."""
     name = defn.get("name", "")
@@ -122,12 +118,17 @@ def _risk_label(skill_name: str) -> str:
 
 
 class AgentPipeline:
-    """Stateless per-turn pipeline.  Call run() once per agent turn.
+    """Per-turn agent pipeline.  Call run() once per agent turn.
 
-    The pipeline is intentionally stateless — all session state is passed in
-    via AgentTurnInput and returned via TurnResult.  Side effects (console
-    output, event emission, context mutation) happen inside run() but are
-    bounded and documented.
+    **Side effects** (not stateless):
+    - Mutates ``turn.context`` and ``turn.session_history`` in-place
+      (skills write results directly into the shared session dicts).
+    - May replace ``self._background_review`` when a dead daemon is restarted;
+      the caller (XochitlChat._agent_loop) syncs this back after run() returns.
+
+    All other inputs are passed through AgentTurnInput and outputs returned
+    in TurnResult so the pipeline can be constructed and tested without a
+    full XochitlChat session object.
 
     Args:
         router: TieredRouter instance shared with the session.
@@ -187,27 +188,21 @@ class AgentPipeline:
         _trace_id = _sec.token_hex(6)
         _events.emit("routing_started", {"query": turn.user_input[:100], "trace_id": _trace_id})
 
-        # Stage 3 — response mode inference
-        system_prompt, _new_mode = self._apply_response_mode(turn)
-
-        # Stage 4a — identity drift reminder
+        # Stage 3 — system-prompt decoration (drift reminder, initiative, workflow)
+        system_prompt = turn.system_prompt  # already assembled by _agent_loop with mode
         system_prompt = self._apply_drift_reminder(system_prompt)
-
-        # Stage 4b — proactive initiative signals
         system_prompt = self._apply_initiative_signals(system_prompt)
-
-        # Stage 4c — workflow recall
         system_prompt = self._apply_workflow_recall(turn, system_prompt, _status)
 
-        # Stage 4d — skill scoring + injection
+        # Stage 4 — skill scoring + injection
         system_prompt, top_skill, top_score, score_key = self._apply_skill_scoring(
             turn, system_prompt, _status
         )
 
-        # Stage 4e — turn context block (near-miss / complete-miss)
+        # Stage 5a — turn context block (near-miss / complete-miss)
         system_prompt = self._apply_turn_context(system_prompt, top_skill, top_score)
 
-        # Stage 5 — LLM routing
+        # Stage 5b — LLM routing
         # FR-ORCH-025: force_cloud wins; governor force_route applies only when
         # no other force is set (mirrors the logic from the original _agent_loop).
         # governor.force_route() returns "general" for LOCAL_ONLY / HARD_STOP tiers.
@@ -231,7 +226,7 @@ class AgentPipeline:
                 new_score_cache_key=score_key,
             )
 
-        # Stage 6 — skill-call dispatch
+        # Stage 6 — skill-call parsing + dispatch
         skill_calls = parse_skill_calls(response_text)
         visible = _SKILL_CALL_RE.sub("", response_text).strip()
         tool_calls_made = False
@@ -356,19 +351,6 @@ class AgentPipeline:
                 })
             except Exception:
                 pass
-
-    def _apply_response_mode(self, turn: AgentTurnInput) -> tuple[str, str]:
-        """Infer response mode and assemble system prompt."""
-        try:
-            from src.response_mode import infer_mode as _infer_mode
-            _new_mode = _infer_mode(turn.user_input)
-        except ImportError:
-            _new_mode = "conversational"
-
-        # The caller (chat.py) handles the mode-transition announcement since it
-        # owns the console and tracks _current_mode across turns.
-        system_prompt = turn.system_prompt
-        return system_prompt, _new_mode
 
     def _apply_drift_reminder(self, system_prompt: str) -> str:
         if self._drift_reminder and self._background_review and \

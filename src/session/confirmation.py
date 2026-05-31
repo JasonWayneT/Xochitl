@@ -13,11 +13,7 @@ from typing import TYPE_CHECKING, Callable, Optional
 if TYPE_CHECKING:
     from src.router import TieredRouter
 
-_OK = "Claro"
-_ERR = "Ay no"
-
-_CONFIRM_YES = {"yes", "y", "ok", "sure", "yeah", "yep", "do it", "go ahead"}
-_CONFIRM_NO = {"no", "n", "nope", "cancel", "nevermind", "stop", "don't"}
+from src.constants import _OK, _ERR, _CONFIRM_YES, _CONFIRM_NO
 
 
 class PendingAction(str, Enum):

@@ -101,10 +101,19 @@ from src.skills.base import Skill
 _TERM_DUMB = os.getenv("TERM", "").lower() == "dumb"
 console = Console(markup=not _TERM_DUMB, highlight=not _TERM_DUMB)
 
-# Implements FR-UX-002 — Spanish vocabulary constants mirroring SOUL.md palette
-_OK  = "Claro"    # success / acknowledged
-_FYI = "Fíjate"  # informational flag — "look here"
-_ERR = "Ay no"   # error / blocked
+# FR-UX-002: Spanish vocabulary + shared constants — imported from constants.py.
+# Re-exported here so ``from src.chat import _OK`` etc. continues to work for
+# any caller (tests, session modules) that imports these names from this module.
+# Do NOT remove these imports without updating all downstream import sites.
+from src.constants import (
+    _OK, _FYI, _ERR,
+    _CONFIRM_YES, _CONFIRM_NO,
+    _SKILL_CALL_RE,
+    _SKILL_INJECT_THRESHOLD,
+    _OPEN_ENDED_SCORE_THRESHOLD,
+    _MUTATING_SKILL_ACTIONS,
+    _ALWAYS_APPROVE,
+)
 
 _PROJECT_ROOT = Path(__file__).parent.parent
 
@@ -303,8 +312,7 @@ def _print_boot_banner(con: Console) -> None:
     con.print()
 
 
-_CONFIRM_YES = {"yes", "y", "ok", "sure", "yeah", "yep", "do it", "go ahead"}
-_CONFIRM_NO  = {"no", "n", "nope", "cancel", "nevermind", "stop", "don't"}
+# _CONFIRM_YES / _CONFIRM_NO imported from src.constants above.
 
 _TASK_KEYWORDS    = ["task", "queue", "what's on my plate", "what am i working on", "blocked", "in progress", "today"]
 _BG_KEYWORDS      = ["background", "orchestrator", "delegated task", "how is the agent", "what are background"]
@@ -340,10 +348,7 @@ _RESEARCH_KEYWORDS = [
 # Matches "@GmailSkill ...", "@gmail ...", "@maps ..." at start of message.
 _AT_SKILL_RE = re.compile(r'^@(\w+)\b', re.IGNORECASE)
 
-_SKILL_CALL_RE = re.compile(
-    r'<skill_call\s+name=["\'](\w+)["\']>(.*?)</skill_call>',
-    re.DOTALL | re.IGNORECASE,
-)
+# _SKILL_CALL_RE imported from src.constants above.
 
 
 def _parse_skill_calls(response: str) -> list[tuple[str, dict]]:
@@ -370,20 +375,15 @@ def _parse_skill_call(response: str) -> Optional[tuple[str, dict]]:
     return calls[0] if calls else None
 
 
-_MUTATING_SKILL_ACTIONS = {
-    "BMADSkill": {"init_project", "save_bmad_artifact"},
-    "SDDSkill": {"generate_specs", "create_requirement", "create_issue", "update_requirement", "close_issue"},
-    "CodeSkill": {"scaffold", "implement", "fix", "tests", "test"},
-}
+# _MUTATING_SKILL_ACTIONS, _SKILL_INJECT_THRESHOLD, _OPEN_ENDED_SCORE_THRESHOLD
+# imported from src.constants above.
 
 # Phase 2: minimum can_handle() score to inject a skill into the system prompt.
 # Matches the 0.6 suggestion threshold from Skill base docstring with a small buffer.
-_SKILL_INJECT_THRESHOLD = 0.65
+# Value: _SKILL_INJECT_THRESHOLD = 0.65  (defined in src/constants.py)
 
 # CR-032: skill-score threshold below which intent is considered open-ended.
-# When top_score < this, _agent_loop injects a [TURN CONTEXT] note reminding the
-# model to apply calibrated [UNCERTAINTY TIERS] vocabulary for this turn.
-_OPEN_ENDED_SCORE_THRESHOLD = 0.2
+# Value: _OPEN_ENDED_SCORE_THRESHOLD = 0.2  (defined in src/constants.py)
 
 # CR-033: identity reminder injected into system prompt when drift is detected.
 # Placed at prompt end so transformer recency bias amplifies its effect (FR-ORCH-043).
@@ -397,6 +397,11 @@ _DRIFT_IDENTITY_REMINDER: str = (
 )
 
 
+# NOTE: _format_active_skill_block is the test-imported canonical location.
+# A copy also exists in src/agent/pipeline.py.  Both must be kept in sync.
+# Smoke test AC-CR049-006 imports directly from src.chat — do not move or
+# rename without updating that test first.
+# TODO: consolidate into src/skill_format.py once a shared utilities module exists.
 def _format_active_skill_block(defn: dict) -> str:
     """Format one skill's tool_definition() as a focused per-turn system prompt block.
 
@@ -1145,7 +1150,6 @@ class XochitlChat:
           6. Skill-call dispatch: parses <skill_call> blocks; tracks _tool_calls_made.
           7. Post-execution critique via _maybe_critique / _MAX_CRITIC_ITERATIONS.
         """
-        import concurrent.futures  # ThreadPoolExecutor used by SkillScorer in pipeline
         from src.agent.turn import AgentTurnInput
 
         # FR-RELY-003: pass current BackgroundReview to pipeline watchdog.
@@ -1214,24 +1218,10 @@ class XochitlChat:
 
         return result.response
 
-    def _skill_call_requires_approval(self, skill: Skill, params: dict) -> bool:
-        """Return True when a skill call can mutate files, state, or services.
-
-        Implements FR-ORCH-011 / AC-CR004-003: LLM-selected tools still pass
-        through a plan and approval gate before side effects.
-        """
-        name = type(skill).__name__
-        action = str(params.get("action", "")).strip()
-
-        if name == "NotionSkill":
-            return True
-        if name == "OrchestratorSkill":
-            return bool(params.get("task_id"))
-        if action and action in _MUTATING_SKILL_ACTIONS.get(name, set()):
-            return True
-        if name == "CodeSkill":
-            return True
-        return False
+    # _skill_call_requires_approval was removed: the canonical implementation
+    # is the module-level function _skill_call_requires_approval() in
+    # src/agent/pipeline.py, which is the live code path used during turn
+    # execution.  This method was dead after the pipeline extraction.
 
     def _stage_skill_call_plan(self, skill: Skill, params: dict, user_input: str, visible: str) -> str:
         name = type(skill).__name__
