@@ -10,7 +10,10 @@ from src.skills.bmad_skill import BMADSkill
 from src.skills.sdd_skill import SDDSkill
 from src.skills.code_skill import CodeSkill
 
-ROOT = Path(__file__).parent
+# ROOT is the project root (parent of tests/), matching where BMADSkill writes:
+# BMADSkill uses _PROJECT_ROOT = Path(__file__).parent.parent.parent → project root,
+# so generated projects land in <project_root>/projects/, not <project_root>/tests/projects/.
+ROOT = Path(__file__).parent.parent
 TEST_PROJECT = "e2e-test-project"
 PROJECT_PATH = ROOT / "projects" / TEST_PROJECT
 
