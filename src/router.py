@@ -253,9 +253,18 @@ def _resolve_file_context(query: str, history: list[dict] | None = None) -> str:
     for path in sorted_files:
         try:
             content = security.read_file(path)
+            # FR-EXEC-007 (CR-052): warn when a file changed since last injection.
+            stale_note = ""
+            try:
+                from src import stale_context
+                if stale_context.is_stale(str(path), content):
+                    stale_note = " [⚠ changed since last read]"
+                stale_context.record_injection(str(path), content)
+            except Exception:
+                pass
             if len(content) > 10_000:
                 content = content[:10_000] + f"\n\n[truncated — {len(content)} chars total]"
-            chunk = f"## {path.name} ({path})\n```\n{content}\n```"
+            chunk = f"## {path.name} ({path}){stale_note}\n```\n{content}\n```"
             if total_bytes + len(chunk) > _FILE_CONTEXT_TOTAL_CAP:
                 omitted += 1
                 continue

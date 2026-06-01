@@ -95,6 +95,21 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
         from src.planning import generate_plan
         return generate_plan(arg, chat.router)
 
+    # ── Project index (FR-MEM-016, CR-052) ────────────────────────────────────
+    if verb == "/index":
+        from pathlib import Path as _P
+        from src.project_index import index_project, format_index_result
+        try:
+            from src.memory import VectorMemory
+            mem = VectorMemory()
+        except Exception as exc:
+            return f"[dim]{_FYI} — vector memory unavailable: {exc}[/dim]"
+        root = _P(arg).expanduser() if arg else _P.cwd()
+        if not root.is_dir():
+            return f"[dim]{_FYI} — not a directory: {root}[/dim]"
+        indexed, scanned, capped = index_project(root, mem, project=chat.current_project)
+        return format_index_result(indexed, scanned, capped)
+
     # ── Session budget ────────────────────────────────────────────────────────
     if verb == "/budget":
         return chat._governor.budget_detail()
@@ -151,7 +166,7 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
     available = (
         "/next <msg>  /retry  /authorize  /revoke  "
         "/registry  /audit  /review  /research  /adversarial  "
-        "/plan <task>  /budget  /status  /history [N]  /brief  "
+        "/plan <task>  /index [dir]  /budget  /status  /history [N]  /brief  "
         "/dismiss  /workflows  /workflow save <name>  /workflow run <name>  "
         "/debug skill"
     )

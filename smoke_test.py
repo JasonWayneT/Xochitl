@@ -4578,6 +4578,94 @@ test("CR-052: generate_plan handles router error (AC-CR052-016c)", t_plan_router
 test("CR-052: /plan slash command wired (AC-CR052-016d)", t_plan_slash_command_wired)
 
 
+# ── CR-052 Phase 4 — Project memory ──────────────────────────────────────────
+
+def t_index_project_embeds_files():
+    """AC-CR052-017: index_project stores one entry per source file (FR-MEM-016)."""
+    import tempfile
+    from pathlib import Path as _P
+    from unittest.mock import MagicMock
+    from src.project_index import index_project
+    with tempfile.TemporaryDirectory() as d:
+        (_P(d) / "a.py").write_text("def f(): pass", encoding="utf-8")
+        (_P(d) / "b.md").write_text("# notes", encoding="utf-8")
+        (_P(d) / "c.bin").write_text("ignored", encoding="utf-8")  # not in extension allowlist
+        mem = MagicMock()
+        mem.memorize.return_value = True
+        indexed, scanned, capped = index_project(_P(d), mem, project="proj")
+        assert scanned == 2  # a.py + b.md, not c.bin
+        assert indexed == 2
+        assert mem.memorize.call_count == 2
+
+def t_index_project_resilient_to_embed_failure():
+    """AC-CR052-017b: a file whose embedding fails is skipped, not fatal (FR-MEM-016)."""
+    import tempfile
+    from pathlib import Path as _P
+    from unittest.mock import MagicMock
+    from src.project_index import index_project
+    with tempfile.TemporaryDirectory() as d:
+        (_P(d) / "a.py").write_text("x", encoding="utf-8")
+        (_P(d) / "b.py").write_text("y", encoding="utf-8")
+        mem = MagicMock()
+        mem.memorize.side_effect = [True, Exception("embed offline")]
+        indexed, scanned, capped = index_project(_P(d), mem)
+        assert scanned == 2 and indexed == 1
+
+def t_smart_compact_opt_in():
+    """AC-CR052-018: smart compaction summarizes when XCH_SMART_COMPACT=1, else truncates (FR-MEM-017)."""
+    import os as _os
+    from unittest.mock import patch, MagicMock
+    from src.context_manager import FileContextEngine
+    eng = FileContextEngine()
+    eng._content = "## File Context\n" + ("X" * 5000)
+    # Default (off): no router call, hard truncation path
+    _os.environ.pop("XCH_SMART_COMPACT", None)
+    with patch("src.router.get_router") as gr_off:
+        out_off = eng.compact(50)
+        assert gr_off.call_count == 0
+    # On: summarization path used
+    fake = MagicMock(error=None, content="SUMMARY")
+    with patch.dict(_os.environ, {"XCH_SMART_COMPACT": "1"}):
+        with patch("src.router.get_router") as gr_on:
+            gr_on.return_value.route.return_value = fake
+            out_on = eng.compact(50)
+    assert "SUMMARY" in out_on
+    _os.environ.pop("XCH_SMART_COMPACT", None)
+
+def t_smart_compact_falls_back_on_error():
+    """AC-CR052-018b: summarization failure falls back to truncation (FR-MEM-017)."""
+    import os as _os
+    from unittest.mock import patch, MagicMock
+    from src.context_manager import FileContextEngine
+    eng = FileContextEngine()
+    eng._content = "## File Context\n" + ("Y" * 5000)
+    fake = MagicMock(error="offline", content="")
+    with patch.dict(_os.environ, {"XCH_SMART_COMPACT": "1"}):
+        with patch("src.router.get_router") as gr:
+            gr.return_value.route.return_value = fake
+            out = eng.compact(50)
+    assert "SUMMARY" not in out  # fell back to truncation
+    assert len(out) <= 50 * 4 + 200
+    _os.environ.pop("XCH_SMART_COMPACT", None)
+
+def t_stale_context_detection():
+    """AC-CR052-019: is_stale flags content that changed after injection (FR-EXEC-007)."""
+    from src import stale_context
+    stale_context.clear()
+    stale_context.record_injection("foo.py", "original content")
+    assert stale_context.is_stale("foo.py", "original content") is False
+    assert stale_context.is_stale("foo.py", "CHANGED content") is True
+    # Unseen path is never stale
+    assert stale_context.is_stale("never_seen.py", "anything") is False
+    stale_context.clear()
+
+test("CR-052 P4: index_project embeds source files (AC-CR052-017)", t_index_project_embeds_files)
+test("CR-052 P4: index_project resilient to embed failure (AC-CR052-017b)", t_index_project_resilient_to_embed_failure)
+test("CR-052 P4: smart compaction is opt-in (AC-CR052-018)", t_smart_compact_opt_in)
+test("CR-052 P4: smart compaction falls back on error (AC-CR052-018b)", t_smart_compact_falls_back_on_error)
+test("CR-052 P4: stale-context detection (AC-CR052-019)", t_stale_context_detection)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

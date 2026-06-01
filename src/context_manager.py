@@ -659,6 +659,15 @@ class FileContextEngine(ContextEngine):
         max_chars = max_tokens * _CHARS_PER_TOKEN
         if len(text) <= max_chars:
             return text
+
+        # FR-MEM-017 (CR-052): opt-in model summarization instead of hard
+        # truncation. Off by default (XCH_SMART_COMPACT unset) so the proven
+        # truncation path below is unchanged. Falls back to truncation on any error.
+        if os.getenv("XCH_SMART_COMPACT") == "1":
+            summarized = self._smart_compact(text, max_tokens)
+            if summarized:
+                return summarized
+
         # Keep directory listings intact, truncate file contents
         lines = text.split("\n")
         kept = []
@@ -677,6 +686,36 @@ class FileContextEngine(ContextEngine):
             kept.append(line)
             total += len(line) + 1
         return "\n".join(kept)
+
+    def _smart_compact(self, text: str, max_tokens: int) -> str:
+        """Summarize injected file content via the local model. FR-MEM-017.
+
+        Args:
+            text: The full assembled file-context block.
+            max_tokens: Target token budget.
+
+        Returns:
+            A summarized block within budget, or "" on any failure (caller then
+            falls back to truncation).
+        """
+        try:
+            from src.router import get_router
+            prompt = (
+                "Summarize the following file context for an AI coding assistant. "
+                "Preserve file paths, key function/class names, and structure. "
+                f"Target under {max_tokens} tokens.\n\n" + text[: max_tokens * _CHARS_PER_TOKEN * 3]
+            )
+            result = get_router().route(
+                query=prompt,
+                conversation_history=[],
+                system_prompt="You compress code context. Output only the summary.",
+                force_route="simple_qa",
+            )
+            if getattr(result, "error", None) or not (result.content or "").strip():
+                return ""
+            return "## File Context (summarized)\n" + result.content.strip()
+        except Exception:
+            return ""
 
 
 # ── Skill Manifest Engine ────────────────────────────────────────────────────
