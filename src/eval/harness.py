@@ -30,8 +30,8 @@ from typing import Optional
 
 from src.eval.golden_set import GOLDEN_SET, GoldenExample
 
-# ── Routing threshold — mirrors src/chat.py ───────────────────────────────────
-_SKILL_INJECT_THRESHOLD: float = 0.65
+# ── Routing threshold — single source of truth in src/constants.py (NFR-DEV-009) ──
+from src.constants import _SKILL_INJECT_THRESHOLD
 
 # Regression gate: accuracy must not drop more than this from baseline
 _REGRESSION_THRESHOLD: float = 0.05

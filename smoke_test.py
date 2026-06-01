@@ -4156,6 +4156,105 @@ test("CR-050 D2: _stream_and_buffer returns full buffer with no skill call (AC-C
 test("CR-050 D2: XCH_DISABLE_SKILL_STREAMING=1 disables skill streaming (AC-CR050-019d)", t_disable_skill_streaming_env_var)
 
 
+# ── CR-051 — Architecture refactor acceptance criteria ───────────────────────
+
+def t_cr051_pipeline_constructable():
+    """AC-CR051-001: AgentPipeline is constructable without a XochitlChat (ARCH-ORCH-002)."""
+    from src.agent.pipeline import AgentPipeline
+    from src.agent.skill_scorer import SkillScorer
+    from unittest.mock import MagicMock
+    pipeline = AgentPipeline(
+        router=MagicMock(),
+        skill_scorer=SkillScorer([], threshold=0.65),
+        find_skill=lambda name: None,
+        execute_skill=lambda *a, **kw: "",
+        emit_action_line=lambda label: None,
+        console_print=lambda *a, **kw: None,
+        stage_skill_call=lambda *a, **kw: "",
+    )
+    assert pipeline is not None
+
+def t_cr051_pending_action_enum():
+    """AC-CR051-002: PendingAction has exactly 7 members (ARCH-ORCH-003)."""
+    from src.session.confirmation import PendingAction
+    members = {m.value for m in PendingAction}
+    assert members == {
+        "execute_skill_call", "sync_notion", "push_notion",
+        "init_project", "generate_specs", "analyze_issue", "scaffold_code",
+    }
+
+def t_cr051_single_constant_definition():
+    """AC-CR051-003: _SKILL_INJECT_THRESHOLD assigned to a literal once, in constants.py (NFR-DEV-009)."""
+    import re as _re
+    # Matches a module-level assignment to a numeric literal (not a comment, not an import).
+    pat = _re.compile(r"^_SKILL_INJECT_THRESHOLD\s*(:\s*float\s*)?=\s*[0-9]")
+    defs = []
+    for p in (ROOT / "src").rglob("*.py"):
+        for line in p.read_text(encoding="utf-8", errors="replace").splitlines():
+            if pat.match(line):
+                defs.append(str(p))
+    assert len(defs) == 1, f"expected 1 literal definition, found {len(defs)}: {defs}"
+    assert "constants.py" in defs[0]
+
+def t_cr051_reexport_from_chat():
+    """AC-CR051-004: _SKILL_INJECT_THRESHOLD re-exported from chat (NFR-DEV-009)."""
+    from src.chat import _SKILL_INJECT_THRESHOLD
+    assert _SKILL_INJECT_THRESHOLD == 0.65
+
+def t_cr051_governor_force_flows():
+    """AC-CR051-005: governor_force reaches router.route as force_route (BUG-ORCH-008)."""
+    from unittest.mock import MagicMock
+    from src.agent.pipeline import AgentPipeline
+    from src.agent.skill_scorer import SkillScorer
+    from src.agent.turn import AgentTurnInput
+    captured = []
+    mock_result = MagicMock(error=None, content="ok", route="local",
+                            tokens_in=0, tokens_out=1, cost_usd=0.0)
+    def capturing_route(*a, **kw):
+        captured.append(kw.get("force_route"))
+        return mock_result
+    router = MagicMock()
+    router.route = capturing_route
+    router.route_stream.return_value = iter([])
+    pipeline = AgentPipeline(
+        router=router,
+        skill_scorer=SkillScorer([], threshold=0.65),
+        find_skill=lambda name: None,
+        execute_skill=lambda *a, **kw: "",
+        emit_action_line=lambda label: None,
+        console_print=lambda *a, **kw: None,
+        stage_skill_call=lambda *a, **kw: "",
+    )
+    turn = AgentTurnInput(
+        user_input="test", system_prompt="sys", messages=[], skills=[],
+        current_project=None, force_cloud=False, stream=False,
+        governor_force="general",
+    )
+    pipeline.run(turn)
+    assert "general" in captured, f"expected force_route='general', got {captured}"
+
+def t_cr051_chat_line_count():
+    """AC-CR051-006: chat.py stays within the post-extraction budget (ARCH-ORCH-002)."""
+    count = len((ROOT / "src" / "chat.py").read_text(encoding="utf-8").splitlines())
+    assert count <= 2000, f"chat.py has {count} lines (budget 2000)"
+
+def t_cr051_pipeline_docstring_accurate():
+    """AC-CR051-007: AgentPipeline docstring documents side effects, not 'stateless' (NFR-ORCH-019)."""
+    from src.agent.pipeline import AgentPipeline
+    doc = AgentPipeline.__doc__ or ""
+    assert "Side effects" in doc
+    assert "Stateless" not in doc
+    assert "turn.context" in doc and "turn.session_history" in doc
+
+test("CR-051: AgentPipeline constructable without chat (AC-CR051-001)", t_cr051_pipeline_constructable)
+test("CR-051: PendingAction enum has 7 members (AC-CR051-002)", t_cr051_pending_action_enum)
+test("CR-051: _SKILL_INJECT_THRESHOLD single definition (AC-CR051-003)", t_cr051_single_constant_definition)
+test("CR-051: threshold re-exported from chat (AC-CR051-004)", t_cr051_reexport_from_chat)
+test("CR-051: governor_force flows to router (AC-CR051-005)", t_cr051_governor_force_flows)
+test("CR-051: chat.py within line budget (AC-CR051-006)", t_cr051_chat_line_count)
+test("CR-051: AgentPipeline docstring accurate (AC-CR051-007)", t_cr051_pipeline_docstring_accurate)
+
+
 # ── CR-052 Phase 2 — Safe file editing ───────────────────────────────────────
 
 def t_diff_preview_shows_changes():

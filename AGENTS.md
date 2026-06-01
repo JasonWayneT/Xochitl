@@ -149,8 +149,8 @@ Every new skill added to `src/skills/` must complete all five steps before the P
 Incomplete skills are the leading cause of "skill not found" failures at runtime.
 
 1. **Keyword vocabulary** — `can_handle()` must cover at least 5 natural-language phrasings of the
-   intent, including common typos and synonyms. Check against `_DISPATCH_THRESHOLD = 0.65` in
-   `chat.py`; any phrasing the user might say must score ≥ 0.65.
+   intent, including common typos and synonyms. Check against `_SKILL_INJECT_THRESHOLD = 0.65` in
+   `src/constants.py`; any phrasing the user might say must score ≥ 0.65.
 
 2. **`examples` field in `tool_definition()`** — Add 5+ concrete example phrases to the `examples`
    key. These are injected into the LLM system prompt so the model knows exactly when to emit a
@@ -164,9 +164,10 @@ Incomplete skills are the leading cause of "skill not found" failures at runtime
    ],
    ```
 
-3. **Registration in `_builtin_skills`** — The skill instance must be added to the
-   `_builtin_skills` list in `XochitlChat.__init__()` in `src/chat.py`. Skills not on this list
-   are invisible to the dispatcher and will never run.
+3. **Registration via `_safe_register()`** — The skill must be registered in
+   `src/skills/__init__.py` with `_safe_register(YourSkill)`, which calls `_registry.register()`
+   at import time (each skill wrapped so a credential failure skips it instead of crashing
+   startup). Skills not registered there are invisible to the dispatcher and will never run.
 
 4. **Smoke test assertions** — Add at least two assertions to `smoke_test.py`:
    - `can_handle()` scores a known trigger phrase ≥ 0.65

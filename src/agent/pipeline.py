@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from src.agent.turn import AgentTurnInput, TurnResult
 from src.agent.skill_parser import parse_skill_calls, strip_skill_calls
@@ -37,6 +37,9 @@ from src.action_disclosure import format_compact_result, infer_action_label
 if TYPE_CHECKING:
     from src.router import TieredRouter
     from src.skills.base import Skill
+    from src.background_review import BackgroundReview
+    from src.initiative import InitiativeEngine
+    from src.executor import ExecutorResult  # noqa: F401
 
 _log = logging.getLogger("xochitl.agent.pipeline")
 
@@ -146,15 +149,15 @@ class AgentPipeline:
 
     def __init__(
         self,
-        router: "TieredRouter",
+        router: TieredRouter,
         skill_scorer: SkillScorer,
-        find_skill,
-        execute_skill,
-        emit_action_line,
-        console_print,
-        stage_skill_call,
-        background_review=None,
-        initiative=None,
+        find_skill: Callable[[str], Optional[Skill]],
+        execute_skill: Callable[[Skill, str, dict, dict], str],
+        emit_action_line: Callable[[str], None],
+        console_print: Callable[..., None],
+        stage_skill_call: Callable[[Skill, dict, str, str], str],
+        background_review: Optional[BackgroundReview] = None,
+        initiative: Optional[InitiativeEngine] = None,
         drift_reminder: str = "",
     ) -> None:
         self._router = router

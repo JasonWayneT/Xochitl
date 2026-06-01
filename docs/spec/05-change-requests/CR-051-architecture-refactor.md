@@ -89,6 +89,11 @@ Post-refactor fixes (also in this CR):
 ## Verification
 
 - `python smoke_test.py` — 241 passed, 0 failed (run after each of the 8 commits in this CR).
+- Follow-up (CR-052 era): dedicated smoke tests added for every acceptance
+  criterion (AC-CR051-001..007), replacing source-inspection-only coverage.
+  AC-CR051-003 caught a real duplicate definition of `_SKILL_INJECT_THRESHOLD`
+  in `src/eval/harness.py`, since fixed to import from `src/constants.py`.
+  `AgentPipeline.__init__` callable params fully type-annotated (NFR-DEV-002).
 - All targeted checks pass:
   - Single definition of `_SKILL_INJECT_THRESHOLD`: confirmed via grep.
   - `from src.chat import _SKILL_INJECT_THRESHOLD` — import succeeds, value 0.65.
