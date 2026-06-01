@@ -1,28 +1,62 @@
-"""SlashCommandHandler — /command dispatch extracted from XochitlChat.
+"""Slash command dispatch — decoupled from XochitlChat via SlashContext.
 
-Separates the slash command routing table from the session lifecycle so it can
-be read, tested, and extended without navigating the full chat session class.
+Separates the slash command routing table from the session lifecycle. Handlers
+receive a ``SlashContext`` (a plain data object) rather than a reference to the
+full chat session, so this module has no runtime dependency on ``XochitlChat``
+and its internal attribute layout (TASK-DEV-051-b).
 
 Implements FR-SEC-001, FR-SEC-003, FR-SEC-004, FR-ORCH-041, FR-CONV-003.
 """
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
-
-if TYPE_CHECKING:
-    from src.chat import XochitlChat
+from typing import Any, Callable, Optional
 
 from src.constants import _FYI, _SKILL_INJECT_THRESHOLD, _OPEN_ENDED_SCORE_THRESHOLD
 
 
-def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
+@dataclass
+class SlashContext:
+    """The session state a slash command may read or write.
+
+    Built by XochitlChat and passed to ``handle_slash_command``. The two scalar
+    fields ``staged_message`` and ``last_cancelled`` are mutated by /next and
+    /retry; the caller reads them back after dispatch to apply the changes.
+
+    Attributes:
+        staged_message: Message queued to run after the current response (mutable).
+        last_cancelled: Last cancelled message, resendable via /retry (mutable).
+        current_project: Active project ID, or None.
+        router: TieredRouter for /plan.
+        governor: SessionGovernor for /budget and /status.
+        context: Mutable session context dict.
+        session_history: Mutable session history list.
+        skills: Live skill list.
+        last_user_message: Callable returning the most recent user message text.
+        initiative: Optional InitiativeEngine (for /dismiss and /status).
+        background_review: Optional BackgroundReview daemon (for /status).
+    """
+    staged_message: Optional[str]
+    last_cancelled: Optional[str]
+    current_project: Optional[str]
+    router: Any
+    governor: Any
+    context: dict
+    session_history: list
+    skills: list
+    last_user_message: Callable[[], str]
+    initiative: Any = None
+    background_review: Any = None
+
+
+def handle_slash_command(raw: str, ctx: SlashContext) -> str:
     """Dispatch a /command [args] string without going through the LLM.
 
     Args:
         raw: Raw slash command string from the user (e.g. "/budget").
-        chat: Active XochitlChat session (read for session state).
+        ctx: Session state the command may read/write.
 
     Returns:
         Formatted response string for console display.
@@ -36,19 +70,19 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
     # ── Staged / retry messages ───────────────────────────────────────────────
     if verb == "/next":
         if not arg:
-            if chat._staged_message:
-                chat._staged_message = None
+            if ctx.staged_message:
+                ctx.staged_message = None
                 return "[dim]Staged message cleared.[/dim]"
             return "Usage: /next <message to send after this response>"
-        chat._staged_message = arg
+        ctx.staged_message = arg
         return f"[dim]✓ Staged: '{arg}' — will run after current response.[/dim]"
 
     if verb == "/retry":
-        if not chat._last_cancelled:
+        if not ctx.last_cancelled:
             return "[dim]Nothing to retry — no message was cancelled.[/dim]"
-        chat._staged_message = chat._last_cancelled
-        chat._last_cancelled = None
-        return f"[dim]✓ Re-queued: '{chat._staged_message}'[/dim]"
+        ctx.staged_message = ctx.last_cancelled
+        ctx.last_cancelled = None
+        return f"[dim]✓ Re-queued: '{ctx.staged_message}'[/dim]"
 
     # ── Security commands ─────────────────────────────────────────────────────
     if verb == "/authorize":
@@ -64,7 +98,7 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
     # ── SDD traceability review ───────────────────────────────────────────────
     if verb == "/review":
         from src.skills.sdd_skill import SDDSkill
-        project_id = arg or chat.current_project or ""
+        project_id = arg or ctx.current_project or ""
         return SDDSkill().review_code_traceability(project_id)
 
     # ── Research commands ─────────────────────────────────────────────────────
@@ -93,7 +127,7 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
         if not arg:
             return "Usage: /plan <task to plan> — generates a numbered plan; runs nothing."
         from src.planning import generate_plan
-        return generate_plan(arg, chat.router)
+        return generate_plan(arg, ctx.router)
 
     # ── Project index (FR-MEM-016, CR-052) ────────────────────────────────────
     if verb == "/index":
@@ -107,26 +141,26 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
         root = _P(arg).expanduser() if arg else _P.cwd()
         if not root.is_dir():
             return f"[dim]{_FYI} — not a directory: {root}[/dim]"
-        indexed, scanned, capped = index_project(root, mem, project=chat.current_project)
+        indexed, scanned, capped = index_project(root, mem, project=ctx.current_project)
         return format_index_result(indexed, scanned, capped)
 
     # ── Session budget ────────────────────────────────────────────────────────
     if verb == "/budget":
-        return chat._governor.budget_detail()
+        return ctx.governor.budget_detail()
 
     # ── System status ─────────────────────────────────────────────────────────
     if verb == "/status":
-        return _handle_status(chat)
+        return _handle_status(ctx)
 
     # ── Session history ───────────────────────────────────────────────────────
     if verb == "/history":
-        return _handle_history(chat, int(arg) if arg.isdigit() else 5)
+        return _handle_history(ctx, int(arg) if arg.isdigit() else 5)
 
     # ── Initiative dismiss ────────────────────────────────────────────────────
     if verb == "/dismiss":
         try:
             from src.initiative import InitiativeCategory
-            engine = getattr(chat, "_initiative", None)
+            engine = ctx.initiative
             if engine is None:
                 return "[dim]Initiative engine not active.[/dim]"
             cat_str = arg.lower() if arg else "system_failure"
@@ -143,10 +177,10 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
     # ── Workflow commands ─────────────────────────────────────────────────────
     if verb == "/workflows":
         from src.workflows import list_workflows_formatted
-        return list_workflows_formatted(project=chat.current_project)
+        return list_workflows_formatted(project=ctx.current_project)
 
     if verb == "/workflow":
-        return _handle_workflow(chat, arg)
+        return _handle_workflow(ctx, arg)
 
     # ── Daily brief ───────────────────────────────────────────────────────────
     if verb == "/brief":
@@ -161,7 +195,7 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
 
     # ── Debug: skill scoring ──────────────────────────────────────────────────
     if verb == "/debug" and arg.lower().startswith("skill"):
-        return _handle_debug_skill(chat)
+        return _handle_debug_skill(ctx)
 
     available = (
         "/next <msg>  /retry  /authorize  /revoke  "
@@ -175,7 +209,7 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
 
 # ── Sub-handlers ──────────────────────────────────────────────────────────────
 
-def _handle_workflow(chat: "XochitlChat", arg: str) -> str:
+def _handle_workflow(ctx: SlashContext, arg: str) -> str:
     from src.workflows import (
         execute_workflow,
         get_workflow_by_name,
@@ -185,19 +219,19 @@ def _handle_workflow(chat: "XochitlChat", arg: str) -> str:
     if not arg:
         return (
             "Usage: /workflow save <name>  |  /workflow run <name>  |  /workflows\n"
-            + list_workflows_formatted(project=chat.current_project)
+            + list_workflows_formatted(project=ctx.current_project)
         )
     if arg.lower().startswith("save "):
         wf_name = arg[5:].strip()
         if not wf_name:
             return "Usage: /workflow save <name>"
-        trigger = chat._last_user_message() or wf_name
+        trigger = ctx.last_user_message() or wf_name
         try:
             wf_id = save_workflow_from_session(
                 wf_name,
                 trigger[:240],
-                chat.session_history,
-                project=chat.current_project,
+                ctx.session_history,
+                project=ctx.current_project,
                 source="distilled",
                 use_llm_distill=True,
             )
@@ -217,17 +251,17 @@ def _handle_workflow(chat: "XochitlChat", arg: str) -> str:
         wf = get_workflow_by_name(wf_name)
         if not wf:
             return f"No workflow named '{wf_name}'. Use `/workflows` to list."
-        chat.current_context["_chat_skills"] = chat.skills
+        ctx.context["_chat_skills"] = ctx.skills
         return execute_workflow(
             wf,
-            chat._last_user_message() or wf_name,
-            chat.skills,
-            chat.current_context,
+            ctx.last_user_message() or wf_name,
+            ctx.skills,
+            ctx.context,
         )
     return "[dim]Unknown /workflow subcommand. Use: save or run[/dim]"
 
 
-def _handle_status(chat: "XochitlChat") -> str:
+def _handle_status(ctx: SlashContext) -> str:
     """Return a system health table for /status. Implements FR-JARV-011."""
     from src import database as _db
 
@@ -253,7 +287,7 @@ def _handle_status(chat: "XochitlChat") -> str:
 
     gmail_path = Path.home() / ".xochitl" / "gmail_token.json"
     lines.append(f"  Gmail         : {'[green]token found[/green]' if gmail_path.exists() else '[dim]not configured[/dim]'}")
-    lines.append(f"  Budget        : {chat._governor.status_line()}")
+    lines.append(f"  Budget        : {ctx.governor.status_line()}")
 
     try:
         with _db.get_connection() as _conn:
@@ -273,12 +307,12 @@ def _handle_status(chat: "XochitlChat") -> str:
     except Exception:
         lines.append("  Memory facts  : [dim]unavailable[/dim]")
 
-    _br = getattr(chat, "_background_review", None)
+    _br = ctx.background_review
     _br_status = "[green]active[/green]" if (_br and _br.is_alive()) else "[yellow]stopped[/yellow]"
     lines.append(f"  Background    : {_br_status}")
 
     try:
-        _ini = getattr(chat, "_initiative", None)
+        _ini = ctx.initiative
         if _ini is not None:
             lines.append(f"  Initiative    : {_ini.mode.value}")
         else:
@@ -291,7 +325,7 @@ def _handle_status(chat: "XochitlChat") -> str:
     return "\n".join(lines)
 
 
-def _handle_history(chat: "XochitlChat", n: int) -> str:
+def _handle_history(ctx: SlashContext, n: int) -> str:
     """Return a table of recent session context summaries. FR-HARD-008."""
     from src import database as _db
 
@@ -320,11 +354,11 @@ def _handle_history(chat: "XochitlChat", n: int) -> str:
     return "\n".join(lines)
 
 
-def _handle_debug_skill(chat: "XochitlChat") -> str:
+def _handle_debug_skill(ctx: SlashContext) -> str:
     """Show per-skill can_handle() scores for the last user message. AC-CR047-006."""
-    last_input = chat.current_context.get("_last_debug_input", "")
+    last_input = ctx.context.get("_last_debug_input", "")
     if not last_input:
-        for msg in reversed(chat.session_history):
+        for msg in reversed(ctx.session_history):
             if msg.get("role") == "user":
                 last_input = msg.get("content", "")
                 break
@@ -333,9 +367,9 @@ def _handle_debug_skill(chat: "XochitlChat") -> str:
 
     lines = [f"[bold]can_handle scores[/bold] for: {last_input[:80]}"]
     rows = []
-    for skill in chat.skills:
+    for skill in ctx.skills:
         try:
-            score = skill.can_handle(last_input, chat.current_context)
+            score = skill.can_handle(last_input, ctx.context)
         except Exception:
             score = -1.0
         name = type(skill).__name__

@@ -1780,10 +1780,40 @@ class XochitlChat:
 
     # ── Slash command dispatch (FR-SEC-001, FR-SEC-003, FR-SEC-004) ──────────
 
+    def _build_slash_context(self):
+        """Build a SlashContext snapshot for slash command dispatch (TASK-DEV-051-b).
+
+        Uses getattr with defaults so a partially-constructed session (e.g. in a
+        unit test that only sets `_governor`) still produces a valid context.
+        """
+        from src.session.slash_commands import SlashContext
+        return SlashContext(
+            staged_message=getattr(self, "_staged_message", None),
+            last_cancelled=getattr(self, "_last_cancelled", None),
+            current_project=getattr(self, "current_project", None),
+            router=getattr(self, "router", None),
+            governor=getattr(self, "_governor", None),
+            context=getattr(self, "current_context", {}) or {},
+            session_history=getattr(self, "session_history", []) or [],
+            skills=getattr(self, "skills", []) or [],
+            last_user_message=getattr(self, "_last_user_message", lambda: ""),
+            initiative=getattr(self, "_initiative", None),
+            background_review=getattr(self, "_background_review", None),
+        )
+
     def _handle_slash_command(self, raw: str) -> str:
-        """Delegate to session/slash_commands.py. Implements FR-SEC-001."""
+        """Delegate to session/slash_commands.py via a SlashContext. Implements FR-SEC-001.
+
+        Dispatches, then reads back the two mutable scalars (staged/cancelled
+        message) that /next and /retry may have changed (TASK-DEV-051-b).
+        """
         from src.session.slash_commands import handle_slash_command
-        return handle_slash_command(raw, self)
+        ctx = self._build_slash_context()
+        result = handle_slash_command(raw, ctx)
+        # Apply the two scalar mutations /next and /retry may have made.
+        self._staged_message = ctx.staged_message
+        self._last_cancelled = ctx.last_cancelled
+        return result
 
     # ── Status / history helpers (kept for backward compat; delegate to module) ─
 
@@ -1796,12 +1826,12 @@ class XochitlChat:
         - _initiative engine mode
         """
         from src.session.slash_commands import _handle_status
-        return _handle_status(self)
+        return _handle_status(self._build_slash_context())
 
     def _handle_history_command(self, n: int = 5) -> str:
         """Delegate to session/slash_commands._handle_history. Implements FR-HARD-008."""
         from src.session.slash_commands import _handle_history
-        return _handle_history(self, n)
+        return _handle_history(self._build_slash_context(), n)
 
     def _last_user_message(self) -> str:
         """Return the most recent user message text in this session."""

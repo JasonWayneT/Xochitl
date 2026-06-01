@@ -4156,6 +4156,92 @@ test("CR-050 D2: _stream_and_buffer returns full buffer with no skill call (AC-C
 test("CR-050 D2: XCH_DISABLE_SKILL_STREAMING=1 disables skill streaming (AC-CR050-019d)", t_disable_skill_streaming_env_var)
 
 
+# ── SlashContext test helper (TASK-DEV-051-b) ────────────────────────────────
+
+def _make_slash_ctx(**overrides):
+    """Build a SlashContext with sensible defaults for tests."""
+    from unittest.mock import MagicMock
+    from src.session.slash_commands import SlashContext
+    defaults = dict(
+        staged_message=None,
+        last_cancelled=None,
+        current_project=None,
+        router=MagicMock(),
+        governor=MagicMock(),
+        context={},
+        session_history=[],
+        skills=[],
+        last_user_message=lambda: "",
+        initiative=None,
+        background_review=None,
+    )
+    defaults.update(overrides)
+    return SlashContext(**defaults)
+
+
+def t_slashcontext_no_chat_import():
+    """TASK-DEV-051-b: slash_commands has no runtime dependency on XochitlChat."""
+    import src.session.slash_commands as sc
+    import sys
+    # The module must import without src.chat being imported as a side effect path.
+    assert not hasattr(sc, "XochitlChat"), "slash_commands must not reference XochitlChat at module scope"
+    # Source must not contain a runtime (non-TYPE_CHECKING) import of chat.
+    from pathlib import Path as _P
+    src = _P(sc.__file__).read_text(encoding="utf-8")
+    assert "from src.chat import" not in src
+
+def t_slashcontext_next_mutates():
+    """TASK-DEV-051-b: /next mutates ctx.staged_message, read back by caller."""
+    from src.session.slash_commands import handle_slash_command
+    ctx = _make_slash_ctx()
+    out = handle_slash_command("/next do the thing", ctx)
+    assert ctx.staged_message == "do the thing"
+    assert "Staged" in out
+
+def t_slashcontext_retry_mutates():
+    """TASK-DEV-051-b: /retry re-queues last_cancelled into staged_message."""
+    from src.session.slash_commands import handle_slash_command
+    ctx = _make_slash_ctx(last_cancelled="earlier message")
+    out = handle_slash_command("/retry", ctx)
+    assert ctx.staged_message == "earlier message"
+    assert ctx.last_cancelled is None
+
+def t_slashcontext_budget_uses_governor():
+    """TASK-DEV-051-b: /budget reads ctx.governor (decoupled from chat)."""
+    from unittest.mock import MagicMock
+    from src.session.slash_commands import handle_slash_command
+    gov = MagicMock()
+    gov.budget_detail.return_value = "BUDGET-OK"
+    ctx = _make_slash_ctx(governor=gov)
+    assert handle_slash_command("/budget", ctx) == "BUDGET-OK"
+
+def t_chat_builds_slash_context():
+    """TASK-DEV-051-b: XochitlChat._build_slash_context returns a populated SlashContext."""
+    from src.chat import XochitlChat
+    from src.session.slash_commands import SlashContext
+    chat = XochitlChat.__new__(XochitlChat)
+    chat._staged_message = None
+    chat._last_cancelled = None
+    chat.current_project = None
+    chat.router = object()
+    chat._governor = object()
+    chat.current_context = {"k": "v"}
+    chat.session_history = [{"role": "user", "content": "hi"}]
+    chat._initiative = None
+    chat._background_review = None
+    ctx = chat._build_slash_context()  # skills property resolves via global registry
+    assert isinstance(ctx, SlashContext)
+    assert ctx.context is chat.current_context
+    assert ctx.session_history is chat.session_history
+    assert callable(ctx.last_user_message) and ctx.last_user_message() == "hi"
+
+test("TASK-DEV-051-b: slash_commands has no XochitlChat runtime dep", t_slashcontext_no_chat_import)
+test("TASK-DEV-051-b: /next mutates SlashContext.staged_message", t_slashcontext_next_mutates)
+test("TASK-DEV-051-b: /retry re-queues via SlashContext", t_slashcontext_retry_mutates)
+test("TASK-DEV-051-b: /budget reads SlashContext.governor", t_slashcontext_budget_uses_governor)
+test("TASK-DEV-051-b: chat builds populated SlashContext", t_chat_builds_slash_context)
+
+
 # ── CR-051 — Architecture refactor acceptance criteria ───────────────────────
 
 def t_cr051_pipeline_constructable():
@@ -4663,11 +4749,10 @@ def t_plan_router_error():
 def t_plan_slash_command_wired():
     """AC-CR052-016d: /plan dispatches to generate_plan (FR-ORCH-044)."""
     from unittest.mock import MagicMock, patch
-    from src.session.slash_commands import handle_slash_command
-    chat = MagicMock()
-    chat.router = MagicMock()
+    from src.session.slash_commands import handle_slash_command, SlashContext
+    ctx = _make_slash_ctx(router=MagicMock())
     with patch("src.planning.generate_plan", return_value="PLANNED") as gp:
-        out = handle_slash_command("/plan refactor X", chat)
+        out = handle_slash_command("/plan refactor X", ctx)
     assert out == "PLANNED"
     gp.assert_called_once()
 

@@ -84,7 +84,7 @@ Post-refactor fixes (also in this CR):
 | Item | Reason | Target |
 |---|---|---|
 | `_format_active_skill_block` duplication | Smoke test AC-CR049-006 imports from `src.chat` directly; cannot delete without test update | CR-052 or next dev-standards pass |
-| `SlashContext` dataclass | Decouples `session/slash_commands.py` from `XochitlChat` internals; medium complexity, no current bug | Revisit when slash commands need isolated unit tests |
+| `SlashContext` dataclass | ~~Decouples `session/slash_commands.py` from `XochitlChat` internals~~ **DONE** — `SlashContext` dataclass holds the session state commands need; `slash_commands.py` has no runtime `XochitlChat` dependency. `XochitlChat._build_slash_context()` constructs it; /next and /retry mutations are read back. 5 smoke tests (TASK-DEV-051-b). | Completed |
 
 ## Verification
 
