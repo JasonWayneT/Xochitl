@@ -116,14 +116,35 @@ OAuth 2.0 credentials at `~/.xochitl/google_token.json`. Run `xochitl` and say "
 | `WorkflowSkill` | Run saved procedural workflows |
 | `MapsSkill` | Directions, travel time, places search (CR-045) |
 | `GmailSkill` | Read inbox, search, send, mark read (CR-046a) |
+| `ShellSkill` | Run allowlisted dev commands (pytest, ruff, mypy, git) — approved first (CR-052) |
+| `GitSkill` | git status/diff/log/branch/show (auto); add/commit (approved); destructive ops refused (CR-052) |
+| `ProjectScanSkill` | Find where a symbol is defined; list files — bounded, read-only (CR-052) |
 | `DynamicSkill` | Loads `.xochitl/skills/` |
+
+### Tool execution (CR-052)
+
+| Capability | Skill | What you can say |
+|---|---|---|
+| Run tests | `ShellSkill` | "run the tests", "run pytest -q" (you approve the command first) |
+| Lint / type-check | `ShellSkill` | "run ruff on src", "type check with mypy" |
+| Git status / diff | `GitSkill` | "what's the git status?", "show me the diff", "recent commits" |
+| Stage / commit | `GitSkill` | "stage the changes", "commit this with message '…'" (approved first) |
+| Find a symbol | `ProjectScanSkill` | "where is can_handle defined?", "find the class AgentPipeline" |
+| List files | `ProjectScanSkill` | "list the python files", "what files match test_*.py" |
+| Plan a task | `/plan <task>` or `think:` | "/plan refactor the router" — numbered plan, runs nothing |
+| Index the project | `/index [dir]` | embeds source into vector memory for recall |
+
+Safety: every command/edit is shown for approval before it runs (diff preview
+for file edits, exact command for shell/git). Destructive operations are refused.
+`XCH_AUTO_AUTHORIZE=1` auto-trusts the working directory; `XCH_CODE_AUTOFIX=1`
+opts into the (bounded) test-fix loop.
 
 ---
 
 ## 7. Verification
 
-- **Smoke**: `python smoke_test.py` — 146 passed, 0 failed (May 2026).
-- **E2E**: `python end_to_end_test.py` — mocked full pipeline.
+- **Smoke**: `python smoke_test.py` — 283 passed, 0 failed (May 2026).
+- **E2E**: `python tests/end_to_end_test.py` — mocked full pipeline.
 
 ---
 

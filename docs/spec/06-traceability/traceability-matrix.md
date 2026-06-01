@@ -101,6 +101,22 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `NFR-ORCH-018` | `CR-051` | `CR-051` | — | — | `src/chat.py` (`_format_active_skill_block` — sync-reminder comment), `src/agent/pipeline.py` (`_format_active_skill_block` — sync-reminder comment + TODO) | source inspection | accepted |
 | `NFR-ORCH-019` | `CR-051` | `CR-051` | `AC-CR051-007` | `TASK-ORCH-051` | `src/agent/pipeline.py` (`AgentPipeline` docstring — "Side effects" section; no "Stateless" claim) | source inspection | implemented |
 | `BUG-ORCH-008` | `CR-051` | `BUG-ORCH-008.md` | `AC-BUG-ORCH-008` | resolved | `src/agent/turn.py` (`governor_force` field), `src/agent/pipeline.py` (Stage 5 applies governor_force), `src/chat.py` (`_gov_force = self._governor.force_route()` in `_agent_loop`) | smoke (241/241) + `AC-CR051-005` | resolved |
+| `FR-UI-011` | `CR-052` | `CR-052` | `AC-CR052-001`, `AC-CR052-002` | `TASK-UI-052` | `src/diff_preview.py`, `src/file_tools.py` (`write_file`) | smoke (AC-CR052-001..002) | implemented |
+| `FR-MEM-015` | `CR-052` | `CR-052` | `AC-CR052-003` | `TASK-MEM-052` | `src/recent_edits.py`, `src/file_tools.py` (`confirm_operation`), `src/context_manager.py` (FactsEngine) | smoke (AC-CR052-003, 003b) | implemented |
+| `NFR-SEC-006` | `CR-052` | `CR-052` | `AC-CR052-004` | `TASK-SEC-052` | `src/skills/orchestrator_skill.py` (`suggest`, `tool_definition`) | smoke (AC-CR052-004, 004b) | implemented |
+| `FR-EXEC-004` | `CR-052` | `CR-052` | `AC-CR052-005` | `TASK-EXEC-052` | `src/skills/shell_skill.py`, `src/skills/__init__.py` | smoke (AC-CR052-005) | implemented |
+| `FR-EXEC-005` | `CR-052` | `CR-052` | `AC-CR052-006` | `TASK-EXEC-052` | `src/executor.py` (allowlist + ruff/mypy), `src/skills/shell_skill.py` | smoke (AC-CR052-006) | implemented |
+| `NFR-EXEC-003` | `CR-052` | `CR-052` | `AC-CR052-007` | `TASK-EXEC-052` | `src/skills/shell_skill.py` (`_DANGEROUS_PATTERNS`, SafeExecutor), `src/constants.py` (`_ALWAYS_APPROVE`) | smoke (AC-CR052-007..007d) | implemented |
+| `FR-GIT-001` | `CR-052` | `CR-052` | `AC-CR052-008` | `TASK-GIT-052` | `src/skills/git_skill.py` (`classify_action`, read ops) | smoke (AC-CR052-008, 008a, 008c) | implemented |
+| `FR-GIT-002` | `CR-052` | `CR-052` | `AC-CR052-008b` | `TASK-GIT-052` | `src/skills/git_skill.py`, `src/constants.py` (`_MUTATING_SKILL_ACTIONS`) | smoke (AC-CR052-008b) | implemented |
+| `FR-GIT-003` | `CR-052` | `CR-052` | `AC-CR052-009` | `TASK-GIT-052` | `src/skills/git_skill.py` (DENY whitelist) | smoke (AC-CR052-009, 009b) | implemented |
+| `FR-SCAN-001` | `CR-052` | `CR-052` | `AC-CR052-010`, `AC-CR052-011` | `TASK-SCAN-052` | `src/skills/project_scan_skill.py` | smoke (AC-CR052-010..011b) | implemented |
+| `FR-CODE-005` | `CR-052` | `CR-052` | `AC-CR052-012`, `AC-CR052-013` | `TASK-CODE-052` | `src/code_loop.py` (`run_fix_loop`), `src/skills/code_skill.py` (`verify_and_fix`) | smoke (AC-CR052-012..013b) | implemented |
+| `FR-EXEC-006` | `CR-052` | `CR-052` | `AC-CR052-014`, `AC-CR052-015` | `TASK-EXEC-052` | `src/chat.py` (`_auto_authorize_decision`, `start`) | smoke (AC-CR052-014, 014a, 015) | implemented |
+| `FR-ORCH-044` | `CR-052` | `CR-052` | `AC-CR052-016` | `TASK-ORCH-052` | `src/planning.py`, `src/session/slash_commands.py` (`/plan`), `src/chat.py` (`think:`) | smoke (AC-CR052-016..016d) | implemented |
+| `FR-MEM-016` | `CR-052` | `CR-052` | `AC-CR052-017` | `TASK-MEM-052` | `src/project_index.py`, `src/session/slash_commands.py` (`/index`) | smoke (AC-CR052-017, 017b) | implemented |
+| `FR-MEM-017` | `CR-052` | `CR-052` | `AC-CR052-018` | `TASK-MEM-052` | `src/context_manager.py` (`FileContextEngine._smart_compact`) | smoke (AC-CR052-018, 018b) | implemented |
+| `FR-EXEC-007` | `CR-052` | `CR-052` | `AC-CR052-019` | `TASK-EXEC-052` | `src/stale_context.py`, `src/router.py` (`_resolve_file_context`) | smoke (AC-CR052-019) | implemented |
 
 | `FR-ORCH-010` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-001` | `TASK-CR004-001` | `src/intent.py`, `src/chat.py` | syntax + structured intent sanity check | implemented |
 | `FR-ORCH-011` | `CR-004` | `docs/conversational-layer-architecture.md`, `CR-004` | `AC-CR004-002`, `AC-CR004-003` | `TASK-CR004-002` | `src/intent.py` (project exploration scope), `src/chat.py` (bounded repo exploration, skill-call approval gate), `src/file_tools.py` (all writes pending confirmation) | py_compile + targeted gate/exploration sanity checks | implemented |

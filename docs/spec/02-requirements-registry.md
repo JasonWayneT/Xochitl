@@ -1010,6 +1010,27 @@ Xochitl uses area-scoped IDs: `<PREFIX>-<AREA>-<NNN>`
 | `AC-CR050-018` | `FR-RELY-004` | Skill `cleanup()` mock; timeout triggered | Sentinel set within 6 seconds | implemented |
 | `AC-CR050-019` | `FR-PERF-008` | Streamed response with `<skill_call>` mid-buffer | Tokens before tag displayed; skill executes; result in output | implemented |
 
+### Tool Execution & Project Awareness (CR-052)
+
+| ID | Type | Priority | Status | Requirement | Acceptance criteria | Source | Notes |
+|---|---|---|---|---|---|---|---|
+| `FR-UI-011` | functional | P1 | implemented | `FileTools.write_file()` embeds a unified diff (existing files) or content preview (new files) in the `pending_permission` message | `AC-CR052-001`, `AC-CR052-002` | `CR-052` | `src/diff_preview.py` |
+| `FR-MEM-015` | functional | P2 | implemented | Bounded session ring buffer of recent file edits injected into SYSTEM_FACTS | `AC-CR052-003` | `CR-052` | `src/recent_edits.py`, `src/context_manager.py` |
+| `NFR-SEC-006` | non-functional | P1 | implemented | OrchestratorSkill states delegation is not yet available rather than promising unattended background work | `AC-CR052-004` | `CR-052` | `src/skills/orchestrator_skill.py` |
+| `FR-EXEC-004` | functional | P0 | implemented | ShellSkill wires SafeExecutor-gated command execution to the chat layer; registered via `_safe_register` | `AC-CR052-005` | `CR-052` | `src/skills/shell_skill.py` |
+| `FR-EXEC-005` | functional | P0 | implemented | ShellSkill supports pytest/ruff/mypy/python; allowlist extended | `AC-CR052-006` | `CR-052` | `src/executor.py`, `src/skills/shell_skill.py` |
+| `NFR-EXEC-003` | non-functional | P0 | implemented | ShellSkill never uses shell=True; dangerous patterns and non-allowlisted binaries refused | `AC-CR052-007` | `CR-052` | `src/skills/shell_skill.py`, `src/executor.py` |
+| `FR-GIT-001` | functional | P1 | implemented | GitSkill read-only ops (status/diff/log/branch/show) at AUTO | `AC-CR052-008` | `CR-052` | `src/skills/git_skill.py` |
+| `FR-GIT-002` | functional | P1 | implemented | GitSkill add/commit at CONFIRM via `_MUTATING_SKILL_ACTIONS` | `AC-CR052-008b` | `CR-052` | `src/skills/git_skill.py`, `src/constants.py` |
+| `FR-GIT-003` | functional | P1 | implemented | GitSkill classifies push/reset/clean/rebase/checkout/merge as DENY | `AC-CR052-009` | `CR-052` | `src/skills/git_skill.py` |
+| `FR-SCAN-001` | functional | P1 | implemented | ProjectScanSkill bounded AST symbol search + file listing (500-file/timeout cap) | `AC-CR052-010`, `AC-CR052-011` | `CR-052` | `src/skills/project_scan_skill.py` |
+| `FR-CODE-005` | functional | P1 | implemented | Bounded run→fix loop (`src/code_loop.py`); CodeSkill `verify` action; report-only by default | `AC-CR052-012`, `AC-CR052-013` | `CR-052` | `src/code_loop.py`, `src/skills/code_skill.py` |
+| `FR-EXEC-006` | functional | P2 | implemented | Opt-in auto-authorize of CWD at session start (XCH_AUTO_AUTHORIZE); skips home dir | `AC-CR052-014`, `AC-CR052-015` | `CR-052` | `src/chat.py` (`_auto_authorize_decision`) |
+| `FR-ORCH-044` | functional | P1 | implemented | Plan-first mode: `/plan` command + `think:` prefix; numbered plan, no execution | `AC-CR052-016` | `CR-052` | `src/planning.py`, `src/session/slash_commands.py`, `src/chat.py` |
+| `FR-MEM-016` | functional | P2 | implemented | `/index` embeds bounded project source files into vector memory | `AC-CR052-017` | `CR-052` | `src/project_index.py`, `src/session/slash_commands.py` |
+| `FR-MEM-017` | functional | P2 | implemented | Opt-in model summarization in FileContextEngine.compact (XCH_SMART_COMPACT); truncation fallback | `AC-CR052-018` | `CR-052` | `src/context_manager.py` |
+| `FR-EXEC-007` | functional | P2 | implemented | Stale-context detection via content hash; warning surfaced on changed files | `AC-CR052-019` | `CR-052` | `src/stale_context.py`, `src/router.py` |
+
 ## Requirement lifecycle notes
 
 - Never reuse deprecated IDs.
