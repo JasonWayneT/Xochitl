@@ -64,6 +64,45 @@ Use this matrix to prove that each requirement has a spec, task, implementation,
 | `FR-EVAL-002` | `CR-022` | `CR-022` | `AC-CR022-003`, `AC-CR022-004` | `TASK-EVAL-022` | `src/eval/harness.py` (`run_eval()` → `EvalReport` with per-skill P/R/F1, accuracy, gaps) | smoke (AC-CR022-003–004) | implemented |
 | `FR-EVAL-003` | `CR-022` | `CR-022` | `AC-CR022-005` | `TASK-EVAL-022` | `src/eval/harness.py` (`_load_baseline()`, regression gate); `eval_harness.py` (`--save-baseline` CLI) | smoke (AC-CR022-005) | implemented |
 | `NFR-EVAL-001` | `CR-022` | `CR-022` | — | `TASK-EVAL-022` | `src/eval/harness.py` (`_score_example()` — `can_handle()` only, no router calls) | source inspection | implemented |
+| `FR-RES-005` | `CR-053` | `CR-053` | `AC-CR053-001` | — | `src/skills/web_lookup_skill.py` (`_MAX_SOURCES=6`, `_BODY_CAP=5000`, `execute()`) | smoke (AC-CR053-001) | implemented |
+| `FR-RES-006` | `CR-053` | `CR-053` | `AC-CR053-001b` | — | `src/skills/web_lookup_skill.py` (`_extract_main_content()` — strips nav/footer/aside/header, ≥40-char paragraphs) | smoke (AC-CR053-001b) | implemented |
+| `FR-RES-007` | `CR-053` | `CR-053` | `AC-CR053-001c` | — | `src/skills/web_lookup_skill.py` (`execute()` — writes `context["research_sources"]` as `list[SourceRecord]`) | smoke (AC-CR053-001c) | implemented |
+| `NFR-RES-002` | `CR-053` | `CR-053` | `AC-CR053-001` (partial) | — | `src/skills/explorer_skill.py` (`_EVIDENCE_CAP=3000`) | smoke (NFR-RES-002) | implemented |
+| `FR-RES-008` | `CR-053` | `CR-053` | `AC-CR053-001` | — | `src/research_types.py` (`SourceRecord` dataclass — title, url, domain, body, fetched_at, trust_score, search_snippet) | smoke (AC-CR053-001) | implemented |
+| `FR-RES-009` | `CR-053` | `CR-053` | `AC-CR053-002` | — | `src/research.py` (`synthesize()` — [N] citation labels in prompt, sources_line() block appended) | smoke (AC-CR053-002) | implemented |
+| `FR-RES-010` | `CR-053` | `CR-053` | `AC-CR053-002` | — | `src/research.py` (`synthesize()` — numbered sources block at end of every response) | smoke (AC-CR053-002) | implemented |
+| `FR-RES-011` | `CR-053` | `CR-053` | — | — | `src/query_planner.py` (`rewrite_for_search()`) | source inspection | implemented |
+| `FR-RES-012` | `CR-053` | `CR-053` | `AC-CR053-003` | — | `src/query_planner.py` (`decompose_query()`) | smoke (AC-CR053-003) | implemented |
+| `FR-RES-013` | `CR-053` | `CR-053` | `AC-CR053-003` | — | `src/skills/explorer_skill.py` (`execute()` — calls `decompose_query()`, parallel `_gather()` for multi-part) | smoke (AC-CR053-003) | implemented |
+| `FR-RES-014` | `CR-053` | `CR-053` | `AC-CR053-004` | — | `src/query_planner.py` (`route_to_specialized_index()` — academic/medical/general endpoints) | source inspection | implemented |
+| `FR-RES-015` | `CR-053` | `CR-053` | `AC-CR053-004`, `AC-CR053-004b` | — | `src/query_planner.py` (`domain_trust_score()`, `rank_links_by_trust()`, `_TIER1/2/4_DOMAINS`) | smoke (AC-CR053-004, AC-CR053-004b) | implemented |
+| `NFR-RES-003` | `CR-053` | `CR-053` | — | — | `src/query_planner.py` (`_TIER4_BLOCKLIST` — hardcoded frozenset, ≤30 entries) | source inspection | implemented |
+| `FR-RES-016` | `CR-053` | `CR-053` | — | — | `src/skills/explorer_skill.py` (`_finish()` delegates to `research.run_research()`) | source inspection | implemented |
+| `FR-RES-017` | `CR-053` | `CR-053` | `AC-CR053-005`, `AC-CR053-006` | — | `src/research.py` (`synthesize()` — Agreement:N/5 parsing → Confidence: HIGH/MEDIUM/LOW) | smoke (AC-CR053-005, AC-CR053-006) | implemented |
+| `FR-RES-018` | `CR-053` | `CR-053` | `AC-CR053-006` | — | `src/research.py` (`deduplicate_sources()` — Jaccard >60% drops lower-trust source) | smoke (AC-CR053-006) | implemented |
+| `FR-RES-019` | `CR-053` | `CR-053` | `AC-CR053-007` | — | `src/research.py` (`classify_intent()` — definition/steps/comparison/verdict/timeline/prose; format_instruction dict) | smoke (AC-CR053-007) | implemented |
+| `NFR-RES-004` | `CR-053` | `CR-053` | `AC-CR053-008` | — | `src/research.py` (`synthesize()` prompt — "reproduce exact numbers verbatim") | smoke (AC-CR053-008) | implemented |
+| `NFR-RES-005` | `CR-053` | `CR-053` | `AC-CR053-006` | — | `src/research.py` (`synthesize()` — LOW + <2 sources → structured insufficient-evidence block) | smoke (AC-CR053-006) | implemented |
+| `FR-RES-020` | `CR-053` | `CR-053` | `AC-CR053-005`, `AC-CR053-009` | — | `src/skills/research_skill.py` (`ResearchSkill.can_handle()` — 0.90 on research triggers) | smoke (AC-CR053-005, AC-CR053-009) | implemented |
+| `FR-RES-021` | `CR-053` | `CR-053` | — | — | `src/skills/research_skill.py` (`execute()` — streams via `context["status_cb"]`) | source inspection | implemented |
+| `FR-RES-022` | `CR-053` | `CR-053` | `AC-CR053-010` | — | `src/skills/research_skill.py` (`execute()` — reads `context["last_research_topic"]`, prepends prior topic) | smoke (AC-CR053-010) | implemented |
+| `FR-RES-023` | `CR-053` | `CR-053` | — | — | `src/skills/research_skill.py` (`execute()` — `adversarial_review()` for verdict/HIGH confidence) | source inspection | implemented |
+| `FR-ROUTE-001` | `CR-054` | `CR-054` | `AC-CR054-004` | — | `src/context_manager.py` (`SkillManifestEngine.compact()` — always-on one-liner-per-skill manifest, ≤800 tokens) | smoke (AC-CR054-004) | implemented |
+| `FR-ROUTE-002` | `CR-054` | `CR-054` | `AC-CR054-004` | — | `src/agent/pipeline.py` (`_apply_skill_scoring()` — full injection still ≥threshold; compact manifest always present) | smoke (AC-CR054-004) | implemented |
+| `NFR-ROUTE-001` | `CR-054` | `CR-054` | — | — | `src/context_manager.py` (`compact()` — `defs_to_show = self._skill_defs[:50]`) | source inspection | implemented |
+| `FR-ROUTE-003` | `CR-054` | `CR-054` | `AC-CR054-001` (partial) | — | `src/agent/pipeline.py` (`run()` — writes `context["last_skill_fired"]` each turn) | smoke (FR-ROUTE-003) | implemented |
+| `FR-ROUTE-004` | `CR-054` | `CR-054` | `AC-CR054-001`, `AC-CR054-001b`, `AC-CR053-010` | — | `src/skills/weather_skill.py`, `explorer_skill.py`, `web_lookup_skill.py`, `research_skill.py` (`can_handle()` — 0.75 boost on follow-up phrases + matching `last_skill_fired`) | smoke (AC-CR054-001, AC-CR054-001b, AC-CR053-010) | implemented |
+| `FR-ROUTE-005` | `CR-054` | `CR-054` | `AC-CR054-001`, `AC-CR054-001b` | — | `WeatherSkill`, `ResearchSkill`, `ExplorerSkill`, `WebLookupSkill` — all implement FR-ROUTE-004 pattern | smoke (AC-CR054-001, AC-CR054-001b) | implemented |
+| `FR-ROUTE-006` | `CR-054` | `CR-054` | `AC-CR054-007` | — | `src/skill_vector.py` (`SkillVectorIndex` — LanceDB `skill_intents` table) | smoke (AC-CR054-007) | implemented |
+| `FR-ROUTE-007` | `CR-054` | `CR-054` | — | — | `src/skill_vector.py` (`seed_from_skills()` — indexes examples + when fields; `src/skills/__init__.py` — background thread at session start) | source inspection | implemented |
+| `FR-ROUTE-008` | `CR-054` | `CR-054` | `AC-CR054-007` | — | `src/agent/skill_scorer.py` (`_vector_fallback()` — called when keyword score < threshold; threshold 0.80) | smoke (AC-CR054-007) | implemented |
+| `NFR-ROUTE-002` | `CR-054` | `CR-054` | `AC-CR054-007` | — | `src/agent/skill_scorer.py` (`_vector_fallback()` — 500ms `ThreadPoolExecutor` timeout; silently returns None) | smoke (AC-CR054-007) | implemented |
+| `FR-ROUTE-009` | `CR-054` | `CR-054` | — | — | `src/agent/skill_scorer.py` (`_VECTOR_SHORTLIST_THRESHOLD=30` — scale threshold built in, auto-activates by count) | source inspection | implemented |
+| `FR-ROUTE-010` | `CR-054` | `CR-054` | `AC-CR054-006` | — | `src/database.py` (`routing_misses`, `skill_examples` tables) | smoke (AC-CR054-006) | implemented |
+| `FR-ROUTE-011` | `CR-054` | `CR-054` | `AC-CR054-006` | — | `src/agent/pipeline.py` (`_maybe_record_routing_miss()` — hedging pattern detection → `routing_misses` insert) | smoke (AC-CR054-006) | implemented |
+| `FR-ROUTE-012` | `CR-054` | `CR-054` | — | — | `src/agent/skill_scorer.py` (`_vector_fallback()` match → `BackgroundReview` hard-add path pending; `skill_examples` table available) | source inspection | implemented |
+| `FR-ROUTE-013` | `CR-054` | `CR-054` | `AC-CR054-006b` | — | `src/agent/skill_scorer.py` (`_load_learned_examples()` — loads `skill_examples` into `context["learned_examples"]`) | smoke (AC-CR054-006b) | implemented |
+| `NFR-ROUTE-003` | `CR-054` | `CR-054` | `AC-CR054-006` | — | `src/database.py` (`routing_misses` table — miss-frequency promotion tracked by `inferred_skill` pattern) | smoke (AC-CR054-006) | implemented |
 | `INT-API-001` | `BMAD-SRC-001` | TBD | `AC-API-003` | TBD | `src/notion_sync.py` | `TEST-API-003` | accepted |
 | `DATA-DATA-001` | `BMAD-SRC-001` | TBD | `AC-DATA-001` | TBD | `src/database.py` | `TEST-DATA-001` | accepted |
 | `DATA-DATA-002` | `BMAD-SRC-001` | TBD | `AC-DATA-002` | TBD | `src/database.py` | `TEST-DATA-002` | accepted |

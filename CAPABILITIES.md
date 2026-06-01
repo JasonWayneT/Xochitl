@@ -9,7 +9,21 @@ Xochitl is a high-intelligence agentic CLI for software engineering, project pla
 ## 1. Conversational Intelligence
 
 - **Tiered routing** (`src/router.py`): Local router model classifies each turn; local, specialist-local, or cloud execution. Session token budget via `SessionGovernor` (`src/governor.py`).
-- **Bounded exploration** (`ExplorerSkill`): Read-only chained file/search steps with loop and budget guards.
+- **Bounded exploration** (`ExplorerSkill`): Multi-step investigation loop with parallel sub-query gathering (up to 6 sources × 3,000 chars per step), convergence detection, and budget guards. Delegates to the research pipeline for synthesis.
+- **Perplexity-grade research** (`ResearchSkill`, CR-053): Full research pipeline with:
+  - 6 sources, 5,000 chars each, navigation-stripped prose extraction.
+  - Domain trust scoring (Tier 1–4: `.gov`/`.edu`/PubMed first; blocklist for low-quality domains).
+  - Query rewriting and multi-part decomposition with parallel fetching.
+  - `[N]` inline citations and numbered sources block on every answer.
+  - `Confidence: HIGH / MEDIUM / LOW` rated by cross-source agreement.
+  - Intent-aware format: comparison → table, steps → numbered list, verdict → VERDICT: line.
+  - Verbatim statistics (no rounding or paraphrasing).
+  - Adversarial review appended for verdict/HIGH-confidence answers.
+- **Intelligent skill routing** (CR-054): Hybrid routing architecture:
+  - Always-on compact manifest (≤800 tokens): every turn includes one-liner for each skill so the LLM can route to any skill even without full schema injection.
+  - Context-aware follow-ups: `WeatherSkill`, `ExplorerSkill`, `WebLookupSkill`, `ResearchSkill` all boost to 0.75 when a follow-up phrase matches the last-fired skill (e.g., "what about in Hemet?" after a weather turn).
+  - Semantic vector fallback: `SkillVectorIndex` (LanceDB `skill_intents`) catches synonym matches with 500ms timeout.
+  - Self-learning vocabulary: matched phrases are persisted to `skill_examples`; routing misses logged to `routing_misses`.
 - **Capability boundary** (CR-036): Near-miss and complete-miss turns get explicit `[TURN CONTEXT]` so the model does not silently downgrade.
 - **Compact reasoning disclosure** (CR-040): One-line action summaries before tools; compact result pairing; explicit "why" expansion on request.
 - **Controlled initiative** (CR-038): Proactive alerts by category with OFF / ERRORS_ONLY modes and dismiss-to-suppress.
@@ -18,6 +32,7 @@ Xochitl is a high-intelligence agentic CLI for software engineering, project pla
   - **Preferences** — `preferences` table (`preference_key`, `preference_value`).
   - **Semantic memory** — LanceDB table `memories` at `~/.xochitl/lancedb/` with HyDE recall (`src/memory.py`).
   - **Procedural memory** — SQLite `workflows` + LanceDB `workflow_intents` for reusable multi-step routines (CR-041/042).
+  - **Skill memory** — LanceDB `skill_intents` + SQLite `skill_examples` for learned routing vocabulary (CR-054).
   - **Structured facts** — `memory_facts` with confidence gating.
   - **Cultural voice** — Matriarca persona via SOUL.md and system prompt layers.
 
@@ -53,7 +68,7 @@ Xochitl is a high-intelligence agentic CLI for software engineering, project pla
 - **JSON CLI mode**: `xochitl --json` on data commands (`today`, `status`, `queue`, `sync`, etc.); `chat`/`plan` return `interactive_only`.
 - **Safe executor** (CR-037): `ActionGovernor` classifies read/write/exec; path traversal denied; allowlisted shell commands.
 - **Security sandbox** (`src/security.py`): Authorized roots only; reads automatic, mutating actions need approval.
-- **Context assembly** (`src/context_manager.py`): Five-layer system prompt with proportional compaction.
+- **Context assembly** (`src/context_manager.py`): Five-layer system prompt with proportional compaction. Always-on compact skill manifest (≤800 tokens) injected on every turn (CR-054 Phase 1).
 - **Observability** (CR-021): Event bus + optional JSONL traces for routing and LLM completion.
 - **Eval harness** (CR-022): Golden-set skill routing accuracy without live LLM calls.
 
