@@ -4418,6 +4418,77 @@ test("CR-052 P3: ProjectScanSkill respects file cap (AC-CR052-011)", t_scan_resp
 test("CR-052 P3: ProjectScanSkill.list_files matches pattern (AC-CR052-011b)", t_scan_list_files)
 
 
+# ── CR-052 Phase 3 — Code execution loop ─────────────────────────────────────
+
+def t_code_loop_passes_first_run():
+    """AC-CR052-012a: loop returns immediately when tests pass first run (FR-CODE-005)."""
+    from src.code_loop import run_fix_loop
+    calls = {"n": 0}
+    def run_tests():
+        calls["n"] += 1
+        return True, "ok"
+    res = run_fix_loop(run_tests, lambda o: True, max_iterations=3)
+    assert res.passed and res.iterations == 0 and res.stopped_reason == "passed"
+    assert calls["n"] == 1
+
+def t_code_loop_fails_once_then_passes():
+    """AC-CR052-012: loop terminates with pass after one fix (FR-CODE-005)."""
+    from src.code_loop import run_fix_loop
+    state = {"runs": 0}
+    def run_tests():
+        state["runs"] += 1
+        return (state["runs"] >= 2), f"run {state['runs']}"
+    fixes = {"n": 0}
+    def apply_fix(_out):
+        fixes["n"] += 1
+        return True
+    res = run_fix_loop(run_tests, apply_fix, max_iterations=3)
+    assert res.passed is True
+    assert res.iterations == 1
+    assert res.stopped_reason == "passed"
+    assert fixes["n"] == 1
+
+def t_code_loop_always_fails_stops_at_max():
+    """AC-CR052-013: loop stops at max_iterations when tests never pass (FR-CODE-005)."""
+    from src.code_loop import run_fix_loop
+    runs = {"n": 0}
+    def run_tests():
+        runs["n"] += 1
+        return False, "fail"
+    res = run_fix_loop(run_tests, lambda o: True, max_iterations=3)
+    assert res.passed is False
+    assert res.iterations == 3
+    assert res.stopped_reason == "max_iterations"
+    # initial run + one re-run per fix attempt
+    assert runs["n"] == 4
+
+def t_code_loop_stops_when_no_fix():
+    """AC-CR052-013b: loop stops when apply_fix declines (FR-CODE-005)."""
+    from src.code_loop import run_fix_loop
+    res = run_fix_loop(lambda: (False, "fail"), lambda o: False, max_iterations=3)
+    assert res.passed is False and res.iterations == 0 and res.stopped_reason == "no_fix"
+
+def t_code_skill_verify_reports():
+    """AC-CR052-012b: CodeSkill.verify_and_fix reports test outcome (FR-CODE-005)."""
+    from unittest.mock import patch, MagicMock
+    from src.skills.code_skill import CodeSkill
+    # Mock ShellSkill.execute to simulate a passing test run.
+    def fake_execute(self, user_input, ctx, params):
+        ctx["last_skill_success"] = True
+        return "3 passed"
+    with patch("src.skills.shell_skill.ShellSkill.execute", fake_execute):
+        ctx = {}
+        out = CodeSkill().verify_and_fix("pytest -q", ctx)
+    assert "passed" in out.lower()
+    assert ctx["last_skill_success"] is True
+
+test("CR-052 P3: code loop passes first run (AC-CR052-012a)", t_code_loop_passes_first_run)
+test("CR-052 P3: code loop fails once then passes (AC-CR052-012)", t_code_loop_fails_once_then_passes)
+test("CR-052 P3: code loop stops at max iterations (AC-CR052-013)", t_code_loop_always_fails_stops_at_max)
+test("CR-052 P3: code loop stops when no fix applied (AC-CR052-013b)", t_code_loop_stops_when_no_fix)
+test("CR-052 P3: CodeSkill.verify_and_fix reports outcome (AC-CR052-012b)", t_code_skill_verify_reports)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

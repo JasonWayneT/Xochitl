@@ -100,8 +100,57 @@ class CodeSkill(Skill):
             return self.fix_issue(project_id, params["issue_id"])
         if action == "tests":
             return self.generate_tests(project_id, params["requirement_id"])
+        if action == "verify":
+            return self.verify_and_fix(params.get("test_command", "pytest -q"), context)
 
-        return "Specify an action: scaffold, implement, fix, or tests."
+        return "Specify an action: scaffold, implement, fix, tests, or verify."
+
+    # ── Test verification loop (FR-CODE-005, CR-052) ──────────────────────────
+
+    def verify_and_fix(self, test_command: str = "pytest -q", context: Optional[dict] = None) -> str:
+        """Run a test command and report the result via the bounded fix loop.
+
+        Implements FR-CODE-005 (CR-052). The command runs through ShellSkill →
+        SafeExecutor (allowlist, shell=False, output cap). By default the loop is
+        report-only (max_iterations=0): it runs the tests once and reports
+        pass/fail. Autonomous fix-and-write is opt-in via ``XCH_CODE_AUTOFIX=1``
+        and is deliberately NOT wired to silent file writes in this CR — the loop
+        control flow is proven correct (src/code_loop.run_fix_loop) but unattended
+        edits remain gated behind the approval model.
+
+        Args:
+            test_command: Command to run (default "pytest -q"). Must be allowlisted.
+            context: Session context dict; ``last_skill_success`` is honored.
+
+        Returns:
+            A human-readable report of the test outcome.
+        """
+        from src.code_loop import run_fix_loop, autofix_enabled, _MAX_FIX_ITERATIONS
+        from src.skills.shell_skill import ShellSkill
+
+        ctx = context if context is not None else {}
+        shell = ShellSkill()
+
+        def run_tests() -> tuple[bool, str]:
+            out = shell.execute("", ctx, {"command": test_command})
+            return bool(ctx.get("last_skill_success") is True), out
+
+        def apply_fix(_output: str) -> bool:
+            # Report-only: never auto-write files. Autonomous fix is deferred.
+            return False
+
+        max_iter = _MAX_FIX_ITERATIONS if autofix_enabled() else 0
+        result = run_fix_loop(run_tests, apply_fix, max_iterations=max_iter)
+
+        ctx["last_skill_success"] = result.passed
+        header = "✓ tests passed" if result.passed else "✗ tests failing"
+        note = ""
+        if not result.passed:
+            if result.stopped_reason == "max_iterations":
+                note = f"\n[stopped after {result.iterations} fix attempt(s) — still failing]"
+            else:
+                note = "\n[reporting only — autonomous fixes are off; set XCH_CODE_AUTOFIX=1 to enable]"
+        return f"{header}\n\n{result.final_output}{note}"
 
     # ── Scaffold from specs ───────────────────────────────────────────────────
 
