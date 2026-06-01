@@ -62,3 +62,6 @@ _safe_register(GmailSkill)
 # CR-052 — tool execution skills.
 from src.skills.shell_skill import ShellSkill
 _safe_register(ShellSkill)
+
+from src.skills.git_skill import GitSkill
+_safe_register(GitSkill)

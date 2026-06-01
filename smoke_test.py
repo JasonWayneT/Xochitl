@@ -4306,6 +4306,62 @@ test("CR-052 P3: ShellSkill runs allowlisted command via SafeExecutor (AC-CR052-
 test("CR-052 P3: ShellSkill requires FSM approval (AC-CR052-007d)", t_shell_skill_in_always_approve)
 
 
+# ── CR-052 Phase 3 — GitSkill ────────────────────────────────────────────────
+
+def t_git_skill_registered():
+    """AC-CR052-008a: GitSkill is registered (FR-GIT-001)."""
+    import src.skills
+    from src.skills import _registry
+    assert _registry.by_name("GitSkill") is not None
+
+def t_git_skill_read_is_auto():
+    """AC-CR052-008: read-only git ops classify as AUTO (FR-GIT-001)."""
+    from src.skills.git_skill import GitSkill
+    for a in ("status", "diff", "log", "branch", "show"):
+        assert GitSkill.classify_action(a) == "auto", a
+
+def t_git_skill_write_is_confirm():
+    """AC-CR052-008b: add/commit classify as CONFIRM and are in the mutating set (FR-GIT-002)."""
+    from src.skills.git_skill import GitSkill
+    from src.constants import _MUTATING_SKILL_ACTIONS
+    assert GitSkill.classify_action("add") == "confirm"
+    assert GitSkill.classify_action("commit") == "confirm"
+    assert {"add", "commit"} <= set(_MUTATING_SKILL_ACTIONS["GitSkill"])
+
+def t_git_skill_dangerous_is_deny():
+    """AC-CR052-009: push --force / reset / clean classify as DENY (FR-GIT-003)."""
+    from src.skills.git_skill import GitSkill
+    for a in ("push", "reset", "clean", "rebase", "checkout", "merge"):
+        assert GitSkill.classify_action(a) == "deny", a
+
+def t_git_skill_execute_refuses_deny():
+    """AC-CR052-009b: GitSkill.execute refuses a DENY action without running git (FR-GIT-003)."""
+    from src.skills.git_skill import GitSkill
+    ctx = {}
+    out = GitSkill().execute("", ctx, {"action": "reset"})
+    assert "not allowed" in out.lower()
+    assert ctx["last_skill_success"] is False
+
+def t_git_skill_status_runs():
+    """AC-CR052-008c: status action runs through SafeExecutor (FR-GIT-001)."""
+    from unittest.mock import patch, MagicMock
+    from src.skills.git_skill import GitSkill
+    fake = MagicMock(returncode=0, stdout="## master\n", stderr="", truncated=False)
+    with patch("src.skills.git_skill.SafeExecutor") as MockEx:
+        MockEx.return_value.run.return_value = fake
+        ctx = {}
+        out = GitSkill().execute("", ctx, {"action": "status"})
+    assert "master" in out
+    assert ctx["last_skill_success"] is True
+
+test("CR-052 P3: GitSkill registered (AC-CR052-008a)", t_git_skill_registered)
+test("CR-052 P3: GitSkill read ops are AUTO (AC-CR052-008)", t_git_skill_read_is_auto)
+test("CR-052 P3: GitSkill add/commit are CONFIRM (AC-CR052-008b)", t_git_skill_write_is_confirm)
+test("CR-052 P3: GitSkill dangerous ops are DENY (AC-CR052-009)", t_git_skill_dangerous_is_deny)
+test("CR-052 P3: GitSkill.execute refuses DENY actions (AC-CR052-009b)", t_git_skill_execute_refuses_deny)
+test("CR-052 P3: GitSkill status runs via SafeExecutor (AC-CR052-008c)", t_git_skill_status_runs)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
