@@ -88,6 +88,13 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
         from src.research import adversarial_review
         return adversarial_review(arg)
 
+    # ── Plan-first mode (FR-ORCH-044, CR-052) ─────────────────────────────────
+    if verb == "/plan":
+        if not arg:
+            return "Usage: /plan <task to plan> — generates a numbered plan; runs nothing."
+        from src.planning import generate_plan
+        return generate_plan(arg, chat.router)
+
     # ── Session budget ────────────────────────────────────────────────────────
     if verb == "/budget":
         return chat._governor.budget_detail()
@@ -144,7 +151,7 @@ def handle_slash_command(raw: str, chat: "XochitlChat") -> str:
     available = (
         "/next <msg>  /retry  /authorize  /revoke  "
         "/registry  /audit  /review  /research  /adversarial  "
-        "/budget  /status  /history [N]  /brief  "
+        "/plan <task>  /budget  /status  /history [N]  /brief  "
         "/dismiss  /workflows  /workflow save <name>  /workflow run <name>  "
         "/debug skill"
     )

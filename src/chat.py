@@ -964,6 +964,12 @@ class XochitlChat:
             )
             return self._record(expansion)
 
+        # FR-ORCH-044 (CR-052): "think:" prefix → plan-first mode (read-only).
+        _stripped = user_input.strip()
+        if _stripped.lower().startswith("think:"):
+            from src.planning import generate_plan
+            return self._record(generate_plan(_stripped[6:].strip(), self.router))
+
         # ── 1. Handle pending permission response (yes/no for file ops) ──────
         if "pending_file_operation" in self.current_context:
             perm = self._handle_permission_response(user_input)

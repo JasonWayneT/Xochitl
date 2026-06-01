@@ -4529,6 +4529,55 @@ test("CR-052: auto-authorize authorizes project CWD (AC-CR052-014)", t_auto_auth
 test("CR-052: auto-authorize skips home directory (AC-CR052-015)", t_auto_authorize_skips_home)
 
 
+# ── CR-052 — Plan-first mode ─────────────────────────────────────────────────
+
+def t_plan_generates_numbered_plan():
+    """AC-CR052-016: generate_plan returns the model's plan, runs nothing (FR-ORCH-044)."""
+    from unittest.mock import MagicMock
+    from src.planning import generate_plan
+    router = MagicMock()
+    router.route.return_value = MagicMock(error=None, content="1. Read router.py\n2. Extract\n3. Test")
+    out = generate_plan("refactor the router", router)
+    assert "Plan for:" in out
+    assert "1. Read router.py" in out
+    assert "plan only" in out.lower()
+    # planning must use a force_route (local), not a free cloud call
+    _, kwargs = router.route.call_args
+    assert kwargs.get("force_route") == "architecture_planning"
+
+def t_plan_empty_task():
+    """AC-CR052-016b: empty task is handled gracefully (FR-ORCH-044)."""
+    from unittest.mock import MagicMock
+    from src.planning import generate_plan
+    out = generate_plan("", MagicMock())
+    assert "give me a task" in out.lower()
+
+def t_plan_router_error():
+    """AC-CR052-016c: router error degrades cleanly (FR-ORCH-044)."""
+    from unittest.mock import MagicMock
+    from src.planning import generate_plan
+    router = MagicMock()
+    router.route.return_value = MagicMock(error="model offline", content="")
+    out = generate_plan("do a thing", router)
+    assert "couldn't generate a plan" in out.lower()
+
+def t_plan_slash_command_wired():
+    """AC-CR052-016d: /plan dispatches to generate_plan (FR-ORCH-044)."""
+    from unittest.mock import MagicMock, patch
+    from src.session.slash_commands import handle_slash_command
+    chat = MagicMock()
+    chat.router = MagicMock()
+    with patch("src.planning.generate_plan", return_value="PLANNED") as gp:
+        out = handle_slash_command("/plan refactor X", chat)
+    assert out == "PLANNED"
+    gp.assert_called_once()
+
+test("CR-052: generate_plan returns numbered plan (AC-CR052-016)", t_plan_generates_numbered_plan)
+test("CR-052: generate_plan handles empty task (AC-CR052-016b)", t_plan_empty_task)
+test("CR-052: generate_plan handles router error (AC-CR052-016c)", t_plan_router_error)
+test("CR-052: /plan slash command wired (AC-CR052-016d)", t_plan_slash_command_wired)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
