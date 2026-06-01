@@ -4227,6 +4227,30 @@ test("CR-052 P2: recent-edits ring buffer records and renders (AC-CR052-003)", t
 test("CR-052 P2: recent-edits ring buffer capped at max (AC-CR052-003b)", t_recent_edits_capped)
 
 
+# ── CR-052 — OrchestratorSkill honesty guard ─────────────────────────────────
+
+def t_orchestrator_suggest_is_honest():
+    """AC-CR052-004: OrchestratorSkill.suggest does not promise unattended background work (NFR-SEC-006)."""
+    from src.skills.orchestrator_skill import OrchestratorSkill
+    s = OrchestratorSkill()
+    msg = s.suggest("delegate this task to a background agent", {})
+    low = msg.lower()
+    # Must NOT promise it will run unattended / flag when ready
+    assert "flag you when it's ready" not in low
+    # Must state delegation isn't available yet
+    assert "isn't built yet" in low or "not yet" in low or "not available" in low
+
+def t_orchestrator_tool_def_warns():
+    """AC-CR052-004b: tool_definition warns the LLM not to promise background delegation (NFR-SEC-006)."""
+    from src.skills.orchestrator_skill import OrchestratorSkill
+    defn = OrchestratorSkill().tool_definition()
+    assert "not yet implemented" in defn["description"].lower() \
+        or "do not promise" in defn["description"].lower()
+
+test("CR-052: OrchestratorSkill.suggest is honest about delegation (AC-CR052-004)", t_orchestrator_suggest_is_honest)
+test("CR-052: OrchestratorSkill.tool_definition warns LLM (AC-CR052-004b)", t_orchestrator_tool_def_warns)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

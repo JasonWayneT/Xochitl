@@ -35,30 +35,36 @@ class OrchestratorSkill(Skill):
         return 0.0
 
     def suggest(self, user_input: str, context: dict) -> str:
+        # NFR-SEC-006 (CR-052): autonomous background execution is not yet
+        # implemented (the daemon is a Phase 5 item). Be honest rather than
+        # promising a background agent that never actually runs.
         q = user_input.lower()
         if any(kw in q for kw in _STATUS_KEYWORDS):
             return self._format_status()
         return (
-            "I can hand this off to a background agent while you keep working on other things. "
-            "It'll run in its own workspace and I'll flag you when it's ready for review. "
-            "Want to delegate it?"
+            "Heads up — true background/autonomous delegation isn't built yet "
+            "(it's on the roadmap). I can't hand this off to a separate agent that "
+            "runs while you do other things. What I *can* do is work through it with "
+            "you right here, step by step. Want to do that instead?"
         )
 
     def tool_definition(self) -> dict:
-        # Implements FR-ORCH-005
+        # Implements FR-ORCH-005; NFR-SEC-006 honesty guard (CR-052).
         return {
             "name": "OrchestratorSkill",
-            "description": "Delegates a task to a background autonomous agent and tracks its progress.",
-            "when": "user says 'delegate', 'background', 'handle it autonomously', 'spin up an agent', or asks about background task status",
+            "description": (
+                "Reports on task workspaces. NOTE: true autonomous background "
+                "delegation is not yet implemented — do not promise the user that a "
+                "task will run unattended in the background."
+            ),
+            "when": "user asks about background/delegated task status (status queries only — delegation itself is not available yet)",
             "params": {
-                "task_id": "(optional) task ID to delegate; omit to show status",
+                "task_id": "(optional) task ID; omit to show status",
             },
             "examples": [
-                "delegate this task to an agent",
-                "run this in the background",
-                "handle it autonomously",
-                "spin up an agent for this",
                 "how's the background task doing?",
+                "what's the status of my delegated tasks?",
+                "show background task progress",
             ],
         }
 
