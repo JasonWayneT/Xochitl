@@ -1226,7 +1226,13 @@ class XochitlChat:
     def _stage_skill_call_plan(self, skill: Skill, params: dict, user_input: str, visible: str) -> str:
         name = type(skill).__name__
         risk = self._risk_label_for_skill(name, params)
-        action = params.get("action") or params.get("direction") or "execute"
+        # CR-052: show the exact command/action so the user knows what they approve.
+        action = (
+            params.get("command")
+            or params.get("action")
+            or params.get("direction")
+            or "execute"
+        )
         self.current_context["pending_action"] = "execute_skill_call"
         self.current_context["pending_skill_call"] = {
             "skill_name": name,
@@ -1258,6 +1264,10 @@ class XochitlChat:
             return "file writes in the active project"
         if skill_name in {"BMADSkill", "SDDSkill"}:
             return "project/spec file writes"
+        if skill_name == "ShellSkill":
+            return "allowlisted shell command execution"
+        if skill_name == "GitSkill":
+            return "git repository write (add/commit)"
         return "state change"
 
     def _execute_pending_skill_call(self) -> str:

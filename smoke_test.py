@@ -4251,6 +4251,61 @@ test("CR-052: OrchestratorSkill.suggest is honest about delegation (AC-CR052-004
 test("CR-052: OrchestratorSkill.tool_definition warns LLM (AC-CR052-004b)", t_orchestrator_tool_def_warns)
 
 
+# ── CR-052 Phase 3 — ShellSkill ──────────────────────────────────────────────
+
+def t_shell_skill_registered():
+    """AC-CR052-005: ShellSkill is registered in the skill registry (FR-EXEC-004)."""
+    import src.skills  # triggers registration
+    from src.skills import _registry
+    assert _registry.by_name("ShellSkill") is not None
+
+def t_shell_skill_can_handle():
+    """AC-CR052-006: ShellSkill scores >= 0.65 for a run-tests request (FR-EXEC-005)."""
+    from src.skills.shell_skill import ShellSkill
+    assert ShellSkill().can_handle("run the tests", {}) >= 0.65
+    assert ShellSkill().can_handle("what is the capital of France", {}) == 0.0
+
+def t_shell_skill_refuses_dangerous():
+    """AC-CR052-007: ShellSkill refuses destructive commands (NFR-EXEC-003)."""
+    from src.skills.shell_skill import ShellSkill
+    ctx = {}
+    out = ShellSkill().execute("", ctx, {"command": "rm -rf /"})
+    assert "refused" in out.lower()
+    assert ctx["last_skill_success"] is False
+
+def t_shell_skill_blocks_non_allowlisted():
+    """AC-CR052-007b: ShellSkill refuses non-allowlisted binaries (NFR-EXEC-003)."""
+    from src.skills.shell_skill import ShellSkill
+    ctx = {}
+    out = ShellSkill().execute("", ctx, {"command": "node app.js"})
+    assert "allowlist" in out.lower()
+    assert ctx["last_skill_success"] is False
+
+def t_shell_skill_runs_via_executor():
+    """AC-CR052-007c: allowlisted command runs through SafeExecutor and reports exit code (FR-EXEC-005)."""
+    from unittest.mock import patch, MagicMock
+    from src.skills.shell_skill import ShellSkill
+    fake = MagicMock(returncode=0, stdout="3 passed\n", stderr="", truncated=False)
+    with patch("src.skills.shell_skill.SafeExecutor") as MockEx:
+        MockEx.return_value.run.return_value = fake
+        ctx = {}
+        out = ShellSkill().execute("", ctx, {"command": "pytest -q"})
+    assert "exit 0" in out and "3 passed" in out
+    assert ctx["last_skill_success"] is True
+
+def t_shell_skill_in_always_approve():
+    """AC-CR052-007d: ShellSkill requires confirmation-FSM approval (NFR-EXEC-003)."""
+    from src.constants import _ALWAYS_APPROVE
+    assert "ShellSkill" in _ALWAYS_APPROVE
+
+test("CR-052 P3: ShellSkill registered (AC-CR052-005)", t_shell_skill_registered)
+test("CR-052 P3: ShellSkill.can_handle scores run requests (AC-CR052-006)", t_shell_skill_can_handle)
+test("CR-052 P3: ShellSkill refuses destructive commands (AC-CR052-007)", t_shell_skill_refuses_dangerous)
+test("CR-052 P3: ShellSkill blocks non-allowlisted binaries (AC-CR052-007b)", t_shell_skill_blocks_non_allowlisted)
+test("CR-052 P3: ShellSkill runs allowlisted command via SafeExecutor (AC-CR052-007c)", t_shell_skill_runs_via_executor)
+test("CR-052 P3: ShellSkill requires FSM approval (AC-CR052-007d)", t_shell_skill_in_always_approve)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

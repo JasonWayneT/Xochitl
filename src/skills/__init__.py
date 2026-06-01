@@ -58,3 +58,7 @@ _safe_register(MapsSkill)
 
 from src.skills.gmail_skill import GmailSkill
 _safe_register(GmailSkill)
+
+# CR-052 — tool execution skills.
+from src.skills.shell_skill import ShellSkill
+_safe_register(ShellSkill)

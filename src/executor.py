@@ -34,6 +34,8 @@ _SUBPROCESS_TIMEOUT_SECS: int = 10
 _ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "git", "python", "python3", "pip", "pip3",
     "pytest", "ls", "dir", "echo", "cat", "type",
+    # CR-052 FR-EXEC-005: developer test/lint/type tools.
+    "ruff", "mypy",
 })
 
 # Action types that map to AUTO tier (read-only, non-destructive).

@@ -58,7 +58,13 @@ _MUTATING_SKILL_ACTIONS: dict[str, frozenset[str]] = {
         "update_requirement", "close_issue",
     }),
     "CodeSkill": frozenset({"scaffold", "implement", "fix", "tests", "test"}),
+    # CR-052 FR-GIT-002: git add/commit require approval; status/diff/log are AUTO.
+    "GitSkill": frozenset({"add", "commit"}),
 }
 
 # Skills that always require approval regardless of action param (FR-ORCH-011).
-_ALWAYS_APPROVE: frozenset[str] = frozenset({"NotionSkill", "CodeSkill"})
+# CR-052: ShellSkill gates every command through the confirmation FSM so the
+# user always sees the exact command before it runs.
+_ALWAYS_APPROVE: frozenset[str] = frozenset({
+    "NotionSkill", "CodeSkill", "ShellSkill",
+})
