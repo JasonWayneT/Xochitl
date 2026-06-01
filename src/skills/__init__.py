@@ -65,3 +65,6 @@ _safe_register(ShellSkill)
 
 from src.skills.git_skill import GitSkill
 _safe_register(GitSkill)
+
+from src.skills.project_scan_skill import ProjectScanSkill
+_safe_register(ProjectScanSkill)

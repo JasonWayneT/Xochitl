@@ -4362,6 +4362,62 @@ test("CR-052 P3: GitSkill.execute refuses DENY actions (AC-CR052-009b)", t_git_s
 test("CR-052 P3: GitSkill status runs via SafeExecutor (AC-CR052-008c)", t_git_skill_status_runs)
 
 
+# ── CR-052 Phase 3 — ProjectScanSkill ────────────────────────────────────────
+
+def t_scan_registered():
+    """AC-CR052-010a: ProjectScanSkill is registered (FR-SCAN-001)."""
+    import src.skills
+    from src.skills import _registry
+    assert _registry.by_name("ProjectScanSkill") is not None
+
+def t_scan_find_symbol():
+    """AC-CR052-010: find_symbol locates can_handle in src/skills (FR-SCAN-001)."""
+    from src.skills.project_scan_skill import ProjectScanSkill
+    skills_dir = ROOT / "src" / "skills"
+    locations, capped, scanned = ProjectScanSkill().find_symbol("can_handle", root=skills_dir)
+    assert len(locations) >= 1, f"expected >=1 can_handle definition, got {locations}"
+    assert any("function" in loc for loc in locations)
+
+def t_scan_find_symbol_missing():
+    """AC-CR052-010b: find_symbol reports nothing for an absent symbol (FR-SCAN-001)."""
+    from src.skills.project_scan_skill import ProjectScanSkill
+    skills_dir = ROOT / "src" / "skills"
+    locations, capped, scanned = ProjectScanSkill().find_symbol("ZZ_no_such_symbol_xyz", root=skills_dir)
+    assert locations == []
+
+def t_scan_respects_cap():
+    """AC-CR052-011: scan stops at the file cap and reports capped (FR-SCAN-001)."""
+    import tempfile
+    from pathlib import Path as _P
+    from unittest.mock import patch
+    from src.skills.project_scan_skill import ProjectScanSkill
+    with tempfile.TemporaryDirectory() as d:
+        for i in range(8):
+            (_P(d) / f"f{i}.txt").write_text("x", encoding="utf-8")
+        with patch("src.skills.project_scan_skill._MAX_FILES", 3):
+            files, capped = ProjectScanSkill().list_files("*.txt", root=_P(d))
+        assert capped is True, "scan must report capped when file count exceeds the cap"
+        assert len(files) <= 3
+
+def t_scan_list_files():
+    """AC-CR052-011b: list_files returns matching files (FR-SCAN-001)."""
+    import tempfile
+    from pathlib import Path as _P
+    from src.skills.project_scan_skill import ProjectScanSkill
+    with tempfile.TemporaryDirectory() as d:
+        (_P(d) / "a.py").write_text("x", encoding="utf-8")
+        (_P(d) / "b.py").write_text("x", encoding="utf-8")
+        (_P(d) / "c.md").write_text("x", encoding="utf-8")
+        files, capped = ProjectScanSkill().list_files("*.py", root=_P(d))
+        assert set(files) == {"a.py", "b.py"}
+
+test("CR-052 P3: ProjectScanSkill registered (AC-CR052-010a)", t_scan_registered)
+test("CR-052 P3: ProjectScanSkill.find_symbol locates can_handle (AC-CR052-010)", t_scan_find_symbol)
+test("CR-052 P3: ProjectScanSkill.find_symbol empty for missing (AC-CR052-010b)", t_scan_find_symbol_missing)
+test("CR-052 P3: ProjectScanSkill respects file cap (AC-CR052-011)", t_scan_respects_cap)
+test("CR-052 P3: ProjectScanSkill.list_files matches pattern (AC-CR052-011b)", t_scan_list_files)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:
