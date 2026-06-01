@@ -236,6 +236,10 @@ class AgentPipeline:
         last_skill_name = ""
         last_mutating = ""
 
+        # FR-ROUTE-003: write last_skill_fired to context so can_handle() sees it
+        # on the *next* turn. Cleared here so a no-skill turn sets it to "".
+        turn.context["last_skill_fired"] = ""
+
         if skill_calls:
             result_parts: list[str] = [visible] if visible else []
             remaining = len(skill_calls)
@@ -284,6 +288,7 @@ class AgentPipeline:
                 from src.terminal_output import format_skill_output
                 formatted = format_skill_output(tool_result)
                 turn.context["last_skill_name"] = skill_name
+                turn.context["last_skill_fired"] = skill_name  # FR-ROUTE-003
                 turn.context["last_action_summary"] = infer_action_label(
                     turn.user_input, skill_name
                 )
@@ -322,6 +327,10 @@ class AgentPipeline:
             final, turn.user_input, top_score, tool_calls_made,
             messages, system_prompt, force
         )
+
+        # Stage 8 — routing-miss detection (FR-ROUTE-011, CR-054 Phase 4)
+        if not last_skill_name:
+            self._maybe_record_routing_miss(turn.user_input, final)
 
         return TurnResult(
             response=final,
@@ -643,3 +652,54 @@ class AgentPipeline:
             return current_response
         except Exception:
             return response  # critic must never crash the main loop (NFR-ORCH-013)
+
+    # ── FR-ROUTE-011: Routing-miss detection (CR-054 Phase 4) ────────────────
+
+    _HEDGING_PATTERNS = (
+        "would you like me to",
+        "i think you're asking about",
+        "did you mean",
+        "i can help with",
+        "are you asking about",
+        "it seems like you want",
+    )
+
+    def _maybe_record_routing_miss(self, user_input: str, response: str) -> None:
+        """Detect and persist routing misses for self-learning (FR-ROUTE-011).
+
+        A routing miss is when no skill fired AND the LLM hedged — suggesting
+        a skill should have matched but keyword scoring missed it.  Persists
+        to the routing_misses table; BackgroundReview promotes repeated misses.
+
+        Args:
+            user_input: Raw user message from this turn.
+            response: LLM response text (checked for hedging patterns).
+        """
+        resp_lower = response.lower()
+        if not any(pat in resp_lower for pat in self._HEDGING_PATTERNS):
+            return
+
+        # Infer which skill the LLM was hinting at
+        inferred: str = ""
+        try:
+            from src.skills.registry import _registry
+            for skill in _registry.all():
+                name = type(skill).__name__
+                # Crude heuristic: skill name (without "Skill") appears in response
+                keyword = name.replace("Skill", "").lower()
+                if keyword and keyword in resp_lower:
+                    inferred = name
+                    break
+        except Exception:
+            pass
+
+        try:
+            from src import database as _db
+            with _db.get_connection() as conn:
+                conn.execute(
+                    "INSERT INTO routing_misses (user_input, inferred_skill) VALUES (?, ?)",
+                    (user_input[:400], inferred or None),
+                )
+                conn.commit()
+        except Exception:
+            pass

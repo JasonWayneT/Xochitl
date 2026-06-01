@@ -21,6 +21,15 @@ _WEATHER_KEYWORDS = (
     "is it raining",
 )
 
+# FR-ROUTE-004 (CR-054 Phase 2): location follow-up phrases
+_FOLLOWUP_PHRASES = (
+    "what about",
+    "and in",
+    "how about",
+    "same for",
+    "what about in",
+)
+
 _GEOCODE_URL = "https://geocoding-api.open-meteo.com/v1/search"
 _FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
 
@@ -153,9 +162,26 @@ _WEATHER_CODES = {
 
 
 class WeatherSkill(Skill):
-    # Implements FR-API-004
+    # Implements FR-API-004, FR-ROUTE-004 (CR-054 Phase 2)
     def can_handle(self, user_input: str, context: dict) -> float:
+        """Score weather intent with context-aware follow-up boost.
+
+        Args:
+            user_input: Raw user message.
+            context: Session context dict.
+
+        Returns:
+            0.95 for weather keywords, 0.75 for location follow-up after weather turn,
+            0.0 otherwise.
+        """
         q = user_input.lower()
+        # FR-ROUTE-004: context-aware follow-up boost for location queries
+        if (
+            len(user_input.split()) <= 8
+            and any(phrase in q for phrase in _FOLLOWUP_PHRASES)
+            and context.get("last_skill_fired") == "WeatherSkill"
+        ):
+            return 0.75
         if any(k in q for k in _WEATHER_KEYWORDS):
             return 0.95
         return 0.0

@@ -68,3 +68,23 @@ _safe_register(GitSkill)
 
 from src.skills.project_scan_skill import ProjectScanSkill
 _safe_register(ProjectScanSkill)
+
+# CR-053 — Perplexity-grade research pipeline (FR-RES-020).
+# Registered after ExplorerSkill so it doesn't shadow multi-hop investigation mode.
+from src.skills.research_skill import ResearchSkill
+_safe_register(ResearchSkill)
+
+# CR-054 Phase 3 — seed SkillVectorIndex at session start (FR-ROUTE-007).
+# Best-effort: failure must not block startup.
+def _seed_skill_vector() -> None:
+    try:
+        from src.skill_vector import SkillVectorIndex
+        SkillVectorIndex().seed_from_skills(_registry.all())
+    except Exception as exc:
+        _log.debug("skill_vector seed skipped: %s", exc)
+
+try:
+    import threading
+    threading.Thread(target=_seed_skill_vector, daemon=True, name="skill-vector-seed").start()
+except Exception:
+    pass

@@ -1,5 +1,14 @@
-"""General web lookup skill for live internet answers (no dedicated weather API)."""
+"""General web lookup skill — deep content extraction with citation support.
 
+Implements:
+  FR-API-003  — web lookup skill registration
+  FR-RES-005  — fetch up to 6 sources, body capped at 5,000 chars
+  FR-RES-006  — _extract_main_content() strips nav/footer/aside/header; ≥40-char paras only
+  FR-RES-007  — execute() returns structured SourceRecord tuples in context["research_sources"]
+  NFR-RES-002 — evidence cap raised to 3,000 chars per step for ExplorerSkill
+  FR-RES-011  — call rewrite_for_search() before DuckDuckGo fetch
+  FR-ROUTE-004 — context-aware follow-up boost (CR-054 Phase 2)
+"""
 from __future__ import annotations
 
 import html
@@ -9,6 +18,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, unquote, urlparse
 
 from src.http_utils import fetch_bytes  # FR-API-005, NFR-API-002 (retry + rate limit)
+from src.research_types import SourceRecord
 from src.security import XochitlPermissionError  # caught in _fetch_text
 from src.skills.base import Skill
 
@@ -26,7 +36,6 @@ _WEB_KEYWORDS = (
     "research",
 )
 
-# Factual question prefixes that suggest a live internet lookup is needed.
 _FACTUAL_PREFIXES = (
     "how much",
     "how many",
@@ -47,6 +56,15 @@ _FACTUAL_PREFIXES = (
     "do you know",
 )
 
+# FR-ROUTE-004: follow-up phrases that trigger context-aware boost
+_FOLLOWUP_PHRASES = (
+    "what about",
+    "and in",
+    "how about",
+    "same for",
+    "what about in",
+)
+
 _LOG_DIR = Path(".sdd") / "logs"
 _LOG_DIR.mkdir(parents=True, exist_ok=True)
 _LOG_FILE = _LOG_DIR / "web_lookup.log"
@@ -59,11 +77,37 @@ if not _logger.handlers:
     _logger.setLevel(logging.INFO)
     _logger.propagate = False
 
+# FR-RES-005: source count and body limits
+_MAX_SOURCES = 6
+_BODY_CAP = 5_000
+_EVIDENCE_CAP = 3_000  # NFR-RES-002: per-step cap for ExplorerSkill
+
 
 class WebLookupSkill(Skill):
-    # Implements FR-API-003
+    """Search the web and return deep, cited content extracts.
+
+    Implements FR-API-003, FR-RES-005 through FR-RES-007, NFR-RES-002.
+    """
+
     def can_handle(self, user_input: str, context: dict) -> float:
+        """Score web-lookup intent, with follow-up boost per FR-ROUTE-004.
+
+        Args:
+            user_input: Raw user message.
+            context: Session context dict.
+
+        Returns:
+            0.85 for keyword match, 0.75 for context-aware follow-up,
+            0.60 for factual prefix, 0.0 otherwise.
+        """
         q = user_input.lower()
+        # FR-ROUTE-004: context-aware follow-up boost
+        if (
+            len(user_input.split()) <= 8
+            and any(phrase in q for phrase in _FOLLOWUP_PHRASES)
+            and context.get("last_skill_fired") == "WebLookupSkill"
+        ):
+            return 0.75
         if any(k in q for k in _WEB_KEYWORDS):
             return 0.85
         if any(q.startswith(p) or f" {p}" in q for p in _FACTUAL_PREFIXES):
@@ -78,6 +122,7 @@ class WebLookupSkill(Skill):
             "name": "WebLookupSkill",
             "description": "Searches the public internet and summarizes results for any factual, current-events, or research question.",
             "when": "user asks a factual question, wants to look something up, asks about current events, products, people, places, or any topic that benefits from a live internet search",
+            "domain": "research",
             "params": {
                 "query": "Search query text",
             },
@@ -92,41 +137,83 @@ class WebLookupSkill(Skill):
         }
 
     def execute(self, user_input: str, context: dict, params: dict) -> str:
+        """Fetch up to 6 sources with deep content extraction.
+
+        Implements FR-RES-005, FR-RES-007, FR-RES-011.
+
+        Args:
+            user_input: Raw user message.
+            context: Session context dict; writes context["research_sources"].
+            params: Skill params; expects {"query": "..."}.
+
+        Returns:
+            Formatted string with source snippets, or error message.
+        """
         query = (params.get("query") or user_input).strip()
         _logger.info("execute query=%r", query)
         if not query:
             return "I need a query to search."
 
+        # FR-RES-011: rewrite query for search before fetching
         try:
-            links = self._search(query)
+            from src.query_planner import rewrite_for_search
+            search_query = rewrite_for_search(query)
+        except Exception:
+            search_query = query
+
+        try:
+            links = self._search(search_query)
         except Exception as e:
-            _logger.exception("search_failed query=%r error=%s", query, e)
+            _logger.exception("search_failed query=%r error=%s", search_query, e)
             return "I couldn't search the web right now."
 
-        _logger.info("search_results query=%r count=%d", query, len(links))
+        _logger.info("search_results query=%r count=%d", search_query, len(links))
         if not links:
             context["last_skill_success"] = False
             return "I couldn't find results right now. Please try again in a moment."
 
-        snippets: list[str] = []
-        for title, url, search_snippet in links[:3]:
-            body = self._fetch_text(url)
-            if body:
-                snippets.append(f"- {title}: {body[:260].strip()}...")
-            elif search_snippet:
-                snippets.append(f"- {title}: {search_snippet[:220].strip()}...")
+        # FR-RES-015: rank links by domain trust before selecting top 6
+        try:
+            from src.query_planner import rank_links_by_trust
+            ranked = rank_links_by_trust(links[:8])
+        except Exception:
+            ranked = [(t, u, s, 0.0) for t, u, s in links[:8]]
 
-        if not snippets:
-            _logger.warning("no_snippets query=%r links_considered=%d", query, min(3, len(links)))
+        # FR-RES-005: fetch up to _MAX_SOURCES sources
+        sources: list[SourceRecord] = []
+        for title, url, search_snippet, trust in ranked[:_MAX_SOURCES]:
+            parsed = urlparse(url)
+            domain = parsed.netloc.lstrip("www.")
+            body = self._fetch_text(url)
+            rec = SourceRecord(
+                title=title,
+                url=url,
+                domain=domain,
+                body=body[:_BODY_CAP] if body else "",
+                trust_score=trust,
+                search_snippet=search_snippet,
+            )
+            sources.append(rec)
+
+        if not sources:
             context["last_skill_success"] = False
             return "I found links, but couldn't read their content right now."
 
+        # FR-RES-007: store structured tuples for downstream synthesizers
+        context["research_sources"] = sources
         context["last_skill_success"] = True
+
+        # Build human-readable result
+        snippets: list[str] = []
+        for i, rec in enumerate(sources, 1):
+            excerpt = rec.best_body[:260].strip()
+            if excerpt:
+                snippets.append(f"- [{i}] {rec.title} ({rec.domain}): {excerpt}...")
+
         return "I checked the internet and found:\n" + "\n".join(snippets)
 
     def _search(self, query: str) -> list[tuple[str, str, str]]:
         url = f"https://duckduckgo.com/html/?q={quote_plus(query)}"
-        # fetch_bytes handles SSRF validation, rate limiting, and retry (FR-API-005).
         raw = fetch_bytes(url, headers={"User-Agent": "Mozilla/5.0 Xochitl/1.0"}).decode("utf-8", errors="ignore")
         out: list[tuple[str, str, str]] = []
         title_matches = list(re.finditer(r'<a[^>]*class="result__a"[^>]*href="(.*?)"[^>]*>(.*?)</a>', raw, re.I | re.S))
@@ -148,14 +235,18 @@ class WebLookupSkill(Skill):
         return out
 
     def _fetch_text(self, url: str) -> str:
-        # fetch_bytes: SSRF validation, rate limiting, retry (FR-API-005, FR-SEC-005).
+        """Fetch URL and return main-content prose.
+
+        Implements FR-RES-006: strips nav/footer/aside/header, keeps ≥40-char paragraphs.
+        """
         try:
             raw = fetch_bytes(
                 url,
                 headers={"User-Agent": "Mozilla/5.0 Xochitl/1.0"},
                 read_limit=22000,
             )
-            text = self._clean_text(raw.decode("utf-8", errors="ignore"))
+            html_text = raw.decode("utf-8", errors="ignore")
+            text = self._extract_main_content(html_text)
             text = re.sub(r"\s+", " ", text).strip()
             _logger.info("fetch_ok url=%r chars=%d", url, len(text))
             return text
@@ -165,6 +256,34 @@ class WebLookupSkill(Skill):
         except Exception as e:
             _logger.warning("fetch_failed url=%r error=%s", url, e)
             return ""
+
+    @staticmethod
+    def _extract_main_content(raw_html: str) -> str:
+        """Strip boilerplate blocks and return only meaningful paragraph text.
+
+        Implements FR-RES-006: removes <nav>, <footer>, <aside>, <header>,
+        <script>, <style>; retains only paragraphs with ≥40 characters.
+        """
+        s = raw_html
+        # Remove structural boilerplate
+        for tag in ("script", "style", "nav", "footer", "aside", "header"):
+            s = re.sub(rf"<{tag}[^>]*>.*?</{tag}>", " ", s, flags=re.I | re.S)
+
+        # Extract paragraph content before stripping all tags
+        paras = re.findall(r"<p[^>]*>(.*?)</p>", s, re.I | re.S)
+        if paras:
+            cleaned = []
+            for p in paras:
+                text = re.sub(r"<[^>]+>", " ", p)
+                text = html.unescape(text).strip()
+                if len(text) >= 40:
+                    cleaned.append(text)
+            if cleaned:
+                return " ".join(cleaned)
+
+        # Fallback: strip all remaining tags
+        s = re.sub(r"<[^>]+>", " ", s)
+        return html.unescape(s)
 
     @staticmethod
     def _clean_text(s: str) -> str:

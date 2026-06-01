@@ -1770,109 +1770,121 @@ test("Explorer: can_handle() scores investigative keywords >=0.65, plain 0.0 (AC
 
 
 def t_explorer_skill_loop_detection():
-    """AC-CR023-003: repeat subquestion hash → stops before _MAX_STEPS with loop note (NFR-ORCH-014)."""
+    """AC-CR023-003: repeat subquestion hash → stops before _MAX_STEPS with loop note (NFR-ORCH-014).
+
+    Updated for CR-053: _gather returns (str, list[SourceRecord]); _synthesize → _finish.
+    """
     from unittest.mock import patch
     from src.skills.explorer_skill import ExplorerSkill, _MAX_STEPS
 
     gather_calls: list[int] = []
-    synth_notes: list[str] = []
+    finish_notes: list[str] = []
 
     def always_same_subq(self_inner, query: str, step: int, evidence: list) -> str:
         return "identical subquestion every step"
 
-    def counting_gather(self_inner, subquestion: str, context: dict) -> str:
+    def counting_gather(self_inner, subquestion: str, context: dict):
         gather_calls.append(1)
-        return "some evidence about the topic for testing purposes"
+        return "some evidence about the topic for testing purposes", []
 
-    def capture_synthesize(self_inner, query: str, evidence: list, notes: str = "") -> str:
-        synth_notes.append(notes)
+    def capture_finish(self_inner, query: str, evidence: list, sources: list,
+                       intent: str = "prose", notes: str = "") -> str:
+        finish_notes.append(notes)
         return "synthesized result"
 
     with patch.object(ExplorerSkill, "_form_subquestion", always_same_subq):
         with patch.object(ExplorerSkill, "_gather", counting_gather):
-            with patch.object(ExplorerSkill, "_synthesize", capture_synthesize):
+            with patch.object(ExplorerSkill, "_finish", capture_finish):
                 result = ExplorerSkill().execute(
                     "investigate something", {}, {"query": "investigate something"}
                 )
 
     assert len(gather_calls) < _MAX_STEPS, \
         f"Loop detection must stop before _MAX_STEPS; got {len(gather_calls)} gathers"
-    assert synth_notes, "_synthesize must be called on loop detection"
-    assert any("loop" in n.lower() for n in synth_notes), \
-        f"_synthesize notes must contain 'loop'; got: {synth_notes}"
-    assert result == "synthesized result", "execute() must return _synthesize() result"
+    assert finish_notes, "_finish must be called on loop detection"
+    assert any("loop" in n.lower() for n in finish_notes), \
+        f"_finish notes must contain 'loop'; got: {finish_notes}"
+    assert result == "synthesized result", "execute() must return _finish() result"
 test("Explorer: loop detection stops before _MAX_STEPS with loop note (AC-CR023-003)", t_explorer_skill_loop_detection)
 
 
 def t_explorer_skill_budget_exhaustion():
-    """AC-CR023-004: 6 steps of medium evidence → budget exhausted note (NFR-ORCH-014)."""
+    """AC-CR023-004: 6 steps of medium evidence → budget exhausted note (NFR-ORCH-014).
+
+    Updated for CR-053: _gather returns (str, list[SourceRecord]); _synthesize → _finish.
+    """
     from unittest.mock import patch
     from src.skills.explorer_skill import ExplorerSkill, _MAX_STEPS
 
-    synth_notes: list[str] = []
+    finish_notes: list[str] = []
 
     def unique_subq(self_inner, query: str, step: int, evidence: list) -> str:
         # Unique per step → no hash collision → no loop detection
         return f"unique question for investigation step {step}"
 
-    def medium_gather(self_inner, subquestion: str, context: dict) -> str:
+    def medium_gather(self_inner, subquestion: str, context: dict):
         # 120-char snippet: quality=+0.20 (len>100), total with depth=0.65 — never >0.85
-        return "A " * 60
+        return "A " * 60, []
 
-    def capture_synthesize(self_inner, query: str, evidence: list, notes: str = "") -> str:
-        synth_notes.append(notes)
+    def capture_finish(self_inner, query: str, evidence: list, sources: list,
+                       intent: str = "prose", notes: str = "") -> str:
+        finish_notes.append(notes)
         return "budget result"
 
     with patch.object(ExplorerSkill, "_form_subquestion", unique_subq):
         with patch.object(ExplorerSkill, "_gather", medium_gather):
-            with patch.object(ExplorerSkill, "_synthesize", capture_synthesize):
+            with patch.object(ExplorerSkill, "_finish", capture_finish):
                 result = ExplorerSkill().execute(
                     "research something", {}, {"query": "research something"}
                 )
 
-    assert synth_notes, "_synthesize must be called after budget exhaustion"
-    budget_note = synth_notes[-1]
+    assert finish_notes, "_finish must be called after budget exhaustion"
+    budget_note = finish_notes[-1]
     assert "budget" in budget_note.lower() or "exhausted" in budget_note.lower(), \
         f"Budget-exhaustion notes must contain 'budget' or 'exhausted'; got: {budget_note!r}"
-    assert result == "budget result", "execute() must return _synthesize() result"
+    assert result == "budget result", "execute() must return _finish() result"
 test("Explorer: 6 medium-evidence steps -> budget exhausted note in _synthesize (AC-CR023-004)", t_explorer_skill_budget_exhaustion)
 
 
 def t_explorer_skill_high_confidence_stops_early():
-    """AC-CR023-005: rich evidence (420-char snippets) → confidence >0.85 at step 3 (NFR-ORCH-015)."""
+    """AC-CR023-005: rich evidence (420-char snippets) → confidence >0.85 at step 3 (NFR-ORCH-015).
+
+    Updated for CR-053: _gather returns (str, list[SourceRecord]); _synthesize → _finish.
+    """
     from unittest.mock import patch
     from src.skills.explorer_skill import ExplorerSkill, _MAX_STEPS
 
     gather_calls: list[int] = []
-    synth_notes: list[str] = []
+    finish_notes: list[str] = []
 
     def unique_subq(self_inner, query: str, step: int, evidence: list) -> str:
         return f"rich investigation step {step} unique"
 
-    def rich_gather(self_inner, subquestion: str, context: dict) -> str:
+    def rich_gather(self_inner, subquestion: str, context: dict):
         gather_calls.append(1)
         # 420-char snippet: quality = +0.20 (>100) +0.15 (>250) +0.15 (>400) = 0.50
         # step 3: depth=0.45 + quality=0.50 = 0.95 > 0.85 → stop
-        return "B " * 210
+        return "B " * 210, []
 
-    def capture_synthesize(self_inner, query: str, evidence: list, notes: str = "") -> str:
-        synth_notes.append(notes)
+    def capture_finish(self_inner, query: str, evidence: list, sources: list,
+                       intent: str = "prose", notes: str = "") -> str:
+        finish_notes.append(notes)
         return "early answer"
 
     with patch.object(ExplorerSkill, "_form_subquestion", unique_subq):
         with patch.object(ExplorerSkill, "_gather", rich_gather):
-            with patch.object(ExplorerSkill, "_synthesize", capture_synthesize):
+            with patch.object(ExplorerSkill, "_finish", capture_finish):
                 result = ExplorerSkill().execute(
                     "explore X", {}, {"query": "explore X"}
                 )
 
     assert len(gather_calls) < _MAX_STEPS, \
         f"High-confidence stop must fire before _MAX_STEPS; got {len(gather_calls)} gathers"
-    assert synth_notes, "_synthesize must be called on high-confidence stop"
-    budget_note = synth_notes[-1]
+    assert finish_notes, "_finish must be called on high-confidence stop"
+    budget_note = finish_notes[-1]
     assert "budget" not in budget_note.lower() and "exhausted" not in budget_note.lower(), \
         f"High-confidence stop must NOT emit budget note; got: {budget_note!r}"
-    assert result == "early answer", "execute() must return _synthesize() result"
+    assert result == "early answer", "execute() must return _finish() result"
 test("Explorer: rich evidence stops loop early without budget note (AC-CR023-005)", t_explorer_skill_high_confidence_stops_early)
 
 
@@ -4848,6 +4860,321 @@ test("CR-052 P4: index_project resilient to embed failure (AC-CR052-017b)", t_in
 test("CR-052 P4: smart compaction is opt-in (AC-CR052-018)", t_smart_compact_opt_in)
 test("CR-052 P4: smart compaction falls back on error (AC-CR052-018b)", t_smart_compact_falls_back_on_error)
 test("CR-052 P4: stale-context detection (AC-CR052-019)", t_stale_context_detection)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CR-053 — Perplexity-grade Research Pipeline
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def t_source_record_fields():
+    """AC-CR053-001 (partial): SourceRecord has correct fields."""
+    from src.research_types import SourceRecord
+    rec = SourceRecord(title="Test Title", url="https://example.gov/article",
+                       domain="example.gov", body="Some body text here " * 10)
+    assert rec.title == "Test Title"
+    assert rec.domain == "example.gov"
+    assert rec.best_body.startswith("Some body text")
+    assert rec.sources_line(1) == "[1] Test Title — example.gov"
+    assert rec.label(2) == "[2]"
+test("CR-053 P2: SourceRecord fields and helpers (AC-CR053-001)", t_source_record_fields)
+
+
+def t_domain_trust_scoring():
+    """AC-CR053-004 (partial): trust scoring returns correct tiers."""
+    from src.query_planner import domain_trust_score
+    assert domain_trust_score("https://pubmed.ncbi.nlm.nih.gov/12345") == 0.40, "Tier 1"
+    assert domain_trust_score("https://reuters.com/story") == 0.20, "Tier 2"
+    assert domain_trust_score("https://somerandomblog.com/post") == 0.0, "Tier 3"
+    assert domain_trust_score("https://infowars.com/article") == -0.30, "Tier 4 blocklist"
+    assert domain_trust_score("https://cdc.gov/health") == 0.40, ".gov = Tier 1"
+    assert domain_trust_score("https://stanford.edu/research") == 0.40, ".edu = Tier 1"
+test("CR-053 P3b: domain trust scoring returns correct tiers (AC-CR053-004)", t_domain_trust_scoring)
+
+
+def t_rank_links_by_trust():
+    """AC-CR053-004: trust-ranked list puts .gov above .com."""
+    from src.query_planner import rank_links_by_trust
+    links = [
+        ("Blog", "https://someblog.com/post", "snippet1"),
+        ("CDC", "https://cdc.gov/health", "snippet2"),
+        ("Reuters", "https://reuters.com/story", "snippet3"),
+    ]
+    ranked = rank_links_by_trust(links)
+    assert ranked[0][1] == "https://cdc.gov/health", "CDC should rank first"
+    assert ranked[1][1] == "https://reuters.com/story", "Reuters should rank second"
+test("CR-053 P3b: rank_links_by_trust sorts .gov > news > blog (AC-CR053-004b)", t_rank_links_by_trust)
+
+
+def t_query_intent_classification():
+    """AC-CR053-007: comparison intent → 'comparison' label."""
+    from src.research import classify_intent
+    assert classify_intent("keto vs paleo diet") == "comparison"
+    assert classify_intent("how to build a website") == "steps"
+    assert classify_intent("what is machine learning") == "definition"
+    assert classify_intent("should I take melatonin") == "verdict"
+    assert classify_intent("when did World War II start") == "timeline"
+    assert classify_intent("tell me about quantum physics") == "prose"
+test("CR-053 P4: classify_intent categorizes queries correctly (AC-CR053-007)", t_query_intent_classification)
+
+
+def t_deduplicate_sources():
+    """AC-CR053-006 (partial): dedup drops near-identical sources."""
+    from src.research import deduplicate_sources
+    from src.research_types import SourceRecord
+    body_a = "The quick brown fox jumps over the lazy dog. " * 20
+    body_b = "The quick brown fox jumps over the lazy dog. " * 20  # identical
+    body_c = "Completely different article about something else entirely. " * 20
+
+    s1 = SourceRecord("Site A", "https://a.com", "a.com", body=body_a, trust_score=0.40)
+    s2 = SourceRecord("Site B", "https://b.com", "b.com", body=body_b, trust_score=0.00)
+    s3 = SourceRecord("Site C", "https://c.com", "c.com", body=body_c, trust_score=0.20)
+
+    deduped = deduplicate_sources([s1, s2, s3])
+    assert len(deduped) == 2, f"Expected 2 unique sources, got {len(deduped)}"
+    domains = [r.domain for r in deduped]
+    assert "a.com" in domains, "Higher-trust source should be kept"
+    assert "b.com" not in domains, "Lower-trust duplicate should be dropped"
+    assert "c.com" in domains, "Unique source should be kept"
+test("CR-053 P4: deduplicate_sources drops near-identical lower-trust sources (AC-CR053-006)", t_deduplicate_sources)
+
+
+def t_research_skill_registered():
+    """AC-CR053-009 (registration): ResearchSkill is registered after ExplorerSkill."""
+    from src.skills.research_skill import ResearchSkill
+    from src.chat import XochitlChat
+    chat = XochitlChat.__new__(XochitlChat)
+    chat._builtin_skills = None
+    chat._skills = None
+    chat.current_project = None
+    skills = chat.skills
+    names = [type(s).__name__ for s in skills]
+    assert "ResearchSkill" in names, "ResearchSkill must be registered"
+    if "ExplorerSkill" in names:
+        assert names.index("ResearchSkill") > names.index("ExplorerSkill"), \
+            "ResearchSkill must be registered after ExplorerSkill"
+test("CR-053 P5: ResearchSkill registered after ExplorerSkill (AC-CR053-009)", t_research_skill_registered)
+
+
+def t_research_skill_can_handle():
+    """AC-CR053-009 (scoring): ResearchSkill scores 0.90 on deep-research triggers."""
+    from src.skills.research_skill import ResearchSkill
+    skill = ResearchSkill()
+    ctx = {}
+    assert skill.can_handle("research the long-term effects of intermittent fasting", ctx) == 0.90
+    assert skill.can_handle("what does the research say about sleep?", ctx) == 0.90
+    assert skill.can_handle("deep research on microplastics", ctx) == 0.90
+    assert skill.can_handle("hello", ctx) == 0.0
+    assert skill.can_handle("what's the weather?", ctx) == 0.0
+test("CR-053 P5: ResearchSkill.can_handle scores 0.90 on deep-research triggers (AC-CR053-005)", t_research_skill_can_handle)
+
+
+def t_research_skill_followup_boost():
+    """AC-CR053-010: follow-up query boosts score to 0.75 when last_skill_fired=ResearchSkill."""
+    from src.skills.research_skill import ResearchSkill
+    skill = ResearchSkill()
+    ctx = {"last_skill_fired": "ResearchSkill"}
+    score = skill.can_handle("what about in children?", ctx)
+    assert score == 0.75, f"Expected 0.75 for follow-up boost, got {score}"
+    # Non-followup phrase should not boost
+    ctx2 = {"last_skill_fired": "ResearchSkill"}
+    score2 = skill.can_handle("research children health effects", ctx2)
+    assert score2 == 0.90, f"Full trigger phrase should score 0.90, got {score2}"
+test("CR-053 P5: ResearchSkill follow-up boosts to 0.75 (AC-CR053-010)", t_research_skill_followup_boost)
+
+
+def t_web_lookup_deeper_sources():
+    """AC-CR053-001 (partial): WebLookupSkill now fetches up to 6 sources."""
+    from src.skills.web_lookup_skill import WebLookupSkill, _MAX_SOURCES, _BODY_CAP
+    assert _MAX_SOURCES == 6, f"Expected _MAX_SOURCES=6, got {_MAX_SOURCES}"
+    assert _BODY_CAP == 5000, f"Expected _BODY_CAP=5000, got {_BODY_CAP}"
+test("CR-053 P1: WebLookupSkill constants: 6 sources, 5000-char body cap (AC-CR053-001)", t_web_lookup_deeper_sources)
+
+
+def t_web_lookup_extract_main_content():
+    """AC-CR053-001: _extract_main_content strips nav/footer and keeps ≥40-char paragraphs."""
+    from src.skills.web_lookup_skill import WebLookupSkill
+    html = """
+    <html><head></head><body>
+    <nav><a href="/">Home</a><a href="/about">About</a></nav>
+    <header><h1>Site Title</h1></header>
+    <p>Short</p>
+    <p>This is a meaningful paragraph that contains important article content about science.</p>
+    <p>Another great paragraph with real information about the research topic.</p>
+    <aside>Subscribe to our newsletter</aside>
+    <footer>Copyright 2024</footer>
+    </body></html>
+    """
+    text = WebLookupSkill._extract_main_content(html)
+    assert "meaningful paragraph" in text, "Main content paragraph should be kept"
+    assert "Another great paragraph" in text, "Second paragraph should be kept"
+    assert "Subscribe to our newsletter" not in text, "Aside should be stripped"
+    assert "Copyright" not in text, "Footer should be stripped"
+    assert "Short" not in text, "Short paragraph (<40 chars) should be dropped"
+test("CR-053 P1: _extract_main_content strips nav/footer/aside, keeps >=40-char paras (AC-CR053-001b)", t_web_lookup_extract_main_content)
+
+
+def t_web_lookup_stores_research_sources():
+    """AC-CR053-001: execute() writes context['research_sources'] as list[SourceRecord]."""
+    from unittest.mock import patch
+    from src.skills.web_lookup_skill import WebLookupSkill
+    from src.research_types import SourceRecord
+
+    def fake_search(self_inner, query: str):
+        return [("Test Title", "https://pubmed.ncbi.nlm.nih.gov/1234", "snippet")]
+
+    def fake_fetch(self_inner, url: str) -> str:
+        return "This is a long enough paragraph with real content. " * 20
+
+    ctx = {}
+    with patch.object(WebLookupSkill, "_search", fake_search):
+        with patch.object(WebLookupSkill, "_fetch_text", fake_fetch):
+            WebLookupSkill().execute("test query", ctx, {"query": "test query"})
+
+    sources = ctx.get("research_sources", [])
+    assert sources, "research_sources must be written to context"
+    assert isinstance(sources[0], SourceRecord), "Must be SourceRecord instances"
+    assert sources[0].domain == "pubmed.ncbi.nlm.nih.gov"
+    assert sources[0].trust_score == 0.40, "PubMed should score Tier 1"
+test("CR-053 P1+P2: WebLookupSkill writes SourceRecord list to context (AC-CR053-001c)", t_web_lookup_stores_research_sources)
+
+
+def t_explorer_skill_evidence_cap():
+    """AC-CR053-001 (partial): ExplorerSkill evidence cap is 3,000 chars (NFR-RES-002)."""
+    from src.skills.explorer_skill import _EVIDENCE_CAP
+    assert _EVIDENCE_CAP == 3000, f"Expected _EVIDENCE_CAP=3000, got {_EVIDENCE_CAP}"
+test("CR-053 P1: ExplorerSkill _EVIDENCE_CAP = 3000 (NFR-RES-002)", t_explorer_skill_evidence_cap)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CR-054 — Intelligent Skill Routing
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def t_last_skill_fired_written():
+    """AC-CR054-001 (partial): pipeline writes last_skill_fired to context."""
+    from src.agent.pipeline import AgentPipeline
+    # The constant must be set in execute path; verify via code inspection
+    import inspect
+    src = inspect.getsource(AgentPipeline.run)
+    assert "last_skill_fired" in src, \
+        "AgentPipeline.run must write last_skill_fired to context"
+test("CR-054 P2: pipeline.run writes last_skill_fired to context (FR-ROUTE-003)", t_last_skill_fired_written)
+
+
+def t_weather_followup_boost():
+    """AC-CR054-001: WeatherSkill scores 0.75 for short location follow-up."""
+    from src.skills.weather_skill import WeatherSkill
+    skill = WeatherSkill()
+    ctx = {"last_skill_fired": "WeatherSkill"}
+    score = skill.can_handle("what about in hemet?", ctx)
+    assert score == 0.75, f"Expected 0.75 for follow-up boost, got {score}"
+    # Normal weather query should still score 0.95
+    ctx2 = {}
+    assert skill.can_handle("what is the weather in san diego?", ctx2) == 0.95
+    # Follow-up without last_skill_fired should score 0.0
+    ctx3 = {}
+    assert skill.can_handle("what about in hemet?", ctx3) == 0.0
+test("CR-054 P2: WeatherSkill.can_handle boosts follow-up to 0.75 (AC-CR054-001)", t_weather_followup_boost)
+
+
+def t_explorer_followup_boost():
+    """AC-CR054-001 (variant): ExplorerSkill scores 0.75 for follow-up."""
+    from src.skills.explorer_skill import ExplorerSkill
+    skill = ExplorerSkill()
+    ctx = {"last_skill_fired": "ExplorerSkill"}
+    score = skill.can_handle("what about for children?", ctx)
+    assert score == 0.75, f"Expected 0.75 for follow-up boost, got {score}"
+    # No boost when last_skill_fired is different
+    ctx2 = {"last_skill_fired": "WeatherSkill"}
+    score2 = skill.can_handle("what about for children?", ctx2)
+    assert score2 == 0.0, f"Expected 0.0 when last skill is different, got {score2}"
+test("CR-054 P2: ExplorerSkill.can_handle boosts follow-up to 0.75 (AC-CR054-001b)", t_explorer_followup_boost)
+
+
+def t_compact_manifest_format():
+    """AC-CR054-004: compact manifest ≤800 tokens with correct format."""
+    from src.context_manager import SkillManifestEngine, _CHARS_PER_TOKEN
+    from unittest.mock import MagicMock
+
+    engine = SkillManifestEngine()
+    # Inject fake skill defs
+    engine._skill_defs = [
+        {
+            "name": "WeatherSkill",
+            "when": "user asks about weather",
+            "examples": ["what's the weather in NYC?", "is it raining?"],
+        },
+        {
+            "name": "ResearchSkill",
+            "when": "user wants deep research",
+            "examples": ["research the effects of coffee", "deep dive on AI"],
+        },
+    ]
+    compact = engine.compact(max_tokens=800)
+    max_chars = 800 * _CHARS_PER_TOKEN
+    assert len(compact) <= max_chars, \
+        f"Compact manifest exceeds 800 token budget: {len(compact)} chars"
+    assert "WeatherSkill" in compact
+    assert "ResearchSkill" in compact
+    assert "skill_call" in compact.lower(), "Must include <skill_call> invocation hint"
+test("CR-054 P1: compact manifest <=800 tokens with skill names and when clauses (AC-CR054-004)", t_compact_manifest_format)
+
+
+def t_routing_miss_table_exists():
+    """AC-CR054-006 (partial): routing_misses table created by init_db."""
+    from src import database as db
+    db.init_db()
+    with db.get_connection() as conn:
+        tables = {row[0] for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+    assert "routing_misses" in tables, "routing_misses table must exist after init_db()"
+    assert "skill_examples" in tables, "skill_examples table must exist after init_db()"
+test("CR-054 P4: routing_misses and skill_examples tables created by init_db (AC-CR054-006)", t_routing_miss_table_exists)
+
+
+def t_skill_scorer_loads_learned_examples():
+    """AC-CR054-006 (partial): SkillScorer loads skill_examples into context."""
+    from src.agent.skill_scorer import SkillScorer
+    from src import database as db
+
+    db.init_db()
+    # Insert a test learned example
+    with db.get_connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO skill_examples (skill_name, phrase, source) "
+            "VALUES (?, ?, ?)",
+            ("WeatherSkill", "fry up some chicken test phrase", "learned"),
+        )
+        conn.commit()
+
+    scorer = SkillScorer(skills=[], threshold=0.65)
+    ctx: dict = {}
+    scorer.score("any input", ctx)
+    learned = ctx.get("learned_examples", {})
+    assert "WeatherSkill" in learned, "learned_examples must contain WeatherSkill"
+    assert any("fry up" in p for p in learned["WeatherSkill"]), \
+        "Learned phrase must appear in context"
+
+    # Cleanup
+    with db.get_connection() as conn:
+        conn.execute(
+            "DELETE FROM skill_examples WHERE phrase = ?",
+            ("fry up some chicken test phrase",)
+        )
+        conn.commit()
+test("CR-054 P4: SkillScorer loads skill_examples into context['learned_examples'] (AC-CR054-006b)", t_skill_scorer_loads_learned_examples)
+
+
+def t_skill_vector_index_importable():
+    """AC-CR054-007 (partial): SkillVectorIndex is importable and instantiatable."""
+    from src.skill_vector import SkillVectorIndex, _TABLE
+    assert _TABLE == "skill_intents", f"Expected _TABLE='skill_intents', got {_TABLE!r}"
+    idx = SkillVectorIndex()
+    assert idx is not None
+    # search on empty index returns []
+    results = idx.search("some random query")
+    assert isinstance(results, list), "search must return a list"
+test("CR-054 P3: SkillVectorIndex importable and search returns list (AC-CR054-007)", t_skill_vector_index_importable)
 
 
 # ── Print results ─────────────────────────────────────────────────────────────

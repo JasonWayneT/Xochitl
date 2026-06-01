@@ -1,22 +1,31 @@
 """Bounded Explorer skill — multi-step investigation loop.
 
-Implements FR-ORCH-039 (can_handle scoring), FR-ORCH-040 (bounded execute loop),
-FR-ORCH-041 (registration in _builtin_skills), NFR-ORCH-014 (step budget +
-convergence detection), NFR-ORCH-015 (heuristic confidence, routed sub-questions).
+Implements:
+  FR-ORCH-039  — can_handle scoring
+  FR-ORCH-040  — bounded execute loop
+  FR-ORCH-041  — registration in _builtin_skills
+  NFR-ORCH-014 — step budget + convergence detection
+  NFR-ORCH-015 — heuristic confidence, routed sub-questions
+  NFR-RES-002  — evidence cap raised to 3,000 chars per step (CR-053 Phase 1)
+  FR-RES-013   — decompose_query() at step 1; parallel _gather() for multi-part
+  FR-RES-016   — delegate to research.run_research() instead of inline _synthesize()
+  FR-ROUTE-004 — context-aware follow-up boost (CR-054 Phase 2)
 
 Design constraints (from docs/planning/exploration-2026-05.md #15):
 - Hard step budget: _MAX_STEPS = 6 (not a magic number)
 - Convergence detection: action hash per step; repeat → stop immediately
 - Confidence: heuristic only — no LLM call per step (NFR-ORCH-015)
 - Sub-questions: force_route="simple_qa" (local model)
-- Synthesis: force_route="general" (cloud model)
+- Synthesis: delegated to research.run_research() (FR-RES-016)
 - Budget exhaustion emits structured notes string (NFR-ORCH-014)
 """
 from __future__ import annotations
 
 import hashlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Optional
 
+from src.research_types import SourceRecord
 from src.skills.base import Skill
 
 # NFR-ORCH-014: hard step budget as a named constant (never a magic number).
@@ -67,6 +76,18 @@ _LOW_SIGNAL_PHRASES: tuple[str, ...] = (
     "couldn't read",
 )
 
+# FR-ROUTE-004: follow-up phrases for context-aware boost (CR-054 Phase 2)
+_FOLLOWUP_PHRASES: tuple[str, ...] = (
+    "what about",
+    "and in",
+    "how about",
+    "same for",
+    "what about in",
+)
+
+# NFR-RES-002: evidence cap per step raised from 500 to 3,000 chars
+_EVIDENCE_CAP: int = 3_000
+
 
 class ExplorerSkill(Skill):
     """Multi-step bounded investigation loop.
@@ -94,17 +115,24 @@ class ExplorerSkill(Skill):
     def can_handle(self, user_input: str, context: dict) -> float:
         """Score investigative queries for skill routing.
 
-        Implements FR-ORCH-039.
+        Implements FR-ORCH-039, FR-ROUTE-004 (context-aware follow-up boost).
 
         Args:
             user_input: The user's raw message.
             context: Current session context dict.
 
         Returns:
-            0.85 for investigative keywords, 0.70 for multi-hop indicators,
-            0.0 otherwise.
+            0.85 for investigative keywords, 0.75 for context-aware follow-up,
+            0.70 for multi-hop indicators, 0.0 otherwise.
         """
         q = user_input.lower()
+        # FR-ROUTE-004: context-aware follow-up boost
+        if (
+            len(user_input.split()) <= 8
+            and any(phrase in q for phrase in _FOLLOWUP_PHRASES)
+            and context.get("last_skill_fired") == "ExplorerSkill"
+        ):
+            return 0.75
         if any(k in q for k in _INVESTIGATIVE_KEYWORDS):
             return 0.85
         if any(k in q for k in _MULTI_HOP_INDICATORS):
@@ -160,16 +188,17 @@ class ExplorerSkill(Skill):
     def execute(self, user_input: str, context: dict, params: dict) -> str:
         """Run the bounded investigation loop.
 
-        Implements FR-ORCH-040, NFR-ORCH-014, NFR-ORCH-015.
+        Implements FR-ORCH-040, NFR-ORCH-014, NFR-ORCH-015, FR-RES-013, FR-RES-016.
 
         Loop body per step:
-          1. Form subquestion (_form_subquestion)
-          2. Hash subquestion; repeat hash = cycle → _synthesize with loop note
-          3. Gather evidence (_gather via WebLookupSkill)
-          4. Heuristic confidence (_score_confidence — no LLM call)
-          5. confidence > _CONFIDENCE_HIGH → _synthesize and return
-          6. step ≥ _EARLY_CHECK_STEP and confidence < _CONFIDENCE_LOW → _escalate
-        After _MAX_STEPS: _synthesize with "Step budget exhausted" notes.
+          1. Decompose query at step 1 via decompose_query() (FR-RES-013)
+          2. Form subquestion (_form_subquestion) for step ≥ 2
+          3. Hash subquestion; repeat hash = cycle → synthesize with loop note
+          4. Gather evidence (_gather via WebLookupSkill) — capped at 3,000 chars (NFR-RES-002)
+          5. Heuristic confidence (_score_confidence — no LLM call)
+          6. confidence > _CONFIDENCE_HIGH → synthesize via research.run_research()
+          7. step ≥ _EARLY_CHECK_STEP and confidence < _CONFIDENCE_LOW → _escalate
+        After _MAX_STEPS: synthesize what we have via research.run_research().
 
         Args:
             user_input: Raw user message (fallback if params["query"] missing).
@@ -184,47 +213,67 @@ class ExplorerSkill(Skill):
         if not query:
             return "I need a topic to investigate."
 
+        # FR-RES-013: decompose multi-part query at step 1
+        try:
+            from src.query_planner import decompose_query
+            sub_queries = decompose_query(query)
+        except Exception:
+            sub_queries = [query]
+
+        from src.research import classify_intent
+        intent = classify_intent(query)
+
+        all_sources: list[SourceRecord] = []
         evidence: list[str] = []
         seen_hashes: set[str] = set()
 
-        for step in range(1, _MAX_STEPS + 1):
-            # FR-RELY-004: honour cancellation from cleanup().
+        # FR-RES-013: if multi-part, gather each sub-query in parallel at step 1
+        if len(sub_queries) > 1:
+            def _gather_sub(sq: str) -> tuple[str, list[SourceRecord]]:
+                return self._gather(sq, context)
+
+            with ThreadPoolExecutor(max_workers=min(len(sub_queries), 4)) as pool:
+                futs = {pool.submit(_gather_sub, sq): sq for sq in sub_queries}
+                for fut in as_completed(futs):
+                    try:
+                        snippet, recs = fut.result(timeout=30)
+                    except Exception:
+                        continue
+                    if snippet:
+                        evidence.append(f"[Step 1] {snippet}")
+                    all_sources.extend(recs)
+            step_start = 2
+        else:
+            step_start = 1
+
+        for step in range(step_start, _MAX_STEPS + 1):
             if self._cancelled:
-                return self._synthesize(query, evidence, notes="Investigation cancelled.")
+                return self._finish(query, evidence, all_sources, intent, notes="Investigation cancelled.")
 
-            # Phase 1: form subquestion for this step.
             subquestion = self._form_subquestion(query, step, evidence)
-
-            # Phase 2: convergence detection (NFR-ORCH-014).
             action_hash = hashlib.md5(subquestion.lower().encode()).hexdigest()[:8]
             if action_hash in seen_hashes:
-                return self._synthesize(
-                    query,
-                    evidence,
+                return self._finish(
+                    query, evidence, all_sources, intent,
                     notes=f"Investigation loop detected at step {step} — stopping early.",
                 )
             seen_hashes.add(action_hash)
 
-            # Phase 3: gather evidence.
-            snippet = self._gather(subquestion, context)
+            snippet, recs = self._gather(subquestion, context)
             if snippet:
                 evidence.append(f"[Step {step}] {snippet}")
+            all_sources.extend(recs)
 
-            # Phase 4: heuristic confidence (NFR-ORCH-015 — no LLM call).
             confidence = self._score_confidence(evidence)
 
-            # Phase 5: high-confidence early stop.
             if confidence > _CONFIDENCE_HIGH:
-                return self._synthesize(query, evidence)
+                return self._finish(query, evidence, all_sources, intent)
 
-            # Phase 6: low-confidence escalation at the early check step.
             if step >= _EARLY_CHECK_STEP and confidence < _CONFIDENCE_LOW:
                 return self._escalate(query, evidence, step)
 
-        # Budget exhausted (NFR-ORCH-014): synthesize what we have.
-        return self._synthesize(
-            query,
-            evidence,
+        return self._finish(
+            query, evidence, all_sources, intent,
             notes=f"Step budget exhausted ({_MAX_STEPS} steps).",
         )
 
@@ -263,31 +312,34 @@ class ExplorerSkill(Skill):
         except Exception:
             return query
 
-    def _gather(self, subquestion: str, context: dict) -> str:
+    def _gather(self, subquestion: str, context: dict) -> tuple[str, list[SourceRecord]]:
         """Gather evidence for the subquestion via WebLookupSkill.
 
-        Implements NFR-ORCH-015: uses WebLookupSkill as the evidence source.
-        SSRF protection is inherited from WebLookupSkill / fetch_bytes
-        (FR-SEC-005, FR-API-005).
+        Implements NFR-ORCH-015 (WebLookupSkill evidence source),
+        NFR-RES-002 (evidence cap raised to 3,000 chars).
+        SSRF protection is inherited from WebLookupSkill / fetch_bytes.
 
         Args:
             subquestion: The question to look up.
             context: Current session context dict (passed through).
 
         Returns:
-            Evidence snippet (up to 500 chars), or empty string on any failure.
+            Tuple of (evidence_snippet, list[SourceRecord]).
+            snippet is up to _EVIDENCE_CAP chars; sources may be empty on failure.
         """
         try:
             from src.skills.web_lookup_skill import WebLookupSkill
+            ctx_copy = context.copy()
             raw = WebLookupSkill().execute(
-                subquestion, context.copy(), {"query": subquestion}
+                subquestion, ctx_copy, {"query": subquestion}
             )
-            # Strip the stock "I checked the internet and found:" preamble.
+            sources: list[SourceRecord] = ctx_copy.get("research_sources", [])
+            # Strip the stock preamble
             if "\n" in raw:
                 raw = raw[raw.index("\n") + 1:].strip()
-            return raw[:500]
+            return raw[:_EVIDENCE_CAP], sources
         except Exception:
-            return ""
+            return "", []
 
     def _score_confidence(self, evidence: list[str]) -> float:
         """Heuristic confidence from gathered evidence (no LLM call).
@@ -332,38 +384,49 @@ class ExplorerSkill(Skill):
 
         return max(0.0, min(1.0, depth_score + quality_score))
 
-    def _synthesize(
-        self, query: str, evidence: list[str], notes: str = ""
+    def _finish(
+        self,
+        query: str,
+        evidence: list[str],
+        sources: list[SourceRecord],
+        intent: str = "prose",
+        notes: str = "",
     ) -> str:
-        """Synthesize gathered evidence into a final answer.
+        """Synthesize gathered evidence via research.run_research() (FR-RES-016).
 
-        Uses force_route="general" for final synthesis (NFR-ORCH-015).
-        Falls back to presenting raw evidence on router failure.
+        Delegates to the shared synthesis pipeline so ExplorerSkill output
+        has the same Confidence/citation/sources-block format as ResearchSkill.
 
         Args:
             query: The original investigation question.
-            evidence: All evidence snippets gathered across steps.
-            notes: Optional notes to append (e.g., "budget exhausted").
+            evidence: Evidence snippets (used as fallback when no SourceRecords).
+            sources: SourceRecord list from _gather() calls.
+            intent: Query intent label from classify_intent().
+            notes: Optional notes to prepend (e.g., "budget exhausted").
 
         Returns:
-            Synthesized answer string, or raw evidence on failure.
+            Synthesized Perplexity-grade answer string.
         """
-        if not evidence:
-            return (
-                "I wasn't able to gather enough information to answer that question."
-            )
-        evidence_block = "\n".join(evidence)
-        prompt = (
-            f"Based on the following research evidence, answer concisely: {query}\n\n"
-            f"Evidence:\n{evidence_block}"
-        )
+        if not sources and not evidence:
+            return "I wasn't able to gather enough information to answer that question."
+
+        if sources:
+            from src.research import run_research
+            result = run_research(topic=query, sources=sources, intent=intent)
+            synthesis = result["synthesis"]
+        else:
+            # Fallback: synthesize bare evidence strings
+            from src.research import run_research, SourceRecord as _SR  # noqa: F811
+            bare = [
+                SourceRecord(title=f"Step {i+1}", url="", domain="", body=ev)
+                for i, ev in enumerate(evidence)
+            ]
+            result = run_research(topic=query, sources=bare, intent=intent)
+            synthesis = result["synthesis"]
+
         if notes:
-            prompt += f"\n\nNote: {notes}"
-        try:
-            from src.router import get_router
-            return get_router().route(prompt, force_route="general", session_id=None)
-        except Exception:
-            return f"Here is what I found:\n\n{evidence_block}"
+            synthesis = f"Note: {notes}\n\n{synthesis}"
+        return synthesis
 
     def _escalate(
         self, query: str, evidence: list[str], step: int

@@ -765,18 +765,48 @@ class SkillManifestEngine(ContextEngine):
 
         return "\n".join(lines)
 
-    def compact(self, max_tokens: int) -> str:
-        text = self.assemble()
-        max_chars = max_tokens * _CHARS_PER_TOKEN
-        if len(text) <= max_chars:
-            return text
-        # Keep invocation format + skill names only — drop param details
+    def compact(self, max_tokens: int = 800) -> str:
+        """Return always-on compact manifest (FR-ROUTE-001).
+
+        Format: one line per skill — ``name: when-clause | example 1 / example 2``.
+        Total budget ≤800 tokens for up to 50 skills.
+
+        Args:
+            max_tokens: Token budget cap for the compact block.
+
+        Returns:
+            Compact manifest string, or a minimal stub when no skills loaded.
+        """
+        if not self._skill_defs:
+            return (
+                "## Skills\n"
+                "Skills are available for task management, BMAD, code generation, Notion, "
+                "and more. They will be provided when relevant to your request."
+            )
+
         lines = [
-            "## Skills (names only — compacted)",
-            '  <skill_call name="SKILL_NAME">{"param": "value"}</skill_call>',
-            "  Available: " + ", ".join(d["name"] for d in self._skill_defs),
+            "## Skills (compact — invoke any with <skill_call name=\"NAME\">{}</skill_call>)",
+            "",
         ]
-        return "\n".join(lines)
+        # NFR-ROUTE-001: limit to 50 most-used skills when count exceeds 50.
+        # For now (≤50 skills) include all.
+        defs_to_show = self._skill_defs[:50]
+        for d in defs_to_show:
+            name = d.get("name", "")
+            when = d.get("when", "").strip().rstrip(".")
+            examples = d.get("examples", [])
+            ex_str = " / ".join(str(e) for e in examples[:2]) if examples else ""
+            line = f"  {name}: {when}"
+            if ex_str:
+                line += f" | {ex_str}"
+            lines.append(line)
+
+        result = "\n".join(lines)
+        # Enforce token budget — truncate if over
+        max_chars = max_tokens * _CHARS_PER_TOKEN
+        if len(result) > max_chars:
+            result = result[:max_chars].rsplit("\n", 1)[0] + "\n  [... truncated]"
+        return result
 
 
 # ── Provenance Tagging ───────────────────────────────────────────────────────
@@ -961,12 +991,11 @@ class ContextManager:
         memory_text       = self.memory.assemble()
         files_text        = self.files.assemble()
 
-        # Minimal skills hint — full manifest is injected per-turn in Phase 2.
-        skills_hint = (
-            "## Skills\n"
-            "Skills are available for task management, BMAD, code generation, Notion, "
-            "and more. They will be provided when relevant to your request."
-        )
+        # FR-ROUTE-001 (CR-054 Phase 1): always-on compact manifest so the LLM can
+        # emit <skill_call> for any known skill even when full injection is skipped.
+        # Full manifest (with params/examples) is still injected per-turn in Phase 2
+        # when a skill scores above _SKILL_INJECT_THRESHOLD.
+        skills_hint = self.skills.compact(max_tokens=800)
 
         # CR-025: per-turn response mode block (FR-ORCH-033).
         # Empty string for conversational mode — no extra block needed.

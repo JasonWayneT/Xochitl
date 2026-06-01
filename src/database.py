@@ -174,6 +174,29 @@ def init_db() -> None:
             );
             CREATE UNIQUE INDEX IF NOT EXISTS idx_workflows_name_active
                 ON workflows(name) WHERE superseded_by IS NULL;
+
+            CREATE TABLE IF NOT EXISTS routing_misses (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_input TEXT NOT NULL,
+                inferred_skill TEXT,
+                turn_id TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_routing_misses_input
+                ON routing_misses(user_input);
+
+            CREATE TABLE IF NOT EXISTS skill_examples (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                skill_name TEXT NOT NULL,
+                phrase TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'learned'
+                    CHECK(source IN ('learned','promoted','user_defined')),
+                confidence REAL DEFAULT 0.80
+                    CHECK(confidence BETWEEN 0.0 AND 1.0),
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_skill_examples_skill
+                ON skill_examples(skill_name);
         """)
         # FR-UX-005 (CR-050 C2): soft-delete migration guards.
         # ALTER TABLE ignores the request silently via try/except if column already exists.
