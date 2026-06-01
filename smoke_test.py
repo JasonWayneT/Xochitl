@@ -4156,6 +4156,77 @@ test("CR-050 D2: _stream_and_buffer returns full buffer with no skill call (AC-C
 test("CR-050 D2: XCH_DISABLE_SKILL_STREAMING=1 disables skill streaming (AC-CR050-019d)", t_disable_skill_streaming_env_var)
 
 
+# ── CR-052 Phase 2 — Safe file editing ───────────────────────────────────────
+
+def t_diff_preview_shows_changes():
+    """AC-CR052-001: make_diff_preview returns a unified diff for changed content (FR-UI-011)."""
+    from src.diff_preview import make_diff_preview
+    out = make_diff_preview("line1\nline2\n", "line1\nCHANGED\n", "foo.py")
+    assert "---" in out and "+++" in out, "diff must have unified headers"
+    assert "-line2" in out and "+CHANGED" in out, "diff must show removed and added lines"
+
+def t_diff_preview_no_changes():
+    """AC-CR052-001b: identical content reports no changes (FR-UI-011)."""
+    from src.diff_preview import make_diff_preview
+    out = make_diff_preview("same\n", "same\n", "foo.py")
+    assert "no changes" in out.lower()
+
+def t_diff_preview_truncates():
+    """AC-CR052-001c: oversized diffs are truncated with a notice (FR-UI-011)."""
+    from src.diff_preview import make_diff_preview
+    old = "\n".join(f"l{i}" for i in range(200))
+    new = "\n".join(f"X{i}" for i in range(200))
+    out = make_diff_preview(old, new, "big.py", max_lines=20)
+    assert "omitted" in out.lower()
+
+def t_filetools_write_includes_diff():
+    """AC-CR052-002: FileTools.write_file on existing file embeds a diff (FR-UI-011)."""
+    import tempfile, os as _os
+    from pathlib import Path as _P
+    from unittest.mock import patch
+    from src.file_tools import FileTools
+    with tempfile.TemporaryDirectory() as d:
+        p = _P(d) / "f.txt"
+        p.write_text("old content\n", encoding="utf-8")
+        ft = FileTools()
+        with patch("src.security._is_allowed", return_value=True):
+            result = ft.write_file(p, "new content\n")
+        assert result["status"] == "pending_permission"
+        assert "Overwrite" in result["message"]
+        assert "-old content" in result["message"] or "old content" in result["message"]
+
+def t_recent_edits_ring_buffer():
+    """AC-CR052-003: recent edits are recorded and rendered, oldest first (FR-MEM-015)."""
+    from src import recent_edits
+    recent_edits.clear()
+    recent_edits.record_edit("a.py", "write", line_delta=5)
+    recent_edits.record_edit("b.py", "overwrite", line_delta=-2)
+    items = recent_edits.get_recent_edits()
+    assert len(items) == 2
+    assert items[0]["path"] == "a.py" and items[1]["path"] == "b.py"
+    block = recent_edits.render_recent_edits_block()
+    assert "a.py" in block and "b.py" in block
+    assert "+5" in block and "-2" in block
+    recent_edits.clear()
+
+def t_recent_edits_capped():
+    """AC-CR052-003b: ring buffer is capped at _MAX_EDITS (FR-MEM-015)."""
+    from src import recent_edits
+    recent_edits.clear()
+    for i in range(recent_edits._MAX_EDITS + 5):
+        recent_edits.record_edit(f"f{i}.py", "write", line_delta=1)
+    items = recent_edits.get_recent_edits()
+    assert len(items) == recent_edits._MAX_EDITS
+    recent_edits.clear()
+
+test("CR-052 P2: make_diff_preview shows changes (AC-CR052-001)", t_diff_preview_shows_changes)
+test("CR-052 P2: make_diff_preview reports no changes (AC-CR052-001b)", t_diff_preview_no_changes)
+test("CR-052 P2: make_diff_preview truncates oversized diffs (AC-CR052-001c)", t_diff_preview_truncates)
+test("CR-052 P2: FileTools.write_file embeds diff (AC-CR052-002)", t_filetools_write_includes_diff)
+test("CR-052 P2: recent-edits ring buffer records and renders (AC-CR052-003)", t_recent_edits_ring_buffer)
+test("CR-052 P2: recent-edits ring buffer capped at max (AC-CR052-003b)", t_recent_edits_capped)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

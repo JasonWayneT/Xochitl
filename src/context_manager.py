@@ -247,6 +247,14 @@ class FactsEngine(ContextEngine):
             lines.append(f"Git: {self._git_state}")
         if self._notion_freshness:
             lines.append(f"Notion: {self._notion_freshness}")
+        # FR-MEM-015 (CR-052): recent file edits this session, if any.
+        try:
+            from src.recent_edits import render_recent_edits_block
+            recent = render_recent_edits_block()
+            if recent:
+                lines.append(recent)
+        except Exception:
+            pass
         lines.append("[/SYSTEM_FACTS]")
         return "\n".join(lines)
 

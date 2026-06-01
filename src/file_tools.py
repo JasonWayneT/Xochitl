@@ -27,11 +27,26 @@ class FileTools:
         if not security._is_allowed(path):
             raise security.PermissionError(f"Cannot write to {path} — outside allowed directories")
 
+        # FR-UI-011 (CR-052): show a diff (overwrite) or content preview (new file)
+        # so the user can see exactly what they are approving.
+        from src.diff_preview import make_diff_preview, make_new_file_preview
+
         op_type = "overwrite" if path.exists() else "write"
+        if op_type == "overwrite":
+            try:
+                old = path.read_text(encoding="utf-8", errors="replace")
+            except Exception:
+                old = ""
+            preview = make_diff_preview(old, content, str(path.name))
+            headline = f"Overwrite {path.name}?"
+        else:
+            preview = make_new_file_preview(content, str(path.name))
+            headline = f"Create {path.name}?"
+
         op_id = self._create_pending(op_type, path, content)
         return {
             "status": "pending_permission",
-            "message": f"Write {path.name}? This will {'overwrite the existing file' if path.exists() else 'create a new file'}.",
+            "message": f"{headline}\n\n{preview}",
             "operation_id": op_id,
         }
 
@@ -55,13 +70,25 @@ class FileTools:
         if not op:
             return {"status": "error", "message": "Unknown operation"}
 
+        # FR-MEM-015 (CR-052): record the edit in the session ring buffer.
+        from src.recent_edits import record_edit
+
         if op["type"] in {"write", "overwrite"}:
+            old_lines = 0
+            if op["type"] == "overwrite" and op["path"].exists():
+                try:
+                    old_lines = len(op["path"].read_text(encoding="utf-8", errors="replace").splitlines())
+                except Exception:
+                    old_lines = 0
             op["path"].parent.mkdir(parents=True, exist_ok=True)
             op["path"].write_text(op["content"], encoding="utf-8")
+            new_lines = len((op["content"] or "").splitlines())
+            record_edit(str(op["path"]), op["type"], line_delta=new_lines - old_lines)
             verb = "Overwrote" if op["type"] == "overwrite" else "Created"
             msg = f"{verb}: file:///{op['path'].absolute().as_posix()}"
         elif op["type"] == "delete":
             op["path"].unlink()
+            record_edit(str(op["path"]), "delete", line_delta=0)
             msg = f"Deleted: {op['path'].name}"
         else:
             msg = "Unknown operation type"
