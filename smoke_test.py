@@ -4489,6 +4489,46 @@ test("CR-052 P3: code loop stops when no fix applied (AC-CR052-013b)", t_code_lo
 test("CR-052 P3: CodeSkill.verify_and_fix reports outcome (AC-CR052-012b)", t_code_skill_verify_reports)
 
 
+# ── CR-052 — Auto-authorize CWD ──────────────────────────────────────────────
+
+def t_auto_authorize_disabled():
+    """AC-CR052-014a: feature off when env var unset (FR-EXEC-006)."""
+    from pathlib import Path as _P
+    from src.chat import _auto_authorize_decision
+    action, _ = _auto_authorize_decision(_P("/tmp/proj"), _P("/home/u"), enabled=False)
+    assert action == "disabled"
+
+def t_auto_authorize_project_dir():
+    """AC-CR052-014: authorizes a project CWD when enabled (FR-EXEC-006)."""
+    import tempfile
+    from pathlib import Path as _P
+    from src.chat import _auto_authorize_decision
+    with tempfile.TemporaryDirectory() as d:
+        proj = _P(d) / "myproject"
+        proj.mkdir()
+        home = _P(d) / "home"
+        home.mkdir()
+        action, payload = _auto_authorize_decision(proj, home, enabled=True)
+        assert action == "authorize"
+        assert payload == str(proj.resolve())
+
+def t_auto_authorize_skips_home():
+    """AC-CR052-015: skips when CWD is the home directory (FR-EXEC-006)."""
+    import tempfile
+    from pathlib import Path as _P
+    from src.chat import _auto_authorize_decision
+    with tempfile.TemporaryDirectory() as d:
+        home = _P(d) / "home"
+        home.mkdir()
+        action, payload = _auto_authorize_decision(home, home, enabled=True)
+        assert action == "skip_home"
+        assert "home" in payload.lower()
+
+test("CR-052: auto-authorize disabled when env unset (AC-CR052-014a)", t_auto_authorize_disabled)
+test("CR-052: auto-authorize authorizes project CWD (AC-CR052-014)", t_auto_authorize_project_dir)
+test("CR-052: auto-authorize skips home directory (AC-CR052-015)", t_auto_authorize_skips_home)
+
+
 # ── Print results ─────────────────────────────────────────────────────────────
 print()
 for r in results:

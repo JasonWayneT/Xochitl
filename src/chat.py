@@ -249,6 +249,35 @@ class _StatusContext:
             self._live = None
 
 
+def _auto_authorize_decision(cwd: Path, home: Path, enabled: bool) -> tuple[str, str]:
+    """Decide whether to auto-authorize the working directory at session start.
+
+    Implements FR-EXEC-006 (CR-052). Pure function — no side effects — so the
+    decision logic is unit-testable without touching the security registry.
+
+    Args:
+        cwd: The current working directory.
+        home: The user's home directory.
+        enabled: Whether XCH_AUTO_AUTHORIZE is set.
+
+    Returns:
+        Tuple of (action, payload):
+          ("disabled", "")        — feature off; do nothing.
+          ("skip_home", message)  — CWD is home; too broad, skip with a warning.
+          ("authorize", path_str) — authorize this resolved path.
+    """
+    if not enabled:
+        return ("disabled", "")
+    cwd_r = cwd.resolve()
+    if cwd_r == home.resolve():
+        return (
+            "skip_home",
+            "XCH_AUTO_AUTHORIZE set but the working directory is your home folder "
+            "— skipping (too broad). cd into a project first.",
+        )
+    return ("authorize", str(cwd_r))
+
+
 def _print_boot_banner(con: Console) -> None:
     # Implements FR-UX-001 (WIP dashboard header in interactive loop)
     con.print()
@@ -627,6 +656,20 @@ class XochitlChat:
         from src.stats import health_check
 
         _print_boot_banner(console)
+
+        # FR-EXEC-006 (CR-052): opt-in auto-authorize of the working directory.
+        _aa_action, _aa_payload = _auto_authorize_decision(
+            Path.cwd(), Path.home(), os.getenv("XCH_AUTO_AUTHORIZE") == "1"
+        )
+        if _aa_action == "skip_home":
+            console.print(f"[dim]⚠ {_aa_payload}[/dim]")
+        elif _aa_action == "authorize":
+            try:
+                from src.security import authorize_directory
+                authorize_directory(Path(_aa_payload))
+                console.print(f"[dim]✓ Auto-authorized working directory: {_aa_payload}[/dim]")
+            except Exception as exc:
+                console.print(f"[dim]Auto-authorize skipped: {exc}[/dim]")
 
         health = health_check()
         if not health["local_model"] and not self.force_cloud:
