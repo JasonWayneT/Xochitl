@@ -1,9 +1,38 @@
 # Xochitl
 
-Terminal-native personal AI system. Manages personal tasks via Notion, runs a BMAD → SDD → Code Generation pipeline for building new applications, and maintains persistent memory across sessions. Primary inference runs locally via Ollama; cloud models (Gemini, Claude) are called selectively for high-complexity tasks.
+> A terminal-native personal AI system that manages tasks, maintains persistent memory across sessions, and runs a spec-first pipeline for building new applications — all running locally via Ollama with optional cloud fallback.
 
-- **[CAPABILITIES.md](CAPABILITIES.md)** — verified feature manifest  
-- **[XOCHITL_EXPLAINED.md](XOCHITL_EXPLAINED.md)** — conceptual guide (why/how, not a command manual)
+**This project is retired.** Xochitl's capabilities have been ported to [Hermes](https://github.com/hermes-cli/hermes) as plugins and skills. This repo is preserved for reference.
+
+---
+
+## What This Is
+
+Xochitl (pronounced "so-CHEEL") was a personal AI system modeled on the JARVIS vision — a terminal-native assistant that knows who you are, remembers what you care about, and can help build software through a structured spec-first pipeline. It managed tasks via Notion, maintained semantic and procedural memory across SQLite and LanceDB, and used a tiered LLM routing system that kept local models primary and escalated to cloud only for high-complexity work.
+
+**What this is not:**
+- A hosted service — everything runs on your local machine, no data sent to the cloud unless you configure a cloud provider
+- A chatbot — Xochitl is a structured agent with skills, memory, and an explicit permission model
+- A finished product — this was personal dogfood software, built and used by one person
+
+---
+
+## Status
+
+| Field | Value |
+|---|---|
+| **Phase** | Retired |
+| **Stability** | Archived — no active development |
+| **Successor** | Hermes (capabilities ported as plugins/skills) |
+| **Last updated** | May 2026 |
+
+---
+
+## Reference
+
+- **[CAPABILITIES.md](CAPABILITIES.md)** — verified feature manifest
+- **[XOCHITL_EXPLAINED.md](XOCHITL_EXPLAINED.md)** — conceptual guide (why/how, not a command reference)
+- **[CHANGELOG.md](CHANGELOG.md)** — release history
 
 ---
 
@@ -285,3 +314,11 @@ python -m py_compile src/events.py src/database.py src/context_loader.py src/mem
 - Every generated code file cites at least one `# Implements <FR-ID>` comment
 - SOUL.md content is never compacted out of the system prompt
 - BackgroundReview never blocks the main thread
+
+---
+
+## How This Was Built
+
+Xochitl started as a simple Notion task syncer and grew into a full local AI system through iterative BMAD-driven development. Every capability was written as a Change Request first — assigned a requirement ID, specced out, then traced through the documentation layer before any code was written. The `docs/spec/` directory contains that full history.
+
+The project was retired when Hermes — a more extensible, community-maintained terminal AI framework — became capable of hosting Xochitl's skills as plugins, making the custom Python application unnecessary. The migration plan is documented in [`docs/HERMES_MIGRATION_PLAN.md`](./docs/HERMES_MIGRATION_PLAN.md).
