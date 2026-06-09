@@ -1,3 +1,16 @@
+---
+title: "Xochitl"
+description: "A terminal-native personal AI system with persistent memory, tiered LLM routing, and a spec-first pipeline for building software — running locally via Ollama."
+author: "Jason Taylor"
+role: "Product Manager"
+status: "archived"
+ai_role: "code generation within spec, test scaffolding, iterative feature development via Change Requests under Jason's direction"
+tech_stack: ["Python", "SQLite", "LanceDB", "Ollama", "Click", "Rich", "Notion API"]
+pm_skills: ["spec-driven development", "requirements management", "change request process", "system architecture", "tiered routing design"]
+keywords: ["personal AI", "local LLM", "Ollama", "terminal assistant", "persistent memory", "BMAD", "Zettelkasten", "JARVIS"]
+date_completed: "2026-05"
+---
+
 # Xochitl
 
 > A terminal-native personal AI system that manages tasks, maintains persistent memory across sessions, and runs a spec-first pipeline for building new applications — all running locally via Ollama with optional cloud fallback.
@@ -8,7 +21,10 @@
 
 ## What This Is
 
-Xochitl (pronounced "so-CHEEL") is a personal AI system modeled on the JARVIS vision — a terminal-native assistant that knows who you are, remembers what you care about, and can help build software through a structured spec-first pipeline. It manages tasks via Notion, maintains semantic and procedural memory across SQLite and LanceDB, and uses a tiered LLM routing system that keeps local models primary and escalated to cloud only for high-complexity work.
+Xochitl (pronounced "so-CHEEL") is a personal AI system modeled on the JARVIS vision: a terminal-native assistant that knows who you are, remembers what you care about, and can help build software through a structured spec-first pipeline. It manages tasks via Notion, maintains semantic and procedural memory across SQLite and LanceDB, and uses a tiered LLM routing system that keeps local models primary and escalates to cloud only for high-complexity work.
+
+**My role:** Architecture design, requirements registry (all `FR-*` and `CR-*` IDs), spec-first process governance, tiered router design, memory architecture decisions, decision to retire in favor of Hermes.
+**AI's role:** Code generation within my spec, test scaffolding, iterative feature development via Change Requests under my direction. Every code file cites at least one `# Implements <FR-ID>` comment.
 
 **What this is not:**
 - A hosted service — everything runs on your local machine, no data sent to the cloud unless you configure a cloud provider
@@ -25,6 +41,15 @@ Xochitl (pronounced "so-CHEEL") is a personal AI system modeled on the JARVIS vi
 | **Stability** | Stable — development paused, not abandoned |
 | **Related** | Hermes (plugin-based evolution of the same vision) |
 | **Last updated** | May 2026 |
+
+---
+
+## Results & Impact
+
+- **Test coverage:** 167 tests passing across unit, integration, and routing eval harness at retirement.
+- **Daily use:** Personal dogfood tool — used as the primary task and knowledge management system throughout active development.
+- **Architecture longevity:** Built through 10+ Change Requests without architectural debt. Spec-first held through every version.
+- **What I learned:** Local-first AI is viable but the routing problem is harder than the capability problem. Knowing *which* model to call and with how much context is more impactful than the model itself.
 
 ---
 
@@ -317,8 +342,30 @@ python -m py_compile src/events.py src/database.py src/context_loader.py src/mem
 
 ---
 
+## Challenges & Decisions
+
+### Local-first LLM routing: capability vs. privacy
+**Problem:** Local models are private and free but weaker than cloud models. Cloud models are powerful but expensive and require sending data off-device. A system that always uses local misses capability; one that always uses cloud loses the privacy and cost benefits.
+**Decision:** Tiered router: a fast classifier (`gemma2:2b`) routes every query. Local handles most. Cloud escalates for high-complexity only. Certain categories (`_FORCE_LOCAL_CATEGORIES`) never escalate regardless of complexity.
+**Tradeoff:** The router itself adds latency and can misclassify. Routing errors send simple queries to cloud unnecessarily.
+**Outcome:** Cloud escalation in practice was rare — under 10% of queries. The router's classification accuracy was good enough that the false-positive rate didn't significantly hurt the cost or privacy goal.
+
+### HyDE for semantic memory recall
+**Problem:** Embedding the raw query against memory often retrieves by surface similarity rather than conceptual relevance. "What do I think about pricing models?" doesn't embed similarly to a stored memory about pricing strategy even if it's semantically related.
+**Decision:** Hypothetical Document Embeddings (HyDE) — generate a hypothetical answer first, embed that, then search. The hypothetical answer shares vocabulary with what's stored.
+**Tradeoff:** One extra LLM call per memory lookup. Adds latency.
+**Outcome:** Meaningfully better retrieval than direct query embedding for personal knowledge queries. The tradeoff was worth it for this use case.
+
+### Retiring in favor of Hermes
+**Problem:** Xochitl was a custom Python application. Every new feature required maintaining the host application. Hermes — a plugin-based community system — could host the same capabilities without the maintenance overhead.
+**Decision:** Retire Xochitl, port skills to Hermes as plugins. ZettleLib became a standalone plugin. The custom application became unnecessary.
+**Tradeoff:** Lost some runtime control — Hermes governs the host environment, not me.
+**Outcome:** The skills survived the migration. The architecture decisions (prompt contracts, tiered routing, spec-first) transferred intact even if the implementation changed.
+
+---
+
 ## How This Was Built
 
-Xochitl started as a simple Notion task syncer and grew into a full local AI system through iterative BMAD-driven development. Every capability was written as a Change Request first — assigned a requirement ID, specced out, then traced through the documentation layer before any code was written. The `docs/spec/` directory contains that full history.
+Xochitl started as a simple Notion task syncer and grew into a full local AI system through iterative BMAD-driven development. I wrote every capability as a Change Request first: requirement ID assigned, specced out, then traced through the documentation layer before any code was written. The `docs/spec/` directory has that full history.
 
-The project was retired when Hermes — a more extensible, community-maintained terminal AI framework — became capable of hosting Xochitl's skills as plugins, making the custom Python application unnecessary. The migration plan is documented in [`docs/HERMES_MIGRATION_PLAN.md`](./docs/HERMES_MIGRATION_PLAN.md).
+I retired the project when Hermes became capable of hosting Xochitl's skills as plugins, making the custom Python application unnecessary. Hermes is more extensible and community-maintained. The migration plan is in [`docs/HERMES_MIGRATION_PLAN.md`](./docs/HERMES_MIGRATION_PLAN.md).
