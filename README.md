@@ -2,13 +2,13 @@
 
 > A terminal-native personal AI system that manages tasks, maintains persistent memory across sessions, and runs a spec-first pipeline for building new applications — all running locally via Ollama with optional cloud fallback.
 
-**This project is retired.** Xochitl's capabilities have been ported to [Hermes](https://github.com/hermes-cli/hermes) as plugins and skills. This repo is preserved for reference.
+**This project is on pause.** Active development is paused while priority goes to job search and Hermes exploration. The architecture remains a reference point for what Hermes is being built toward.
 
 ---
 
 ## What This Is
 
-Xochitl (pronounced "so-CHEEL") was a personal AI system modeled on the JARVIS vision — a terminal-native assistant that knows who you are, remembers what you care about, and can help build software through a structured spec-first pipeline. It managed tasks via Notion, maintained semantic and procedural memory across SQLite and LanceDB, and used a tiered LLM routing system that kept local models primary and escalated to cloud only for high-complexity work.
+Xochitl (pronounced "so-CHEEL") is a personal AI system modeled on the JARVIS vision — a terminal-native assistant that knows who you are, remembers what you care about, and can help build software through a structured spec-first pipeline. It manages tasks via Notion, maintains semantic and procedural memory across SQLite and LanceDB, and uses a tiered LLM routing system that keeps local models primary and escalated to cloud only for high-complexity work.
 
 **What this is not:**
 - A hosted service — everything runs on your local machine, no data sent to the cloud unless you configure a cloud provider
@@ -21,9 +21,9 @@ Xochitl (pronounced "so-CHEEL") was a personal AI system modeled on the JARVIS v
 
 | Field | Value |
 |---|---|
-| **Phase** | Retired |
-| **Stability** | Archived — no active development |
-| **Successor** | Hermes (capabilities ported as plugins/skills) |
+| **Phase** | On pause |
+| **Stability** | Stable — development paused, not abandoned |
+| **Related** | Hermes (plugin-based evolution of the same vision) |
 | **Last updated** | May 2026 |
 
 ---
