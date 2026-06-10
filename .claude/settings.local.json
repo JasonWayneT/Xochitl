@@ -22,7 +22,15 @@
       "WebFetch(domain:thenewstack.io)",
       "WebFetch(domain:www.anthropic.com)",
       "WebFetch(domain:docs.dume.ai)",
-      "PowerShell(New-Item -ItemType File \"C:\\\\Users\\\\Jason\\\\Desktop\\\\Jason\\\\Resource\\\\CodeProjects\\\\Xochitl\\\\src\\\\secrets.py\" -Force)"
+      "PowerShell(New-Item -ItemType File \"C:\\\\Users\\\\Jason\\\\Desktop\\\\Jason\\\\Resource\\\\CodeProjects\\\\Xochitl\\\\src\\\\secrets.py\" -Force)",
+      "PowerShell(Get-ChildItem \"$env:LOCALAPPDATA\\\\hermes\" -ErrorAction SilentlyContinue; if \\(-not \\(Test-Path \"$env:LOCALAPPDATA\\\\hermes\"\\)\\) { \"NOT_INSTALLED\" })",
+      "PowerShell(uv --version 2>$null)",
+      "PowerShell(python --version 2>$null)",
+      "PowerShell(python3 --version 2>$null)",
+      "PowerShell(Get-Content \"C:\\\\Users\\\\Jason\\\\Desktop\\\\Jason\\\\Resource\\\\CodeProjects\\\\Xochitl\\\\.env\" -ErrorAction SilentlyContinue | Select-String -Pattern \"ANTHROPIC|OPENROUTER|NOTION|GOOGLE|PERPLEXITY\" | ForEach-Object { $_.Line -replace '=.+', '=<redacted>' })",
+      "PowerShell($hermesDir = \"C:\\\\Users\\\\Jason\\\\Desktop\\\\Jason\\\\Resource\\\\CodeProjects\\\\zGithub Projects of Interest\\\\hermes-agent-main\"; Set-Location $hermesDir; $env:UV_PROJECT_ENVIRONMENT = \"$hermesDir\\\\venv\"; uv sync --extra all --locked 2>&1 | Select-Object -Last 10)",
+      "PowerShell([Environment]::GetEnvironmentVariable\\(\"ANTHROPIC_API_KEY\", \"User\"\\) -ne \"\" -or [Environment]::GetEnvironmentVariable\\(\"ANTHROPIC_API_KEY\", \"Machine\"\\) -ne \"\" -or $env:ANTHROPIC_API_KEY -ne \"\")",
+      "WebFetch(domain:ai.google.dev)"
     ]
   }
 }

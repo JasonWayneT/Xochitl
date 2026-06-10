@@ -31,6 +31,23 @@ _RUN_KEYWORDS = (
     "run ruff", "run mypy", "run lint", "run the linter", "type check",
     "execute the command", "run this command", "run it", "run the build",
     "check the tests", "run a shell command",
+    # PC / system hardware queries — answered by running systeminfo
+    "pc spec", "system spec", "hardware spec", "system info", "systeminfo",
+    "my specs", "show my specs", "check my specs", "see my specs",
+    "how much ram", "my ram", "pc hardware",
+    "my processor", "what cpu", "what processor",
+    # Broader hardware / PC detail phrases (apostrophe variants handled by stripping ' from query)
+    "pc details", "pc detail", "computer details", "computer specs",
+    "pcs specs", "pcs details", "pcs hardware",
+    "hardware details", "hardware components", "hardware info",
+    "system details", "what hardware", "check hardware",
+    "what specs", "what is installed", "what's installed",
+    "installed hardware", "pc info", "computer info",
+    "running with", "running on this", "what's running", "whats running",
+    "tell me about my pc", "tell me about my computer",
+    "about my pc", "about my system",
+    "what is this pc", "what is my pc", "what is my computer",
+    "what processor do i have", "what gpu", "what graphics",
 )
 
 # Destructive argument patterns refused even for allowlisted binaries.
@@ -60,7 +77,11 @@ class ShellSkill(Skill):
         Returns:
             0.7 when a run/execute phrase is present, else 0.0.
         """
+        # Normalize possessives: strip apostrophes so "pc's"/"pc's" -> "pc".
+        # Uses chr() to avoid editor smart-quote substitution corrupting codepoints.
         q = user_input.lower()
+        for _a in (chr(0x0027), chr(0x2018), chr(0x2019)):
+            q = q.replace(_a + "s", "").replace(_a, "")
         if any(kw in q for kw in _RUN_KEYWORDS):
             return 0.7
         return 0.0
@@ -88,12 +109,13 @@ class ShellSkill(Skill):
             "name": "ShellSkill",
             "description": (
                 "Runs an allowlisted developer command (pytest, ruff, mypy, git, "
-                "python, ls, cat) under a security governor. The user approves the "
-                "exact command before it runs. Cannot run arbitrary system binaries."
+                "python, ls, cat, systeminfo) under a security governor. The user "
+                "approves the exact command before it runs. Cannot run arbitrary "
+                "system binaries."
             ),
             "when": (
-                "user asks to run tests, lint, type-check, or execute a specific "
-                "allowlisted command"
+                "user asks to run tests, lint, type-check, execute a specific "
+                "allowlisted command, or read PC/system hardware specs"
             ),
             "params": {
                 "command": "The full command to run, e.g. 'pytest tests/ -q' or 'ruff check src'",
@@ -105,6 +127,8 @@ class ShellSkill(Skill):
                 "run ruff on src",
                 "type check with mypy",
                 "run python smoke_test.py",
+                "what are my PC specs",
+                "show system info",
             ],
         }
 
@@ -123,7 +147,7 @@ class ShellSkill(Skill):
         Raises:
             None — all executor exceptions are caught and returned as strings.
         """
-        command = (params.get("command") or "").strip()
+        command = (params.get("command") or params.get("_raw") or "").strip()
         if not command:
             context["last_skill_success"] = False
             return "Fíjate — no command was provided to run."
@@ -165,7 +189,7 @@ class ShellSkill(Skill):
             context["last_skill_success"] = False
             return (
                 f"Ay no — `{cmd}` is not on the allowlist, so I won't run it. "
-                f"Allowed: git, python, pip, pytest, ruff, mypy, ls, cat. ({exc})"
+                f"Allowed: git, python, pip, pytest, ruff, mypy, ls, cat, systeminfo. ({exc})"
             )
         except ConfirmationRequired:
             # Should not occur with action_type="status"; treat defensively.

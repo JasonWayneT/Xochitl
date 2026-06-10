@@ -1233,6 +1233,35 @@ class XochitlChat:
         system_prompt = cm.assemble_system_prompt(mode=_new_mode)
         messages = cm.assemble_messages(self._clean_history(), user_input, tag_provenance=True)
 
+        # ── Orphaned-affirmative guard ────────────────────────────────────────
+        # When the model ended the last turn with "would you like me to X?" but
+        # no pending_action was staged, a bare "yes" / "ok" from the user arrives
+        # with no FSM context.  Without a hint the local LLM treats it as a fresh
+        # unrelated input.  Re-inject the offer so the model knows to follow through.
+        _BARE_AFFIRMATIVES = frozenset({
+            "yes", "y", "yeah", "yep", "ok", "okay", "sure",
+            "go", "do it", "proceed", "yup", "definitely",
+        })
+        if user_input.lower().strip() in _BARE_AFFIRMATIVES:
+            _last_asst = next(
+                (m["content"] for m in reversed(self.session_history)
+                 if m.get("role") == "assistant"),
+                "",
+            )
+            _OFFER_PATTERNS = (
+                "would you like me to", "would you like to", "would you like",
+                "shall i", "want me to", "should i",
+                "do you want me to", "do you want to",
+                "want to see", "ready to proceed",
+                "would you prefer", "shall we",
+            )
+            if any(pat in _last_asst.lower() for pat in _OFFER_PATTERNS):
+                system_prompt += (
+                    "\n\n[TURN CONTEXT: The user is confirming your previous offer with a bare "
+                    "'yes'. Do NOT greet or ask what they need. Follow through on exactly what "
+                    "you offered in your last message — execute it now using the appropriate skill.]"
+                )
+
         # FR-ORCH-025: governor routing constraint — local only / hard stop.
         # force_cloud wins over governor; governor only applies when force_cloud is False.
         # governor.force_route() returns "general" (local-routed category) for

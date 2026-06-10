@@ -35,7 +35,9 @@ def parse_skill_calls(response: str) -> list[tuple[str, dict]]:
         try:
             params = json.loads(body) if body else {}
         except json.JSONDecodeError:
-            params = {}
+            # Body is not valid JSON (e.g. model emitted bare "systeminfo" instead of
+            # {"command": "systeminfo"}).  Store raw text so skills can recover.
+            params = {"_raw": body} if body else {}
         results.append((skill_name, params))
     return results
 

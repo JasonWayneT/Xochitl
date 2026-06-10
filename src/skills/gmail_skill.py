@@ -54,6 +54,26 @@ _READ_KEYWORDS = (
     "got any emails",
     "got any mail",
     "any messages",
+    # Broader natural-language variants
+    "my email",
+    "in my email",
+    "primary inbox",
+    "email subjects",
+    "subjects in my",
+    "important email",
+    "important in my email",
+    "anything in my email",
+    "anything important",
+    "see my email",
+    "see if anything",
+    "look at my email",
+    "look at my inbox",
+    "any important",
+    "latest emails",
+    "recent emails",
+    "email list",
+    "list of emails",
+    "list my emails",
 )
 
 _SEARCH_KEYWORDS = (

@@ -36,6 +36,8 @@ _ALLOWED_COMMANDS: frozenset[str] = frozenset({
     "pytest", "ls", "dir", "echo", "cat", "type",
     # CR-052 FR-EXEC-005: developer test/lint/type tools.
     "ruff", "mypy",
+    # Read-only system info (Windows). Lets Xochitl answer PC-specs questions.
+    "systeminfo",
 })
 
 # Action types that map to AUTO tier (read-only, non-destructive).

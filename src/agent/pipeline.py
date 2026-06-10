@@ -67,20 +67,27 @@ def _format_active_skill_block(defn: dict) -> str:
     params = defn.get("params", {})
     examples = defn.get("examples", [])
 
+    import json as _json
+    # Build a concrete JSON example from the real param keys (not the generic placeholder).
+    if params:
+        _example_body = _json.dumps({k: f"<{k}>" for k in params.keys()})
+    else:
+        _example_body = "{}"
+
     lines = [
         "## Active Skill",
         f"The following skill is relevant to this request: **{name}**",
         f"Does: {description}",
         f"Use when: {when}",
         "",
-        "To invoke it, output this EXACT format anywhere in your response:",
+        "IMPORTANT: To invoke this skill, output ONLY the skill_call tag below "
+        "(you may add a one-sentence preamble, but the tag MUST appear):",
         "",
-        f'  <skill_call name="{name}">{{"param": "value"}}</skill_call>',
+        f'  <skill_call name="{name}">{_example_body}</skill_call>',
         "",
+        f"Replace each <param> placeholder with the real value as a JSON string.",
         "Read-only skills execute immediately. "
         "Mutating skills are staged for user approval first.",
-        "Invoke proactively when the request falls within this skill's domain — "
-        "you do not need exact keyword matches, just clear intent.",
     ]
     if isinstance(examples, list) and examples:
         lines.append("")
@@ -241,7 +248,9 @@ class AgentPipeline:
         turn.context["last_skill_fired"] = ""
 
         if skill_calls:
-            result_parts: list[str] = [visible] if visible else []
+            # When the model's preamble was already printed via streaming, omit it
+            # from result_parts so _stage_skill_call_plan doesn't double-print it.
+            result_parts: list[str] = [] if was_streamed else ([visible] if visible else [])
             remaining = len(skill_calls)
             for skill_name, params in skill_calls:
                 remaining -= 1
@@ -265,7 +274,9 @@ class AgentPipeline:
                     )
                     return TurnResult(
                         response=plan,
-                        was_streamed=was_streamed,
+                        # The plan text is new content — never streamed — so start() must
+                        # print it via _stream_response().  was_streamed=True would silence it.
+                        was_streamed=False,
                         skill_fired=skill_name,
                         new_score_cache=(
                             (type(top_skill).__name__, top_score) if top_skill else None
@@ -543,12 +554,30 @@ class AgentPipeline:
     def _stream_and_buffer(
         self, turn: AgentTurnInput, system_prompt: str, force: Optional[str], _status
     ) -> tuple[str, str]:
-        """Stream tokens live; stop displaying at first <skill_call>; return (displayed, full)."""
+        """Stream tokens live; stop displaying at first <skill_call>; return (displayed, full).
+
+        Tokens are held in a ``pending`` list while the buffer ends with any prefix of
+        ``<skill_call`` (e.g. the model emitted ``<skill`` as one token).  They are only
+        flushed to the terminal when the next token confirms they are NOT the start of
+        a skill-call tag.  This prevents partial tags from leaking into displayed output.
+        """
         self._stop_status(_status)
         buffer: list[str] = []
         displayed: list[str] = []
+        pending: list[str] = []
         printed_header = False
         skill_call_started = False
+        _TAG = "<skill_call"
+
+        def _flush_pending() -> None:
+            nonlocal printed_header
+            for pt in pending:
+                if not printed_header:
+                    self._console_print(f"\n[bold]Xochitl[/bold]: ", end="")
+                    printed_header = True
+                self._console_print(pt, end="")
+                displayed.append(pt)
+            pending.clear()
 
         try:
             for token in self._router.route_stream(
@@ -560,16 +589,32 @@ class AgentPipeline:
                 buffer.append(token)
                 if skill_call_started:
                     continue
-                if "<skill_call" in "".join(buffer):
+
+                joined = "".join(buffer)
+                if _TAG in joined:
                     skill_call_started = True
+                    pending.clear()
                     continue
+
+                # Hold tokens that could be the start of a <skill_call tag.
+                if any(joined.endswith(_TAG[:i]) for i in range(1, len(_TAG))):
+                    pending.append(token)
+                    continue
+
+                # Safe to display — flush any held tokens first, then current token.
+                _flush_pending()
                 if not printed_header:
                     self._console_print(f"\n[bold]Xochitl[/bold]: ", end="")
                     printed_header = True
                 self._console_print(token, end="")
                 displayed.append(token)
+
         except Exception:
             pass
+
+        # End of stream: if no skill_call tag appeared, flush any remaining held tokens.
+        if not skill_call_started:
+            _flush_pending()
 
         if displayed:
             self._console_print()
